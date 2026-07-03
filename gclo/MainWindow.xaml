@@ -14,7 +14,30 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid Padding="20" RowSpacing="12">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <MenuBar Grid.Row="0">
+            <MenuBarItem Title="File">
+                <MenuFlyoutItem Text="Settings…" Click="SettingsMenuItem_Click" />
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem Text="Exit" Click="ExitMenuItem_Click" />
+            </MenuBarItem>
+            <MenuBarItem Title="Help">
+                <MenuFlyoutItem Text="View on GitHub" Click="GitHubMenuItem_Click" />
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem Text="About gclo…" Click="AboutMenuItem_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Key="F1" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+            </MenuBarItem>
+        </MenuBar>
+
+        <Grid Grid.Row="1" Padding="20" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -37,7 +60,7 @@
             <ComboBox
                 Grid.Column="1"
                 HorizontalAlignment="Stretch"
-                Header="GitHub organization"
+                Header="Organization or account"
                 IsEditable="True"
                 ItemsSource="{x:Bind ViewModel.Organizations}"
                 PlaceholderText="paste a token first, or type an org"
@@ -136,5 +159,6 @@
                 </DataTemplate>
             </ListView.ItemTemplate>
         </ListView>
+        </Grid>
     </Grid>
 </Window>

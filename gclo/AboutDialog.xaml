@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="gclo.AboutDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="About gclo"
+    CloseButtonText="Close"
+    DefaultButton="Close">
+
+    <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="12" Padding="0,0,12,0">
+
+            <!-- App identity -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="gclo" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                <TextBlock
+                    Text="Clone and update every repository in a GitHub organization."
+                    TextWrapping="Wrap" />
+                <TextBlock
+                    x:Name="VersionText"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <HyperlinkButton
+                Padding="0"
+                Content="https://github.com/KofTwentyTwo/gclo"
+                NavigateUri="https://github.com/KofTwentyTwo/gclo" />
+
+            <!-- License -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="License" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+                <TextBlock TextWrapping="Wrap">
+                    gclo is open source, released under the MIT License.
+                </TextBlock>
+                <TextBlock Text="Copyright (c) 2026 James Maes" />
+                <TextBlock
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="MIT in short: free to use, copy, modify, and distribute, provided the copyright and license notice are preserved; the software is provided as-is, without warranty." />
+            </StackPanel>
+
+            <!-- Third-party attributions -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="Open source components" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
+                    <Run FontWeight="SemiBold" Text="Octokit" /><Run Text=" — MIT License" />
+                </TextBlock>
+                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
+                    <Run FontWeight="SemiBold" Text="LibGit2Sharp" /><Run Text=" — MIT License" />
+                </TextBlock>
+                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
+                    <Run FontWeight="SemiBold" Text="libgit2 (native library)" /><Run Text=" — GPLv2 with Linking Exception" />
+                </TextBlock>
+                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
+                    <Run FontWeight="SemiBold" Text="CommunityToolkit.Mvvm" /><Run Text=" — MIT License" />
+                </TextBlock>
+                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
+                    <Run FontWeight="SemiBold" Text="Windows App SDK / WinUI 3" /><Run Text=" — MIT License, with Microsoft binary components" />
+                </TextBlock>
+                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
+                    <Run FontWeight="SemiBold" Text=".NET Runtime" /><Run Text=" — MIT License" />
+                </TextBlock>
+            </StackPanel>
+
+            <TextBlock
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                TextWrapping="Wrap"
+                Text="Third-party names and licenses are provided for attribution." />
+
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

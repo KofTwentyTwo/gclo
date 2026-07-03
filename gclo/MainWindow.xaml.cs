@@ -1,6 +1,7 @@
 using System;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using gclo.Services;
 using gclo.ViewModels;
 
 namespace gclo
@@ -8,6 +9,10 @@ namespace gclo
     /// <summary>Main (and only) window: org sync inputs, progress, and per-repo status list.</summary>
     public sealed partial class MainWindow : Window
     {
+        private const string RepoUrl = "https://github.com/KofTwentyTwo/gclo";
+
+        private readonly AppSettings _settings;
+
         public MainViewModel ViewModel { get; }
 
         public MainWindow()
@@ -16,6 +21,9 @@ namespace gclo
             InitializeComponent();
 
             Title = "gclo - GitHub organization sync";
+
+            _settings = AppSettings.Load();
+            ApplySettings();
 
             // AppWindow.Resize takes physical pixels; scale by the monitor DPI so the
             // window is the same visual size at 150%/200% display scaling.
@@ -32,6 +40,43 @@ namespace gclo
                     ViewModel.SyncCancelCommand.Execute(null);
                 }
             };
+        }
+
+        private void ApplySettings()
+        {
+            if (Content is FrameworkElement root)
+            {
+                root.RequestedTheme = AppSettings.ToElementTheme(_settings.Theme);
+            }
+            if (string.IsNullOrWhiteSpace(ViewModel.TargetFolder)
+                && !string.IsNullOrWhiteSpace(_settings.DefaultTargetFolder))
+            {
+                ViewModel.TargetFolder = _settings.DefaultTargetFolder;
+            }
+            ViewModel.MaxConcurrency = _settings.DefaultMaxConcurrency;
+        }
+
+        private async void SettingsMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new SettingsDialog(_settings) { XamlRoot = Content.XamlRoot };
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                dialog.ApplyAndSave();
+                ApplySettings();
+            }
+        }
+
+        private void ExitMenuItem_Click(object sender, RoutedEventArgs e) => Close();
+
+        private async void GitHubMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(RepoUrl));
+        }
+
+        private async void AboutMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new AboutDialog { XamlRoot = Content.XamlRoot };
+            await dialog.ShowAsync();
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
