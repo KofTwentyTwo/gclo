@@ -1,0 +1,32 @@
+# Weekly dependency updates for NuGet packages and the GitHub Actions pinned in
+# .github/workflows. Minor/patch bumps are grouped into a single PR to keep the
+# noise down; major bumps still arrive as individual PRs for closer review.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/New_York
+    groups:
+      nuget-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/New_York
+    groups:
+      actions-all:
+        patterns:
+          - "*"

@@ -46,41 +46,49 @@ planned execution order.
 
 ## In progress (productionize agent workflow)
 
-- [~] **T14. Full automated test coverage** — real-git integration tests for the
-  LibGit2Sharp layer against local fixture repos (clone, FF pull, unborn-HEAD
-  repair, diverged, detached, cleanup, cancellation) + coverage gate in CI.
-  View-model coverage arrives with T20.
-- [~] **T15. CLI / scriptable version (`gclo.Cli`)** — `gclo sync`, `gclo orgs`,
+- [x] **T14. Full automated test coverage** — 35 tests: 15 new real-git integration
+  tests for the LibGit2Sharp layer against local fixture repos (clone, FF pull,
+  unborn-HEAD repair, diverged, detached, cleanup, cancellation); engine line
+  coverage 60.6% (LibGit2GitClient 76%, orchestrator 100%; Octokit wrappers are
+  network code). View-model coverage arrives with T20.
+- [x] **T15. CLI / scriptable version (`gclo.Cli`)** — `gclo sync`, `gclo orgs`,
   `--json`, exit codes (0 ok / 1 partial / 2 fatal), token via env/file/stdin
-  (never a bare argument), Ctrl+C cancellation, docs/CLI.md.
-- [~] **T16. GitHub CI/CD** — Actions: PR/push gates; tag-driven releases
-  (`v1.2.3` = stable, `v1.2.3-beta.1` = dev prerelease); publish to GitHub Releases
-  (installer + portable + CLI zip), winget (gated on WINGET_TOKEN secret), NuGet for
-  the engine (gated on NUGET_API_KEY secret); docs/RELEASING.md.
-- [~] **T17. Installer** — Velopack Setup.exe (chosen over MSI/MSIX: MSIX needs a paid
-  signing cert, MSI has no self-update; Velopack gives installer + delta updates
-  from GitHub Releases).
-- [~] **T18. Self-update from the GUI** — Help → "Check for updates…" via Velopack
-  UpdateManager against the repo's releases; update-and-restart; inert in dev builds.
+  (never a bare argument), Ctrl+C cancellation, docs/CLI.md. Verified against live
+  GitHub (see T21).
+- [~] **T16. GitHub CI/CD** — workflows written (PR/push gates; tag-driven releases:
+  `v1.2.3` = stable, `v1.2.3-beta.1` = dev prerelease; GitHub Releases + winget
+  gated on WINGET_TOKEN + NuGet gated on NUGET_API_KEY; docs/RELEASING.md).
+  In progress until the first real Actions runs are green.
+- [~] **T17. Installer** — Velopack 1.2.0 wired (chosen over MSI/MSIX: MSIX needs a
+  paid signing cert, MSI has no self-update; Velopack gives installer + delta
+  updates from GitHub Releases). In progress until T25 produces a real Setup.exe.
+- [x] **T18. Self-update from the GUI** — Help → "Check for updates…" via Velopack
+  UpdateManager against the repo's releases; update-and-restart; degrades cleanly
+  in dev builds (verified). Full loop proven at T25.
 - [~] **T19. CI quality & security gates** — `-warnaserror` (also fails on vulnerable
-  NuGet packages), tests + engine coverage threshold, `dotnet format` gate, CodeQL,
-  dependency review on PRs, Dependabot config.
+  NuGet packages), tests + engine coverage threshold, `dotnet format` gate (verified
+  locally), CodeQL, dependency review on PRs, Dependabot config. In progress until
+  green on GitHub.
+- [x] **T21. End-to-end smoke test with real credentials** — verified live: `orgs`
+  lists personal account first + all 8 orgs; MMLT-Holdings cloned in parallel
+  (exit 0); re-run took the pull path (updated=2, correct JSON).
 
 ## Queued (execution order)
 
-- [ ] **T20. Extract `gclo.ViewModels` library** — move MainViewModel,
-  RepoItemViewModel, AppSettings persistence out of the UI project; add view-model
-  unit tests; UI project keeps only XAML/dialogs/pickers/brushes/update plumbing.
-  Rule: no business logic in the UI layer, ever.
-- [ ] **T21. End-to-end smoke test with real credentials** — engine + CLI against
-  live GitHub (via `gh auth token`): list orgs incl. personal account, clone a real
-  set, re-run to verify pulls.
-- [ ] **T22. Windows-invalid path validation + recovery (spec)** — clone with
+- [ ] **T22. Windows-invalid path validation + recovery (spec)** — **PRIORITY: owner
+  reports frequent real-world failures on Linux-fine/Windows-invalid paths and
+  too-long paths.** Quick win first: two-phase clone (Checkout=false) enables
+  setting `core.longpaths=true` before checkout, which should eliminate the
+  path-length class outright; then the full validation/recovery below. Clone with
   Checkout=false; validate tree paths (trailing space/dot, invalid chars, reserved
   names, case-insensitive collisions, full-path length); structured result with
   per-path reasons + suggested sanitized names; recovery via rename/skip mapping
   with manual blob materialization; mapped repos fetch + re-materialize on update;
   abort keeps the existing didn't-exist-before cleanup; plumbing-built test fixtures.
+- [ ] **T20. Extract `gclo.ViewModels` library** — move MainViewModel,
+  RepoItemViewModel, AppSettings persistence out of the UI project; add view-model
+  unit tests; UI project keeps only XAML/dialogs/pickers/brushes/update plumbing.
+  Rule: no business logic in the UI layer, ever.
 - [ ] **T23. UX overhaul (main screen)** — two-phase flow (Load repos → selectable
   table → Sync selected); checkbox column + select-all; sortable headers; per-row
   progress bar (determinate clone %, indeterminate pull); always-on activity log in

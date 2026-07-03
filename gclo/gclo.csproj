@@ -12,6 +12,8 @@
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
+    <!-- Velopack must run before any XAML starts, so the app supplies its own Main (Program.cs). -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -40,6 +42,7 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\gclo.Engine\gclo.Engine.csproj" />

@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using gclo.Services;
@@ -12,6 +13,7 @@ namespace gclo
         private const string RepoUrl = "https://github.com/KofTwentyTwo/gclo";
 
         private readonly AppSettings _settings;
+        private readonly UpdateService _updateService = new();
 
         public MainViewModel ViewModel { get; }
 
@@ -76,6 +78,68 @@ namespace gclo
         private async void AboutMenuItem_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new AboutDialog { XamlRoot = Content.XamlRoot };
+            await dialog.ShowAsync();
+        }
+
+        private async void CheckForUpdatesMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (!_updateService.IsSupported)
+            {
+                await ShowUpdateMessageAsync(
+                    "Check for updates",
+                    "Updates are only available in installed builds.");
+                return;
+            }
+
+            var result = await _updateService.CheckAsync();
+            if (result.Error is not null)
+            {
+                await ShowUpdateMessageAsync(
+                    "Check for updates",
+                    $"Could not check for updates.\n{result.Error}");
+                return;
+            }
+
+            if (result.AvailableVersion is null)
+            {
+                string current = _updateService.CurrentVersion is string v ? $" (v{v})" : "";
+                await ShowUpdateMessageAsync("Check for updates", $"You are up to date{current}.");
+                return;
+            }
+
+            var confirm = new ContentDialog
+            {
+                Title = "Update available",
+                Content = $"gclo v{result.AvailableVersion} is available. "
+                    + "The app will restart to finish installing the update.",
+                PrimaryButtonText = "Update and restart",
+                CloseButtonText = "Not now",
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = Content.XamlRoot,
+            };
+            if (await confirm.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            // On success this exits the process to restart into the new version,
+            // so reaching the line below means the update did not go through.
+            string? error = await _updateService.DownloadAndApplyAsync();
+            if (error is not null)
+            {
+                await ShowUpdateMessageAsync("Update failed", error);
+            }
+        }
+
+        private async Task ShowUpdateMessageAsync(string title, string message)
+        {
+            var dialog = new ContentDialog
+            {
+                Title = title,
+                Content = message,
+                CloseButtonText = "OK",
+                XamlRoot = Content.XamlRoot,
+            };
             await dialog.ShowAsync();
         }
 

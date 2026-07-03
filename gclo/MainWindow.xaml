@@ -28,6 +28,7 @@
             </MenuBarItem>
             <MenuBarItem Title="Help">
                 <MenuFlyoutItem Text="View on GitHub" Click="GitHubMenuItem_Click" />
+                <MenuFlyoutItem Text="Check for updates…" Click="CheckForUpdatesMenuItem_Click" />
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem Text="About gclo…" Click="AboutMenuItem_Click">
                     <MenuFlyoutItem.KeyboardAccelerators>
