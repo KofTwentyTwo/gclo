@@ -125,7 +125,10 @@ public sealed class OrgSyncEngine
                 {
                     Interlocked.Increment(ref failed);
                     pending.TryRemove(repo.Name, out _);
-                    progress?.Report(new RepoProgress(repo.Name, SyncStatus.Failed, ex.Message));
+                    // Windows-invalid path failures carry the offending paths so
+                    // consumers can offer recovery (rename/skip) without re-syncing.
+                    var invalidPaths = (ex as InvalidRepositoryPathsException)?.Paths;
+                    progress?.Report(new RepoProgress(repo.Name, SyncStatus.Failed, ex.Message, InvalidPaths: invalidPaths));
                 }
             }).ConfigureAwait(false);
         }

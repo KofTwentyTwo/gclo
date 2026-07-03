@@ -85,6 +85,7 @@ public sealed partial class MainViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
     [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
     [NotifyCanExecuteChangedFor(nameof(RetryFailedCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ResolvePathsCommand))]
     public partial bool IsRunning { get; set; }
 
     [ObservableProperty]
@@ -264,6 +265,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void OnItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(RepoItemViewModel.HasPathIssue))
+        {
+            // Parameterized command: the row's 'Resolve...' button re-queries CanExecute.
+            ResolvePathsCommand.NotifyCanExecuteChanged();
+            return;
+        }
         if (e.PropertyName != nameof(RepoItemViewModel.IsSelected))
         {
             return;
@@ -376,6 +383,7 @@ public sealed partial class MainViewModel : ObservableObject
                 item.Status = SyncStatus.Queued;
                 item.Error = null;
                 item.Percent = null;
+                item.InvalidPaths = null;
             }
             RecomputeCompletedCount();
 
@@ -432,6 +440,62 @@ public sealed partial class MainViewModel : ObservableObject
         }
         // Executing SyncCommand itself keeps SyncCancelCommand working for retry runs.
         await SyncCommand.ExecuteAsync(null);
+    }
+
+    // ---------------------------------------------------------------- path recovery
+
+    /// <summary>
+    /// Raised when the user asks to resolve a row's Windows-invalid paths. The view
+    /// subscribes and shows recovery UI (the VM stays UI-free), returning the user's
+    /// decision, or null when they cancel. With no subscriber the command does nothing.
+    /// </summary>
+    public Func<RepoItemViewModel, Task<PathRecovery?>>? RecoveryInteraction { get; set; }
+
+    private bool CanResolvePaths(RepoItemViewModel item)
+        => item is not null && item.HasPathIssue && !IsRunning;
+
+    /// <summary>
+    /// Asks the view (via <see cref="RecoveryInteraction"/>) how to rename or skip the
+    /// row's invalid paths, then applies that recovery and checks the repository out.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanResolvePaths))]
+    private async Task ResolvePathsAsync(RepoItemViewModel item)
+    {
+        if (item is null || RecoveryInteraction is not { } interaction)
+        {
+            return;
+        }
+
+        PathRecovery? recovery = await interaction(item);
+        if (recovery is null)
+        {
+            return; // user canceled; the row keeps its Failed state and payload
+        }
+
+        string path = Path.Combine(EffectiveTargetRoot, item.Name);
+        try
+        {
+            _log.Info($"{item.Name}: applying path recovery "
+                + $"({recovery.SegmentRenames.Count} renamed, {recovery.SkippedPaths.Count} skipped).");
+            await _git.ApplyRecoveryAsync(path, Token.Trim(), recovery, CancellationToken.None);
+
+            item.Status = SyncStatus.Done;
+            item.Error = null;
+            item.InvalidPaths = null;
+            _log.Info($"{item.Name}: path recovery applied; repository checked out.");
+        }
+        catch (Exception ex)
+        {
+            item.Status = SyncStatus.Failed;
+            item.Error = ex.Message;
+            // A still-invalid or colliding mapping keeps the row resolvable with the
+            // fresh path list; any other failure clears the payload (renaming again
+            // would not help).
+            item.InvalidPaths = (ex as InvalidRepositoryPathsException)?.Paths;
+            _log.Error($"{item.Name}: path recovery failed: {ex.Message}", ex);
+        }
+        RecomputeCompletedCount();
+        RetryFailedCommand.NotifyCanExecuteChanged();
     }
 
     // ---------------------------------------------------------------- sorting
@@ -498,6 +562,7 @@ public sealed partial class MainViewModel : ObservableObject
             item.Status = report.Status;
             item.Error = report.Error;
             item.Percent = report.Percent;
+            item.InvalidPaths = report.InvalidPaths;
         }
 
         if (report.Status == SyncStatus.Failed)

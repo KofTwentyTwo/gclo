@@ -24,7 +24,7 @@ and runs on Linux/macOS hosts with the .NET 10 SDK.
 ## Commands
 
 ```
-gclo sync --org <name> --target <folder> [--parallel N]
+gclo sync --org <name> --target <folder> [--parallel N] [--sanitize-paths]
           [--token-env VAR | --token-file PATH | --token-stdin]
           [--json] [--quiet]
 gclo orgs [--token-env VAR | --token-file PATH | --token-stdin] [--json]
@@ -66,6 +66,40 @@ broken-repo  Failed  remote authentication failed
 **Ctrl+C** cancels gracefully: in-flight git operations stop, remaining
 repositories are marked `Canceled`, and the summary still prints. A second
 Ctrl+C aborts the process immediately.
+
+#### Windows-invalid paths and `--sanitize-paths`
+
+git happily stores paths that no Windows file system can hold: reserved device
+names (`aux`, `con`, `nul`, `com1`, ...), characters like `:`, `?`, or `*`,
+names ending in a dot or a space, and pairs of paths that differ only by case.
+gclo validates every incoming tree *before* it touches the working tree, so such
+a repository fails cleanly — nothing is half-checked-out — and the offending
+paths are listed on stderr (at most 10, plus a count of the rest):
+
+```
+legacy-repo  Failed  2 path(s) in this repository cannot be created on Windows: ...
+legacy-repo    aux/driver.c  ('aux' is a reserved Windows device name)
+legacy-repo    docs/spec?.md  (contains a character that is invalid on Windows)
+```
+
+With `--sanitize-paths`, gclo checks such a repository out anyway:
+
+- Each offending path is renamed on disk to a safe suggested name
+  (`aux` → `aux_`, `spec?.md` → `spec_.md`).
+- Paths with no safe automatic rename (case-only collisions) are **skipped**:
+  they are not materialized on disk.
+- A note listing the renames goes to stderr and to the activity log, and the
+  repository counts as **cloned** — the exit code stays `0` and `--json` counts
+  it under `cloned`. The human summary calls the count out:
+  `Finished: 3 cloned (1 with sanitized paths), 41 updated, 0 failed, 0 canceled of 45.`
+- The mapping is remembered inside the repository
+  (`.git\gclo-recovery.json`) and reapplied by later syncs. A later sync that
+  brings *new* invalid paths not covered by the stored mapping fails again with
+  those paths listed.
+
+Only the working tree is renamed — the repository's history and index still hold
+the original paths, so `git status` reports the renamed and skipped files as
+local changes. Treat a sanitized repository as a read-only mirror.
 
 #### `--json`
 
@@ -115,6 +149,9 @@ stderr and exits with code 2.
 | 1 | The run completed, but some repositories failed or the run was canceled (Ctrl+C). |
 | 2 | Fatal: bad arguments, missing/empty/rejected token, or organization not found. |
 
+A repository recovered by `--sanitize-paths` counts as a success: if every other
+repository also succeeds, the exit code is `0`.
+
 ## Examples
 
 ### PowerShell
@@ -142,6 +179,9 @@ if ($result.failed -gt 0) { $result.failures | ForEach-Object { "$($_.repo): $($
 # Nightly mirror job: quiet, check the exit code
 gclo sync --org contoso --target D:\mirror\contoso --parallel 16 --quiet
 if ($LASTEXITCODE -ne 0) { Write-Error "sync ended with code $LASTEXITCODE" }
+
+# Legacy repos with Windows-invalid paths: rename/skip them instead of failing
+gclo sync --org contoso --target C:\src\contoso --sanitize-paths
 ```
 
 ### bash

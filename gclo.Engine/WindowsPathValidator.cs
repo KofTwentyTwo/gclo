@@ -64,6 +64,70 @@ public static class WindowsPathValidator
         return invalid;
     }
 
+    /// <summary>
+    /// Validates a flat set of file paths (forward-slash separated) against the same
+    /// rules as <see cref="Validate(Tree)"/>. Used for the EFFECTIVE path set after a
+    /// <see cref="PathRecovery"/> mapping is applied, where — unlike in a git tree —
+    /// two source paths can also land on the same destination; those collisions
+    /// (duplicate destinations, file/directory clashes) are reported as invalid too.
+    /// </summary>
+    public static IReadOnlyList<InvalidPathInfo> ValidatePaths(IEnumerable<string> filePaths)
+    {
+        var invalid = new List<InvalidPathInfo>();
+        // Lowered path -> first-seen original casing, for case-only collisions.
+        var seenCi = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Exact-cased prefixes already segment-checked (shared directories repeat per file).
+        var seenExact = new HashSet<string>(StringComparer.Ordinal);
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        var directories = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (string path in filePaths)
+        {
+            string[] segments = path.Split('/');
+            string prefix = "";
+            for (int i = 0; i < segments.Length; i++)
+            {
+                prefix = i == 0 ? segments[i] : $"{prefix}/{segments[i]}";
+                bool isLeaf = i == segments.Length - 1;
+
+                if (isLeaf)
+                {
+                    if (!files.Add(path))
+                    {
+                        invalid.Add(new InvalidPathInfo(path, "more than one path maps to this destination", null));
+                        break; // an exact duplicate needs no further checks
+                    }
+                    if (directories.Contains(path))
+                    {
+                        invalid.Add(new InvalidPathInfo(path, "maps to both a file and a directory", null));
+                    }
+                }
+                else if (directories.Add(prefix) && files.Contains(prefix))
+                {
+                    invalid.Add(new InvalidPathInfo(prefix, "maps to both a file and a directory", null));
+                }
+
+                if (seenExact.Add(prefix))
+                {
+                    if (ValidateSegment(segments[i]) is { } problem)
+                    {
+                        invalid.Add(new InvalidPathInfo(prefix, problem.Reason, problem.Suggestion));
+                    }
+                    if (seenCi.TryGetValue(prefix, out string? original))
+                    {
+                        invalid.Add(new InvalidPathInfo(prefix, $"differs only by case from '{original}'", null));
+                    }
+                    else
+                    {
+                        seenCi[prefix] = prefix;
+                    }
+                }
+            }
+        }
+
+        return invalid;
+    }
+
     private static (string Reason, string? Suggestion)? ValidateSegment(string segment)
     {
         if (segment.Length == 0)

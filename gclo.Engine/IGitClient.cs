@@ -12,4 +12,14 @@ public interface IGitClient
 
     /// <summary>Fetches from origin and fast-forwards the current branch to its upstream.</summary>
     Task FetchAndPullAsync(string path, string token, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Materializes the working tree of a fetched-but-never-checked-out repository
+    /// (one whose clone failed with <see cref="InvalidRepositoryPathsException"/>)
+    /// by writing HEAD's blobs to disk with <paramref name="recovery"/>'s renames
+    /// and skips applied. Throws <see cref="InvalidRepositoryPathsException"/> when
+    /// the effective (post-mapping) path set is still invalid or collides; on
+    /// success the recovery is persisted so later pulls re-apply it to new commits.
+    /// </summary>
+    Task ApplyRecoveryAsync(string path, string token, PathRecovery recovery, CancellationToken cancellationToken);
 }

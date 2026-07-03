@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using CommunityToolkit.Mvvm.ComponentModel;
 using gclo.Engine;
 
@@ -33,6 +34,16 @@ public sealed partial class RepoItemViewModel : ObservableObject
 
     [ObservableProperty]
     public partial double? Percent { get; set; }
+
+    /// <summary>
+    /// The Windows-invalid paths that made the last sync fail, when that was the cause
+    /// (set from the engine's failure progress payload); null for any other failure.
+    /// </summary>
+    [ObservableProperty]
+    public partial IReadOnlyList<InvalidPathInfo>? InvalidPaths { get; set; }
+
+    /// <summary>True when the row failed because of Windows-invalid paths and can be resolved.</summary>
+    public bool HasPathIssue => InvalidPaths is { Count: > 0 };
 
     /// <summary>Default branch name, or empty for an empty repository.</summary>
     public string BranchText => Descriptor.DefaultBranch ?? "";
@@ -79,4 +90,7 @@ public sealed partial class RepoItemViewModel : ObservableObject
     }
 
     partial void OnErrorChanged(string? value) => OnPropertyChanged(nameof(HasError));
+
+    partial void OnInvalidPathsChanged(IReadOnlyList<InvalidPathInfo>? value)
+        => OnPropertyChanged(nameof(HasPathIssue));
 }
