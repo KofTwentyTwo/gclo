@@ -58,17 +58,21 @@ public sealed class LibGit2GitClientTests : IDisposable
     }
 
     [Fact]
-    public async Task Clone_CheckoutFails_CleansUpPartialCloneWithReadOnlyPackFiles()
+    public async Task Clone_WindowsInvalidPath_ThrowsTypedExceptionAndCleansUp()
     {
-        // A tree entry whose name is invalid on Windows makes the clone fail during
-        // checkout — after the fetch has already written read-only pack files under
-        // .git — exercising the attribute-clearing delete path.
+        // A tree entry whose name is invalid on Windows must surface as the structured
+        // InvalidRepositoryPathsException (not a raw libgit2 error), after the fetch has
+        // already written read-only pack files — exercising the attribute-clearing delete.
         string source = CreateRepoWithWindowsInvalidFileName();
         string target = NewPath("partial-clone");
 
-        await Assert.ThrowsAnyAsync<LibGit2SharpException>(
+        var ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
             () => _client.CloneAsync(source, target, Token, null, CancellationToken.None));
 
+        var info = Assert.Single(ex.Paths);
+        Assert.Equal("bad:name.txt", info.RepoPath);
+        Assert.Contains("invalid on Windows", info.Reason);
+        Assert.Equal("bad_name.txt", info.SuggestedName);
         Assert.False(Directory.Exists(target));
     }
 
