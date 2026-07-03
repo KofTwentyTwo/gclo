@@ -25,7 +25,13 @@ public sealed class LibGit2GitClient : IGitClient
     {
         bool existedBefore = Directory.Exists(path);
 
-        var options = new CloneOptions();
+        var options = new CloneOptions
+        {
+            // Two-phase: fetch only, then checkout after core.longpaths is set and
+            // every tree path is validated against Windows rules — a repo that is
+            // fine on Linux must fail with a structured error, not a libgit2 one.
+            Checkout = false,
+        };
         options.FetchOptions.CredentialsProvider = MakeCredentialsProvider(token);
         int lastPercent = -1;
         options.FetchOptions.OnTransferProgress = tp =>
@@ -44,13 +50,32 @@ public sealed class LibGit2GitClient : IGitClient
             }
             return !ct.IsCancellationRequested;
         };
-        // Note: CloneOptions in LibGit2Sharp 0.31 exposes no cancelable checkout
-        // callback (OnCheckoutProgress returns void), so cancellation covers the
-        // transfer/indexing phase — by far the longest — but not the final checkout.
-
         try
         {
             Repository.Clone(url, path, options);
+
+            using var repo = new Repository(path);
+            // Lifts the 260-character path limit before anything touches the
+            // working tree; libgit2 honors it for checkout.
+            repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
+
+            var tip = repo.Head.Tip;
+            if (tip is null)
+            {
+                return; // empty repository — nothing to check out
+            }
+
+            var invalidPaths = WindowsPathValidator.Validate(tip.Tree);
+            if (invalidPaths.Count > 0)
+            {
+                throw new InvalidRepositoryPathsException(invalidPaths);
+            }
+
+            ct.ThrowIfCancellationRequested();
+            Commands.Checkout(repo, repo.Head, new CheckoutOptions
+            {
+                CheckoutModifiers = CheckoutModifiers.Force, // materialize the fresh working tree
+            });
         }
         catch (Exception ex)
         {
@@ -72,6 +97,9 @@ public sealed class LibGit2GitClient : IGitClient
     private static void FetchAndPull(string path, string token, CancellationToken ct)
     {
         using var repo = new Repository(path);
+
+        // Idempotent; also covers repositories that were cloned by other tools.
+        repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
 
         var remote = repo.Network.Remotes["origin"]
             ?? throw new InvalidOperationException("Repository has no 'origin' remote.");
@@ -120,6 +148,13 @@ public sealed class LibGit2GitClient : IGitClient
             return; // already up to date
         }
 
+        // Incoming commits can introduce Windows-invalid paths just like a clone can.
+        var invalidIncoming = WindowsPathValidator.Validate(tracked.Tip.Tree);
+        if (invalidIncoming.Count > 0)
+        {
+            throw new InvalidRepositoryPathsException(invalidIncoming);
+        }
+
         // Fast-forward only: a mirror tool must never manufacture merge commits.
         // Diverged local history surfaces as NonFastForwardException -> Failed with a clear message.
         var signature = new Signature("gclo", "gclo@localhost", DateTimeOffset.Now);
@@ -157,6 +192,12 @@ public sealed class LibGit2GitClient : IGitClient
         if (remoteBranch?.Tip is null)
         {
             return; // the remote is still empty; nothing to pull
+        }
+
+        var invalidPaths = WindowsPathValidator.Validate(remoteBranch.Tip.Tree);
+        if (invalidPaths.Count > 0)
+        {
+            throw new InvalidRepositoryPathsException(invalidPaths);
         }
 
         repo.Refs.Add(targetRef, remoteBranch.Tip.Id);

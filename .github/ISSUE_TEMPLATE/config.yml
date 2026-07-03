@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Development roadmap
+    url: https://github.com/KofTwentyTwo/gclo/issues/11
+    about: Check the roadmap before filing a feature request — it may already be planned.

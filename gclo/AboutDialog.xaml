@@ -15,7 +15,7 @@
 
             <!-- App identity -->
             <StackPanel Spacing="4">
-                <TextBlock Text="gclo" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                <TextBlock Text="gclo — Git Clone Large Organizations" Style="{ThemeResource SubtitleTextBlockStyle}" />
                 <TextBlock
                     Text="Clone and update every repository in a GitHub organization."
                     TextWrapping="Wrap" />
@@ -56,6 +56,9 @@
                 </TextBlock>
                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
                     <Run FontWeight="SemiBold" Text="CommunityToolkit.Mvvm" /><Run Text=" — MIT License" />
+                </TextBlock>
+                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
+                    <Run FontWeight="SemiBold" Text="Velopack" /><Run Text=" — MIT License" />
                 </TextBlock>
                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
                     <Run FontWeight="SemiBold" Text="Windows App SDK / WinUI 3" /><Run Text=" — MIT License, with Microsoft binary components" />

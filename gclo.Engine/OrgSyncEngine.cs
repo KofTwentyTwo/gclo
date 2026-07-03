@@ -18,6 +18,7 @@ public sealed class OrgSyncEngine
         _git = git ?? throw new ArgumentNullException(nameof(git));
     }
 
+    /// <summary>Lists the organization's repositories, then syncs all of them.</summary>
     public async Task<SyncSummary> SyncAsync(
         SyncRequest request,
         IProgress<RepoProgress>? progress = null,
@@ -28,9 +29,31 @@ public sealed class OrgSyncEngine
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Token);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.TargetRoot);
 
-        var repos = (await _lister
+        var repositories = await _lister
             .ListOrganizationRepositoriesAsync(request.Organization, request.Token, cancellationToken)
-            .ConfigureAwait(false))
+            .ConfigureAwait(false);
+
+        return await SyncAsync(request, repositories, progress, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Syncs a caller-supplied repository list without hitting the GitHub API.
+    /// Use this when the repositories were already listed (and possibly filtered
+    /// down to a selection) by the caller; semantics are otherwise identical to
+    /// <see cref="SyncAsync(SyncRequest, IProgress{RepoProgress}?, CancellationToken)"/>.
+    /// </summary>
+    public async Task<SyncSummary> SyncAsync(
+        SyncRequest request,
+        IReadOnlyList<RepoDescriptor> repositories,
+        IProgress<RepoProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(repositories);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Token);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.TargetRoot);
+
+        var repos = repositories
             // Names key the pending dictionary and the target folders; a duplicate
             // (possible from pagination shifts) must not crash the run or race two
             // git operations into the same directory.

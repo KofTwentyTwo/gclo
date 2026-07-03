@@ -82,6 +82,23 @@ public sealed class FakeGitClient : IGitClient
     }
 }
 
+/// <summary>An <see cref="IOrganizationLister"/> whose behavior is configured with a delegate.</summary>
+public sealed class FakeOrganizationLister : IOrganizationLister
+{
+    private int _calls;
+
+    public Func<string, CancellationToken, Task<IReadOnlyList<string>>> Handler { get; set; }
+        = (_, _) => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    public int Calls => _calls;
+
+    public Task<IReadOnlyList<string>> ListOrganizationsAsync(string token, CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref _calls);
+        return Handler(token, cancellationToken);
+    }
+}
+
 /// <summary>
 /// Records every report synchronously into a thread-safe queue.
 /// Deliberately NOT <see cref="Progress{T}"/>, which posts callbacks to a sync context

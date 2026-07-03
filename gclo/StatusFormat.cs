@@ -27,6 +27,14 @@ public static class StatusFormat
     public static Visibility VisibleIf(bool value)
         => value ? Visibility.Visible : Visibility.Collapsed;
 
+    /// <summary>Maps the persisted theme string to a XAML theme ("System"/unknown => Default).</summary>
+    public static ElementTheme ToElementTheme(string theme) => theme switch
+    {
+        "Light" => ElementTheme.Light,
+        "Dark" => ElementTheme.Dark,
+        _ => ElementTheme.Default,
+    };
+
     public static string Fraction(int completed, int total)
         => $"{completed} / {total}";
 }

@@ -1,0 +1,50 @@
+# Blocks pull requests that add dependencies with known vulnerabilities or with
+# licenses outside the allowlist below. Only dependencies *added or changed* by
+# the PR are checked (via the GitHub dependency graph diff), so existing
+# dependencies never retroactively fail this gate.
+name: Dependency Review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    # No build happens here, so the cheaper Linux runner is fine.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Needed for comment-summary-in-pr.
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v5
+        with:
+          # Fail on ANY known vulnerability, even low severity.
+          fail-on-severity: low
+          comment-summary-in-pr: on-failure
+          # Anything not on this list fails the check. This repo is MIT, so we
+          # accept permissive licenses plus GPL-2.0 "with linking exception"
+          # style grants (e.g. libgit2's license). Extend deliberately - a new
+          # license here is a legal decision, not a build fix.
+          allow-licenses: >-
+            MIT,
+            MIT-0,
+            Apache-2.0,
+            BSD-2-Clause,
+            BSD-3-Clause,
+            0BSD,
+            ISC,
+            MS-PL,
+            Unlicense,
+            CC0-1.0,
+            GPL-2.0-only WITH Classpath-exception-2.0,
+            GPL-2.0-or-later WITH Classpath-exception-2.0,
+            GPL-2.0-only WITH GCC-exception-2.0
