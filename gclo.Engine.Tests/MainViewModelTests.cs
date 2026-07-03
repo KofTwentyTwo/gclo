@@ -198,7 +198,8 @@ public sealed class MainViewModelTests
         _git.CloneHandler = async (url, path, token, onProgress, ct) =>
         {
             Interlocked.Increment(ref started);
-            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            // CancellationToken.None: the gate must not be cancelable — the timeout is the safety valve.
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
             ct.ThrowIfCancellationRequested();
         };
 
@@ -418,7 +419,8 @@ public sealed class MainViewModelTests
         _git.CloneHandler = async (url, path, token, onProgress, ct) =>
         {
             Interlocked.Increment(ref started);
-            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            // CancellationToken.None: the gate must not be cancelable — the timeout is the safety valve.
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
         };
 
         Task run = vm.SyncCommand.ExecuteAsync(null);

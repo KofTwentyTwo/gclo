@@ -1,0 +1,61 @@
+# gclo code style. Enforced in every build via Directory.Build.props
+# (EnforceCodeStyleInBuild + TreatWarningsAsErrors) and by the CI format gate
+# (dotnet format --verify-no-changes --severity error).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# MSBuild, config, and workflow files use 2-space indentation.
+[*.{csproj,props,targets,slnx,xml,json,yml,yaml}]
+indent_size = 2
+
+[*.cs]
+# System usings first, as the codebase already does (used by IDE "Sort Usings").
+dotnet_sort_system_directives_first = true
+
+# Braces on every control-flow block; the codebase is already 100% compliant.
+csharp_prefer_braces = true:warning
+
+# Libraries use file-scoped namespaces; the WinUI shell keeps the template's
+# block namespaces, so this stays a suggestion rather than a build error.
+csharp_style_namespace_declarations = file_scoped:suggestion
+
+# CA1716 warns that IActivityLog.Error collides with a VB keyword; this is a C#-only
+# codebase and Error is the natural name for a log level.
+dotnet_diagnostic.CA1716.severity = none
+
+# CA1859 asks callers to replace IGitClient/IActivityLog parameters with concrete types
+# for micro-performance; those interfaces are the codebase's deliberate test seams.
+dotnet_diagnostic.CA1859.severity = none
+
+# Naming: interfaces are I-prefixed; types and members are PascalCase.
+dotnet_naming_rule.interfaces_begin_with_i.symbols = interfaces
+dotnet_naming_rule.interfaces_begin_with_i.style = i_prefix_pascal_case
+dotnet_naming_rule.interfaces_begin_with_i.severity = warning
+dotnet_naming_symbols.interfaces.applicable_kinds = interface
+dotnet_naming_style.i_prefix_pascal_case.required_prefix = I
+dotnet_naming_style.i_prefix_pascal_case.capitalization = pascal_case
+
+dotnet_naming_rule.types_and_members_are_pascal_case.symbols = types_and_members
+dotnet_naming_rule.types_and_members_are_pascal_case.style = pascal_case
+dotnet_naming_rule.types_and_members_are_pascal_case.severity = warning
+dotnet_naming_symbols.types_and_members.applicable_kinds = class, struct, enum, delegate, property, method, event
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+[gclo/**.cs]
+# CA1822: x:Bind function targets cannot be static — the XAML compiler generates
+# instance calls (this.Fn(...)) for them, which fails with CS0176.
+dotnet_diagnostic.CA1822.severity = none
+
+[gclo.Engine.Tests/**.cs]
+# CA1707: xunit's Method_Scenario_Expectation naming uses underscores by convention.
+dotnet_diagnostic.CA1707.severity = none
+# CA1861: inline array arguments keep test data at the assertion site; each test runs once,
+# so the "repeated allocation" concern does not apply.
+dotnet_diagnostic.CA1861.severity = none

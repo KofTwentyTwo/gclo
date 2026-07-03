@@ -1,0 +1,13 @@
+<Project>
+
+  <!-- Local quality gate: every project builds with warnings as errors and the
+       recommended analyzers + .editorconfig code style enforced, so problems fail
+       at the desk exactly like they fail in CI. -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+</Project>

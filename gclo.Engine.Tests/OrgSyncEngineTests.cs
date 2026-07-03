@@ -105,8 +105,9 @@ public sealed class OrgSyncEngineTests : IDisposable
             try
             {
                 // Pile up here until the test releases the gate. The timeout is a safety
-                // valve so a regression cannot hang the test run.
-                await gate.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                // valve so a regression cannot hang the test run; the wait is deliberately
+                // not cancelable (CancellationToken.None).
+                await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
             }
             finally
             {

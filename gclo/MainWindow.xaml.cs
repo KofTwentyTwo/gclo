@@ -1,11 +1,11 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
 using gclo.Engine;
 using gclo.Services;
 using gclo.ViewModels;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 
 namespace gclo
 {
@@ -55,6 +55,7 @@ namespace gclo
                 {
                     ViewModel.SyncCancelCommand.Execute(null);
                 }
+                ViewModel.Dispose();
             };
         }
 

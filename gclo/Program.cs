@@ -24,7 +24,7 @@ namespace gclo
             {
                 var context = new global::Microsoft.UI.Dispatching.DispatcherQueueSynchronizationContext(global::Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread());
                 global::System.Threading.SynchronizationContext.SetSynchronizationContext(context);
-                new App();
+                _ = new App();
             });
         }
     }

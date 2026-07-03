@@ -1,0 +1,4 @@
+# Text files are stored LF and checked out CRLF on every machine, matching
+# .editorconfig (end_of_line = crlf) so the dotnet format gate behaves the same
+# at developers' desks and on CI runners regardless of their git config.
+* text=auto eol=crlf

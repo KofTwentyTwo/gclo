@@ -17,7 +17,7 @@ namespace gclo.ViewModels;
 /// table, then <see cref="SyncCommand"/> clones or updates the selected subset with live
 /// per-repo progress. <see cref="RetryFailedCommand"/> re-runs just the failures.
 /// </summary>
-public sealed partial class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly IRepositoryLister _lister;
     private readonly IGitClient _git;
@@ -164,6 +164,14 @@ public sealed partial class MainViewModel : ObservableObject
     // Runs on the UI thread (Token is only set from UI handlers), so the async
     // continuations below stay on the UI thread and may touch Organizations directly.
     partial void OnTokenChanged(string value) => _ = RefreshOrganizationsAsync();
+
+    /// <summary>Stops and releases the in-flight org lookup, if any.</summary>
+    public void Dispose()
+    {
+        _orgLoadCts?.Cancel();
+        _orgLoadCts?.Dispose();
+        _orgLoadCts = null;
+    }
 
     /// <summary>Debounced: each token edit cancels the previous lookup.</summary>
     private async Task RefreshOrganizationsAsync()
