@@ -104,28 +104,35 @@ jobs:
       - name: Velopack pack
         run: vpk pack --packId gclo --packVersion ${{ steps.version.outputs.version }} --packDir publish/app --mainExe gclo.exe --channel ${{ steps.version.outputs.channel }}
 
-      - name: Velopack upload (creates the GitHub Release)
+      # This repo has immutable releases: assets freeze the moment a release is
+      # PUBLISHED. So vpk creates a DRAFT (no --publish), every asset and the
+      # changelog land while it is still mutable, and publishing happens last.
+      - name: Velopack upload (creates a draft GitHub Release)
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $preFlag = @()
           if ('${{ steps.version.outputs.prerelease }}' -eq 'true') { $preFlag = @('--pre') }
-          vpk upload github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ steps.version.outputs.channel }} --publish --releaseName "gclo ${{ steps.version.outputs.version }}" --tag $env:GITHUB_REF_NAME @preFlag
+          vpk upload github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ steps.version.outputs.channel }} --releaseName "gclo ${{ steps.version.outputs.version }}" --tag $env:GITHUB_REF_NAME @preFlag
 
-      - name: Attach CLI zip to the release
+      - name: Attach CLI zip to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload $env:GITHUB_REF_NAME artifacts/gclo-cli-win-x64.zip --clobber
 
-      # Auto-generated changelog (categorized by labels via .github/release.yml),
-      # appended to the release vpk just created.
+      # Auto-generated changelog (categorized by labels via .github/release.yml).
       - name: Generate release changelog
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/${{ github.repository }}/releases/generate-notes" -f tag_name=$env:GITHUB_REF_NAME --jq .body | Out-File -FilePath notes.md -Encoding utf8
           gh release edit $env:GITHUB_REF_NAME --notes-file notes.md
+
+      - name: Publish the completed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit $env:GITHUB_REF_NAME --draft=false
 
       # ----------------------------------------------------------------------
       # (c) NuGet: pack gclo.Engine and push to nuget.org - only when the
