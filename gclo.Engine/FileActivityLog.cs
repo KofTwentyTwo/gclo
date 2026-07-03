@@ -14,6 +14,7 @@ public sealed class FileActivityLog : IActivityLog
 {
     private readonly object _gate = new();
 
+    /// <summary>Creates a log that writes under <paramref name="directory"/>.</summary>
     /// <param name="directory">
     /// Folder for the log files; defaults to %LOCALAPPDATA%\gclo\logs when null or blank.
     /// </param>
@@ -26,6 +27,7 @@ public sealed class FileActivityLog : IActivityLog
             : directory;
     }
 
+    /// <inheritdoc/>
     public string LogDirectory { get; }
 
     /// <summary>Today's log file; entries roll over to a new file at midnight.</summary>
@@ -34,8 +36,10 @@ public sealed class FileActivityLog : IActivityLog
             LogDirectory,
             "gclo-" + DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".log");
 
+    /// <inheritdoc/>
     public void Info(string message) => Write("INFO", message, exception: null);
 
+    /// <inheritdoc/>
     public void Error(string message, Exception? exception = null) => Write("ERROR", message, exception);
 
     private void Write(string level, string message, Exception? exception)
@@ -67,14 +71,18 @@ public sealed class FileActivityLog : IActivityLog
 /// <summary>An <see cref="IActivityLog"/> that discards everything.</summary>
 public sealed class NullActivityLog : IActivityLog
 {
+    /// <inheritdoc/>
     public string LogDirectory => "";
 
+    /// <inheritdoc/>
     public string CurrentLogFilePath => "";
 
+    /// <inheritdoc/>
     public void Info(string message)
     {
     }
 
+    /// <inheritdoc/>
     public void Error(string message, Exception? exception = null)
     {
     }

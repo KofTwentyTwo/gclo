@@ -28,7 +28,7 @@ internal static class SyncCommand
                                repository counts as cloned.
           --token-env <VAR>    Read the token from environment variable VAR
                                (default: GITHUB_TOKEN when no token option is given).
-          --token-file <path>  Read the token from the first line of a file.
+          --token-file <path>  Read the token from the first non-blank line of a file.
           --token-stdin        Read the token as one line from standard input.
           --json               Print no progress lines; end with one line of JSON:
                                {"total":N,"cloned":N,"updated":N,"failed":N,"canceled":N,
@@ -169,7 +169,7 @@ internal static class SyncCommand
             int sanitized = 0;
             foreach (PendingRecovery pending in progress.DrainPendingRecoveries())
             {
-                if (await TrySanitizeAsync(git, progress, log, target.Trim(), token, pending, cancellationToken)
+                if (await TrySanitizeAsync(git, progress, log, target.Trim(), pending, cancellationToken)
                     .ConfigureAwait(false))
                 {
                     sanitized++;
@@ -225,7 +225,6 @@ internal static class SyncCommand
         SyncProgressHandler progress,
         IActivityLog log,
         string targetRoot,
-        string token,
         PendingRecovery pending,
         CancellationToken cancellationToken)
     {
@@ -234,7 +233,7 @@ internal static class SyncCommand
         {
             cancellationToken.ThrowIfCancellationRequested();
             PathRecovery recovery = BuildRecovery(pending.Paths);
-            await git.ApplyRecoveryAsync(path, token, recovery, cancellationToken).ConfigureAwait(false);
+            await git.ApplyRecoveryAsync(path, recovery, cancellationToken).ConfigureAwait(false);
 
             string detail = DescribeRecovery(recovery);
             Console.Error.WriteLine(

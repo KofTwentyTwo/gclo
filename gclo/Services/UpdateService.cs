@@ -8,11 +8,9 @@ namespace gclo.Services;
 
 /// <summary>
 /// Result of an update check. <see cref="AvailableVersion"/> is the newer version found,
-/// or null when already up to date; <see cref="IsDownloaded"/> is true when that update is
-/// already staged locally (e.g. by a previous session) and only needs a restart to apply;
-/// <see cref="Error"/> is non-null when the check itself failed.
+/// or null when already up to date; <see cref="Error"/> is non-null when the check itself failed.
 /// </summary>
-public sealed record UpdateCheckResult(string? AvailableVersion, bool IsDownloaded, string? Error);
+public sealed record UpdateCheckResult(string? AvailableVersion, string? Error);
 
 /// <summary>
 /// Self-update via Velopack, with releases hosted on the app's public GitHub repository.
@@ -72,30 +70,26 @@ public sealed class UpdateService
             manager = GetManager();
             if (!manager.IsInstalled)
             {
-                return new UpdateCheckResult(null, false, "Updates are only available in installed builds.");
+                return new UpdateCheckResult(null, "Updates are only available in installed builds.");
             }
         }
         catch (Exception ex)
         {
-            return new UpdateCheckResult(null, false, ex.Message);
+            return new UpdateCheckResult(null, ex.Message);
         }
 
         try
         {
             UpdateInfo? update = await manager.CheckForUpdatesAsync().ConfigureAwait(false);
             _pendingUpdate = update;
-            if (update is null)
-            {
-                return new UpdateCheckResult(null, false, null);
-            }
-
-            bool downloaded = manager.UpdatePendingRestart?.Version == update.TargetFullRelease.Version;
-            return new UpdateCheckResult(update.TargetFullRelease.Version.ToString(), downloaded, null);
+            return update is null
+                ? new UpdateCheckResult(null, null)
+                : new UpdateCheckResult(update.TargetFullRelease.Version.ToString(), null);
         }
         catch (Exception ex)
         {
             _pendingUpdate = null;
-            return new UpdateCheckResult(null, false, ex.Message);
+            return new UpdateCheckResult(null, ex.Message);
         }
     }
 
@@ -104,9 +98,7 @@ public sealed class UpdateService
     /// and restarts the app. On success this never returns (the process exits to restart);
     /// otherwise it returns an error message. Never throws.
     /// </summary>
-    /// <param name="progress">Optional download progress callback, called with 0-100.</param>
-    /// <param name="cancellationToken">Optional token to abandon the download.</param>
-    public async Task<string?> DownloadAndApplyAsync(Action<int>? progress = null, CancellationToken cancellationToken = default)
+    public async Task<string?> DownloadAndApplyAsync()
     {
         UpdateManager? manager = _manager;
         UpdateInfo? update = _pendingUpdate;
@@ -117,13 +109,9 @@ public sealed class UpdateService
 
         try
         {
-            await manager.DownloadUpdatesAsync(update, progress, cancellationToken).ConfigureAwait(false);
+            await manager.DownloadUpdatesAsync(update, null, CancellationToken.None).ConfigureAwait(false);
             manager.ApplyUpdatesAndRestart(update.TargetFullRelease);
             return null;
-        }
-        catch (OperationCanceledException)
-        {
-            return "The update was canceled.";
         }
         catch (Exception ex)
         {

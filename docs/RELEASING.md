@@ -99,13 +99,15 @@ via `wingetcreate update KofTwentyTwo.gclo ... --submit`.
    ```
 
 4. **Watch the workflow.** The `Release` workflow appears under the Actions
-   tab. It will, in order:
+   tab. It is a single job that will, in order:
    - validate the tag and derive version/channel,
    - build the solution (x64, warnings as errors) and run the tests,
    - publish and zip the CLI,
    - publish the WinUI app unpackaged and pack it with Velopack,
-   - create the GitHub Release (marked prerelease for `dev`) and upload all
-     assets,
+   - create a **draft** GitHub Release (marked prerelease for `dev`), upload
+     all assets and the generated changelog to it, then **publish** it — this
+     repository uses immutable releases, so everything must land while the
+     release is still a draft,
    - push `gclo.Engine` to nuget.org (if `NUGET_API_KEY` is set),
    - submit the winget manifest update (stable only, if `WINGET_TOKEN` is set).
 
@@ -115,17 +117,47 @@ via `wingetcreate update KofTwentyTwo.gclo ... --submit`.
    first release) should all be attached. If the winget step ran, check your
    PR on microsoft/winget-pkgs.
 
-6. **If something failed** after the release was created (for example the
-   winget submission), fix the cause and re-run only the failed job from the
-   Actions UI. The NuGet push uses `--skip-duplicate`, and asset uploads use
-   `--clobber`, so re-runs are safe.
+6. **If something failed**, where it failed decides the recovery. The workflow
+   is a single job, so "re-run failed jobs" always re-runs everything from the
+   start — and because releases in this repository are **immutable**, a
+   published release's tag and assets are frozen and cannot be re-uploaded.
+
+   - **Failed before "Publish the completed release"** (build, tests,
+     packaging, asset upload, changelog): nothing is public yet. Delete the
+     draft release if one was created — drafts can always be deleted:
+
+     ```powershell
+     gh release delete v1.2.3 --yes
+     ```
+
+     Then fix the cause and re-run the job from the Actions UI; the tag is
+     unchanged and everything is rebuilt from it.
+
+   - **Failed after the release was published** (the NuGet push or the winget
+     submission): the release itself is fine but frozen — do **not** re-run
+     the job, which would try to recreate it. Run the missing step manually
+     instead:
+
+     ```powershell
+     # NuGet push (needs an API key with push rights for gclo.Engine)
+     dotnet pack gclo.Engine -c Release -p:Version=1.2.3 -o artifacts/nuget
+     dotnet nuget push "artifacts/nuget/*.nupkg" --api-key <NUGET_API_KEY> --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+     # winget manifest update (stable releases only)
+     Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+     .\wingetcreate.exe update KofTwentyTwo.gclo --urls https://github.com/KofTwentyTwo/gclo/releases/download/v1.2.3/gclo-stable-Setup.exe --version 1.2.3 --submit --token <WINGET_TOKEN>
+     ```
+
+     If the published release itself is broken, do not try to fix it in
+     place — delete it and its tag (below) and cut a new patch version.
 
 ### Deleting a bad release
 
 If a release is broken, delete the GitHub Release *and* the tag, fix the
 problem, and tag again with a **new** patch version. Never reuse a version
 number that was published — installed apps and package managers may have
-already seen it.
+already seen it. With immutable releases this is the only fix for a bad
+published release: its assets cannot be swapped in place.
 
 ```powershell
 gh release delete v1.2.3 --yes

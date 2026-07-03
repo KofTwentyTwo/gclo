@@ -5,6 +5,7 @@ namespace gclo.Engine;
 /// <summary>Lists the authenticated user's organizations through the GitHub REST API.</summary>
 public sealed class GitHubOrganizationLister : IOrganizationLister
 {
+    /// <inheritdoc/>
     public async Task<IReadOnlyList<string>> ListOrganizationsAsync(string token, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
@@ -24,9 +25,20 @@ public sealed class GitHubOrganizationLister : IOrganizationLister
             var currentUser = await client.User.Current().ConfigureAwait(false);
             userLogin = currentUser.Login;
 
-            organizations = await client.Organization
-                .GetAllForCurrent(new ApiOptions { PageSize = 100 })
-                .ConfigureAwait(false);
+            try
+            {
+                organizations = await client.Organization
+                    .GetAllForCurrent(new ApiOptions { PageSize = 100 })
+                    .ConfigureAwait(false);
+            }
+            catch (ForbiddenException ex) when (ex is not RateLimitExceededException)
+            {
+                // Degraded mode: classic PATs without the read:org scope get 403
+                // from /user/orgs even though the token is otherwise fine. The
+                // personal account is still a usable sync target, so return just
+                // that instead of failing the whole listing.
+                return [userLogin];
+            }
         }
         catch (AuthorizationException ex)
         {

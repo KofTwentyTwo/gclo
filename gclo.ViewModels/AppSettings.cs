@@ -1,9 +1,7 @@
-using System;
-using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace gclo.Services;
+namespace gclo.ViewModels;
 
 /// <summary>
 /// User preferences persisted as JSON at %LOCALAPPDATA%\gclo\settings.json.

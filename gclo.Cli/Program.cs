@@ -26,7 +26,7 @@ internal static class Program
           are visible to every other process on the machine (Task Manager, 'ps',
           WMI queries), so a token passed that way would leak. Provide it with:
             --token-env <VAR>    read it from environment variable VAR
-            --token-file <path>  read the first line of a file
+            --token-file <path>  read the first non-blank line of a file
             --token-stdin        read one line from standard input
                                  (pipe it from a secret store)
           When no token option is given, the GITHUB_TOKEN environment variable is used.

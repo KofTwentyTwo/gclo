@@ -22,14 +22,21 @@ public static class WindowsPathValidator
         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     };
 
-    /// <summary>Returns every Windows-invalid path in <paramref name="tree"/>; empty when all are fine.</summary>
+    /// <summary>
+    /// Returns every Windows-invalid path in <paramref name="tree"/>; empty when all
+    /// are fine. Flattens the tree to its leaf paths and runs them through
+    /// <see cref="ValidatePaths"/>, so both entry points share one implementation.
+    /// </summary>
     public static IReadOnlyList<InvalidPathInfo> Validate(Tree tree)
-    {
-        var invalid = new List<InvalidPathInfo>();
-        // Lowered path -> first-seen original casing, to catch case-only collisions
-        // (git allows README.md and readme.md; NTFS cannot hold both).
-        var seen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        => ValidatePaths(FlattenPaths(tree));
 
+    /// <summary>
+    /// Depth-first flattening of <paramref name="tree"/> into leaf paths (blobs and
+    /// submodule links). An empty subtree is emitted as its own path so its name is
+    /// still validated.
+    /// </summary>
+    private static IEnumerable<string> FlattenPaths(Tree tree)
+    {
         var stack = new Stack<(Tree Tree, string Prefix)>();
         stack.Push((tree, ""));
 
@@ -39,36 +46,32 @@ public static class WindowsPathValidator
             foreach (var entry in current)
             {
                 string repoPath = prefix.Length == 0 ? entry.Name : $"{prefix}/{entry.Name}";
-
-                if (ValidateSegment(entry.Name) is { } problem)
+                if (entry.TargetType == TreeEntryTargetType.Tree)
                 {
-                    invalid.Add(new InvalidPathInfo(repoPath, problem.Reason, problem.Suggestion));
-                }
-
-                if (seen.TryGetValue(repoPath, out string? original))
-                {
-                    invalid.Add(new InvalidPathInfo(repoPath, $"differs only by case from '{original}'", null));
+                    var subtree = (Tree)entry.Target;
+                    if (subtree.Count == 0)
+                    {
+                        yield return repoPath;
+                    }
+                    else
+                    {
+                        stack.Push((subtree, repoPath));
+                    }
                 }
                 else
                 {
-                    seen[repoPath] = repoPath;
-                }
-
-                if (entry.TargetType == TreeEntryTargetType.Tree)
-                {
-                    stack.Push(((Tree)entry.Target, repoPath));
+                    yield return repoPath;
                 }
             }
         }
-
-        return invalid;
     }
 
     /// <summary>
-    /// Validates a flat set of file paths (forward-slash separated) against the same
-    /// rules as <see cref="Validate(Tree)"/>. Used for the EFFECTIVE path set after a
-    /// <see cref="PathRecovery"/> mapping is applied, where — unlike in a git tree —
-    /// two source paths can also land on the same destination; those collisions
+    /// Validates a flat set of file paths (forward-slash separated) against Windows
+    /// rules — the single validation implementation, which <see cref="Validate(Tree)"/>
+    /// feeds by flattening a git tree. Also used directly for the EFFECTIVE path set
+    /// after a <see cref="PathRecovery"/> mapping is applied, where — unlike in a git
+    /// tree — two source paths can also land on the same destination; those collisions
     /// (duplicate destinations, file/directory clashes) are reported as invalid too.
     /// </summary>
     public static IReadOnlyList<InvalidPathInfo> ValidatePaths(IEnumerable<string> filePaths)

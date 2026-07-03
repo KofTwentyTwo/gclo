@@ -1,4 +1,5 @@
 using gclo.Engine;
+using static gclo.Engine.Tests.GitTestHelpers;
 
 namespace gclo.Engine.Tests;
 
@@ -17,30 +18,12 @@ public sealed class SyncOverloadTests : IDisposable
     private readonly FakeGitClient _git = new();
     private readonly RecordingProgress _progress = new();
 
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_targetRoot))
-            {
-                Directory.Delete(_targetRoot, recursive: true);
-            }
-        }
-        catch
-        {
-            // Best effort; stray empty temp dirs are harmless.
-        }
-    }
+    public void Dispose() => TryDeleteDirectory(_targetRoot);
 
     private OrgSyncEngine CreateEngine() => new(_lister, _git);
 
     private SyncRequest CreateRequest(int maxConcurrency = 8)
         => new("acme", "test-token", _targetRoot, maxConcurrency);
-
-    private static RepoDescriptor Repo(string name)
-        => new(name, $"https://example.test/acme/{name}.git", "main", IsArchived: false);
-
-    private static RepoDescriptor[] Repos(params string[] names) => names.Select(Repo).ToArray();
 
     [Fact]
     public async Task SyncWithList_NeverCallsTheLister()

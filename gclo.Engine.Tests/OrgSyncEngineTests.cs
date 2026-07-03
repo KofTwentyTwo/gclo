@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using gclo.Engine;
+using static gclo.Engine.Tests.GitTestHelpers;
 
 namespace gclo.Engine.Tests;
 
@@ -15,42 +15,12 @@ public sealed class OrgSyncEngineTests : IDisposable
     private readonly FakeGitClient _git = new();
     private readonly RecordingProgress _progress = new();
 
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_targetRoot))
-            {
-                Directory.Delete(_targetRoot, recursive: true);
-            }
-        }
-        catch
-        {
-            // Best effort; stray empty temp dirs are harmless.
-        }
-    }
+    public void Dispose() => TryDeleteDirectory(_targetRoot);
 
     private OrgSyncEngine CreateEngine() => new(_lister, _git);
 
     private SyncRequest CreateRequest(int maxConcurrency = 8)
         => new("acme", "test-token", _targetRoot, maxConcurrency);
-
-    private static RepoDescriptor Repo(string name)
-        => new(name, $"https://example.test/acme/{name}.git", "main", IsArchived: false);
-
-    private static RepoDescriptor[] Repos(params string[] names) => names.Select(Repo).ToArray();
-
-    /// <summary>Polls until <paramref name="condition"/> is true; fails the test after a generous timeout.</summary>
-    private static async Task WaitUntilAsync(Func<bool> condition, string description)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        while (!condition())
-        {
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15),
-                $"Timed out after {stopwatch.Elapsed} waiting for: {description}");
-            await Task.Delay(10);
-        }
-    }
 
     // ---------------------------------------------------------------- (a)
 
@@ -105,8 +75,9 @@ public sealed class OrgSyncEngineTests : IDisposable
             try
             {
                 // Pile up here until the test releases the gate. The timeout is a safety
-                // valve so a regression cannot hang the test run.
-                await gate.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                // valve so a regression cannot hang the test run; the wait is deliberately
+                // not cancelable (CancellationToken.None).
+                await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
             }
             finally
             {

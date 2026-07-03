@@ -1,6 +1,7 @@
 using System.Text;
 using gclo.Engine;
 using LibGit2Sharp;
+using static gclo.Engine.Tests.GitTestHelpers;
 
 namespace gclo.Engine.Tests;
 
@@ -34,7 +35,7 @@ public sealed class PathRecoveryTests : IDisposable
     [Fact]
     public async Task Clone_InvalidPaths_KeepsFetchedRepo_SetsPendingMarker_AndThrowsTyped()
     {
-        string source = CreateForgedRepo(("good.txt", "good content"), ("bad:file.txt", "bad content"));
+        string source = CreateForgedRepo(_root, ("good.txt", "good content"), ("bad:file.txt", "bad content"));
         string target = NewPath("marker-clone");
 
         var ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
@@ -53,11 +54,11 @@ public sealed class PathRecoveryTests : IDisposable
     [Fact]
     public async Task ApplyRecovery_RenamedFile_MaterializesContentUnderNewName()
     {
-        string source = CreateForgedRepo(("good.txt", "good content"), ("bad:file.txt", "bad content"));
+        string source = CreateForgedRepo(_root, ("good.txt", "good content"), ("bad:file.txt", "bad content"));
         string target = await CloneExpectingInvalidPathsAsync(source, "rename-apply");
 
         var recovery = Recovery(renames: [("bad:file.txt", "bad_file.txt")]);
-        await _client.ApplyRecoveryAsync(target, Token, recovery, CancellationToken.None);
+        await _client.ApplyRecoveryAsync(target, recovery, CancellationToken.None);
 
         Assert.Equal("good content", File.ReadAllText(Path.Combine(target, "good.txt")));
         Assert.Equal("bad content", File.ReadAllText(Path.Combine(target, "bad_file.txt")));
@@ -67,21 +68,49 @@ public sealed class PathRecoveryTests : IDisposable
     public async Task ApplyRecovery_RenamedDirectory_RelocatesItsWholeSubtree()
     {
         string source = CreateForgedRepo(
+            _root,
             ("bad:dir/inner.txt", "inner content"),
             ("bad:dir/sub/deep.txt", "deep content"));
         string target = await CloneExpectingInvalidPathsAsync(source, "dir-rename");
 
         var recovery = Recovery(renames: [("bad:dir", "bad_dir")]);
-        await _client.ApplyRecoveryAsync(target, Token, recovery, CancellationToken.None);
+        await _client.ApplyRecoveryAsync(target, recovery, CancellationToken.None);
 
         Assert.Equal("inner content", File.ReadAllText(Path.Combine(target, "bad_dir", "inner.txt")));
         Assert.Equal("deep content", File.ReadAllText(Path.Combine(target, "bad_dir", "sub", "deep.txt")));
     }
 
     [Fact]
+    public async Task ApplyRecovery_DirectoryAndDescendantBothRenamed_ComposesOntoEffectivePrefix()
+    {
+        // Rename composition is prefix-aware: a rename value contributes only its LAST
+        // segment, joined onto the parent's EFFECTIVE (already renamed) prefix. So a
+        // recovery renaming both a directory and a file inside it — with the file's
+        // replacement expressed under the ORIGINAL directory name, as validators and
+        // dialogs produce it — must land the file under the RENAMED directory.
+        string source = CreateForgedRepo(
+            _root,
+            ("bad:dir/bad:inner.txt", "inner content"),
+            ("bad:dir/sub/deep.txt", "deep content"));
+        string target = await CloneExpectingInvalidPathsAsync(source, "dir-and-descendant");
+
+        var recovery = Recovery(renames:
+        [
+            ("bad:dir", "bad_dir"),
+            ("bad:dir/bad:inner.txt", "bad:dir/bad_inner.txt"),
+        ]);
+        await _client.ApplyRecoveryAsync(target, recovery, CancellationToken.None);
+
+        Assert.Equal("inner content", File.ReadAllText(Path.Combine(target, "bad_dir", "bad_inner.txt")));
+        Assert.Equal("deep content", File.ReadAllText(Path.Combine(target, "bad_dir", "sub", "deep.txt")));
+        Assert.False(IsCheckoutPending(target));
+    }
+
+    [Fact]
     public async Task ApplyRecovery_SkippedPaths_OmitFilesAndWholeDirectories()
     {
         string source = CreateForgedRepo(
+            _root,
             ("bad:one.txt", "unwanted"),
             ("good.txt", "kept"),
             ("junk/a.txt", "junk a"),
@@ -91,7 +120,7 @@ public sealed class PathRecoveryTests : IDisposable
 
         // Skip the invalid file outright and a whole (valid) directory subtree.
         var recovery = Recovery(skips: ["bad:one.txt", "junk"]);
-        await _client.ApplyRecoveryAsync(target, Token, recovery, CancellationToken.None);
+        await _client.ApplyRecoveryAsync(target, recovery, CancellationToken.None);
 
         Assert.Equal("kept", File.ReadAllText(Path.Combine(target, "good.txt")));
         Assert.Equal("docs kept", File.ReadAllText(Path.Combine(target, "docs", "keep.txt")));
@@ -102,12 +131,12 @@ public sealed class PathRecoveryTests : IDisposable
     [Fact]
     public async Task ApplyRecovery_MappingStillInvalid_ThrowsListingEffectivePaths_AndWritesNothing()
     {
-        string source = CreateForgedRepo(("good.txt", "good content"), ("bad:file.txt", "bad content"));
+        string source = CreateForgedRepo(_root, ("good.txt", "good content"), ("bad:file.txt", "bad content"));
         string target = await CloneExpectingInvalidPathsAsync(source, "still-invalid");
 
         var recovery = Recovery(renames: [("bad:file.txt", "still:bad.txt")]);
         var ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
-            () => _client.ApplyRecoveryAsync(target, Token, recovery, CancellationToken.None));
+            () => _client.ApplyRecoveryAsync(target, recovery, CancellationToken.None));
 
         // The exception lists the EFFECTIVE (post-mapping) path, not the original.
         Assert.Contains(ex.Paths, p => p.RepoPath == "still:bad.txt");
@@ -121,12 +150,12 @@ public sealed class PathRecoveryTests : IDisposable
     [Fact]
     public async Task ApplyRecovery_TwoOriginalsMappedToOneDestination_Throws()
     {
-        string source = CreateForgedRepo(("bad:a.txt", "content a"), ("bad:b.txt", "content b"));
+        string source = CreateForgedRepo(_root, ("bad:a.txt", "content a"), ("bad:b.txt", "content b"));
         string target = await CloneExpectingInvalidPathsAsync(source, "collision");
 
         var recovery = Recovery(renames: [("bad:a.txt", "merged.txt"), ("bad:b.txt", "merged.txt")]);
         var ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
-            () => _client.ApplyRecoveryAsync(target, Token, recovery, CancellationToken.None));
+            () => _client.ApplyRecoveryAsync(target, recovery, CancellationToken.None));
 
         Assert.Contains(ex.Paths, p => p.RepoPath == "merged.txt");
         Assert.False(File.Exists(Path.Combine(target, "merged.txt")));
@@ -135,11 +164,11 @@ public sealed class PathRecoveryTests : IDisposable
     [Fact]
     public async Task ApplyRecovery_PersistsRecoveryJsonUnderDotGit_AndClearsMarker()
     {
-        string source = CreateForgedRepo(("bad:file.txt", "bad content"));
+        string source = CreateForgedRepo(_root, ("bad:file.txt", "bad content"));
         string target = await CloneExpectingInvalidPathsAsync(source, "persist");
 
         var recovery = Recovery(renames: [("bad:file.txt", "bad_file.txt")]);
-        await _client.ApplyRecoveryAsync(target, Token, recovery, CancellationToken.None);
+        await _client.ApplyRecoveryAsync(target, recovery, CancellationToken.None);
 
         Assert.False(IsCheckoutPending(target));
         string json = File.ReadAllText(RecoveryFilePath(target));
@@ -147,12 +176,39 @@ public sealed class PathRecoveryTests : IDisposable
         Assert.Contains("bad_file.txt", json);
     }
 
+    [Fact]
+    public async Task ApplyRecovery_OnRecoveryManagedRepo_MergesIncomingWithStoredRecovery()
+    {
+        string source = CreateForgedRepo(_root, ("bad:file.txt", "v1"));
+        string target = await CloneExpectingInvalidPathsAsync(source, "incremental");
+        await _client.ApplyRecoveryAsync(
+            target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
+
+        // Upstream introduces a NEW invalid path the stored recovery does not cover;
+        // the pull fails typed, exactly like the original clone did.
+        AppendForgedCommit(source, ("worse:new.txt", "new content"));
+        var ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
+            () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+        Assert.Contains(ex.Paths, p => p.RepoPath == "worse:new.txt");
+
+        // Applying a recovery that covers ONLY the new path merges with the stored one:
+        // the old rename keeps working and the persisted json carries both mappings.
+        await _client.ApplyRecoveryAsync(
+            target, Recovery(renames: [("worse:new.txt", "worse_new.txt")]), CancellationToken.None);
+
+        Assert.Equal("v1", File.ReadAllText(Path.Combine(target, "bad_file.txt")));
+        Assert.Equal("new content", File.ReadAllText(Path.Combine(target, "worse_new.txt")));
+        string json = File.ReadAllText(RecoveryFilePath(target));
+        Assert.Contains("bad_file.txt", json);
+        Assert.Contains("worse_new.txt", json);
+    }
+
     // ---------------------------------------------------------------- pull semantics
 
     [Fact]
     public async Task FetchAndPull_MarkerRepoWithoutRecovery_RethrowsTypedException()
     {
-        string source = CreateForgedRepo(("bad:file.txt", "bad content"));
+        string source = CreateForgedRepo(_root, ("bad:file.txt", "bad content"));
         string target = await CloneExpectingInvalidPathsAsync(source, "marker-pull");
 
         // The repo must not silently report success with an empty working tree.
@@ -166,7 +222,7 @@ public sealed class PathRecoveryTests : IDisposable
     [Fact]
     public async Task FetchAndPull_MarkerRepoUpstreamFixedPaths_ChecksOutAndClearsMarker()
     {
-        string source = CreateForgedRepo(("good.txt", "good content"), ("bad:file.txt", "bad content"));
+        string source = CreateForgedRepo(_root, ("good.txt", "good content"), ("bad:file.txt", "bad content"));
         string target = await CloneExpectingInvalidPathsAsync(source, "fixed-upstream");
 
         ReplaceForgedEntry(source, remove: "bad:file.txt", add: ("fixed.txt", "fixed content"));
@@ -182,10 +238,10 @@ public sealed class PathRecoveryTests : IDisposable
     [Fact]
     public async Task FetchAndPull_WithStoredRecovery_RematerializesNewCommitsThroughMapping()
     {
-        string source = CreateForgedRepo(("bad:file.txt", "v1"), ("good.txt", "g1"));
+        string source = CreateForgedRepo(_root, ("bad:file.txt", "v1"), ("good.txt", "g1"));
         string target = await CloneExpectingInvalidPathsAsync(source, "recovery-pull");
         await _client.ApplyRecoveryAsync(
-            target, Token, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
+            target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
         Assert.Equal("v1", File.ReadAllText(Path.Combine(target, "bad_file.txt")));
 
         // Upstream rewrites the still-invalid file; the pull must land the new
@@ -202,10 +258,10 @@ public sealed class PathRecoveryTests : IDisposable
     [Fact]
     public async Task FetchAndPull_WithStoredRecovery_NewInvalidPathNotCovered_Throws()
     {
-        string source = CreateForgedRepo(("bad:file.txt", "v1"));
+        string source = CreateForgedRepo(_root, ("bad:file.txt", "v1"));
         string target = await CloneExpectingInvalidPathsAsync(source, "uncovered-pull");
         await _client.ApplyRecoveryAsync(
-            target, Token, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
+            target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
 
         AppendForgedCommit(source, ("worse:new.txt", "not covered"));
 
@@ -220,7 +276,7 @@ public sealed class PathRecoveryTests : IDisposable
     [Fact]
     public async Task CloneAndPull_ValidRepo_NeverWritesMarkerOrRecovery()
     {
-        string source = CreateForgedRepo(("readme.txt", "hello"));
+        string source = CreateForgedRepo(_root, ("readme.txt", "hello"));
         string target = NewPath("normal");
 
         await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
@@ -304,47 +360,6 @@ public sealed class PathRecoveryTests : IDisposable
             (renames ?? []).ToDictionary(r => r.From, r => r.To, StringComparer.Ordinal),
             new HashSet<string>(skips ?? [], StringComparer.Ordinal));
 
-    /// <summary>Builds a repo whose single commit holds the given forged entries with per-entry content.</summary>
-    private string CreateForgedRepo(params (string Name, string Content)[] entries)
-    {
-        string path = NewPath("forged-" + Guid.NewGuid().ToString("N")[..8]);
-        Repository.Init(path);
-        using var repo = new Repository(path);
-
-        var definition = new TreeDefinition();
-        foreach (var (name, content) in entries)
-        {
-            var blob = repo.ObjectDatabase.CreateBlob(new MemoryStream(Encoding.UTF8.GetBytes(content)));
-            definition.Add(name, blob, Mode.NonExecutableFile);
-        }
-        var tree = repo.ObjectDatabase.CreateTree(definition);
-        var signature = MakeSignature();
-        var commit = repo.ObjectDatabase.CreateCommit(
-            signature, signature, "forged commit", tree, [], prettifyMessage: false);
-        repo.Refs.Add(repo.Refs.Head.TargetIdentifier, commit.Id);
-        return path;
-    }
-
-    /// <summary>Adds a commit on top of HEAD writing (or overwriting) forged entries; returns its SHA.</summary>
-    private static string AppendForgedCommit(string workdir, params (string Name, string Content)[] entries)
-    {
-        using var repo = new Repository(workdir);
-        var head = repo.Head.Tip;
-
-        var definition = TreeDefinition.From(head.Tree);
-        foreach (var (name, content) in entries)
-        {
-            var blob = repo.ObjectDatabase.CreateBlob(new MemoryStream(Encoding.UTF8.GetBytes(content)));
-            definition.Add(name, blob, Mode.NonExecutableFile);
-        }
-        var tree = repo.ObjectDatabase.CreateTree(definition);
-        var signature = MakeSignature();
-        var commit = repo.ObjectDatabase.CreateCommit(
-            signature, signature, "forged follow-up", tree, [head], prettifyMessage: false);
-        repo.Refs.UpdateTarget(repo.Refs.Head.ResolveToDirectReference(), commit.Id);
-        return commit.Sha;
-    }
-
     /// <summary>Adds a commit that removes one forged entry and adds another — "upstream fixed the path".</summary>
     private static void ReplaceForgedEntry(string workdir, string remove, (string Name, string Content) add)
     {
@@ -361,9 +376,6 @@ public sealed class PathRecoveryTests : IDisposable
         repo.Refs.UpdateTarget(repo.Refs.Head.ResolveToDirectReference(), commit.Id);
     }
 
-    private static Signature MakeSignature()
-        => new("tester", "tester@example.test", DateTimeOffset.Now);
-
     private static bool IsCheckoutPending(string repoPath)
     {
         using var repo = new Repository(repoPath);
@@ -374,31 +386,5 @@ public sealed class PathRecoveryTests : IDisposable
     {
         using var repo = new Repository(repoPath);
         return Path.Combine(repo.Info.Path, "gclo-recovery.json");
-    }
-
-    private static string HeadSha(string workdir)
-    {
-        using var repo = new Repository(workdir);
-        return repo.Head.Tip.Sha;
-    }
-
-    private static void TryDeleteDirectory(string path)
-    {
-        try
-        {
-            if (!Directory.Exists(path))
-            {
-                return;
-            }
-            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-            {
-                File.SetAttributes(file, FileAttributes.Normal);
-            }
-            Directory.Delete(path, recursive: true);
-        }
-        catch
-        {
-            // Best effort; stray temp dirs are harmless.
-        }
     }
 }

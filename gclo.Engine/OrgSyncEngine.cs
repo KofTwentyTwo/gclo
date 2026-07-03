@@ -12,6 +12,10 @@ public sealed class OrgSyncEngine
     private readonly IRepositoryLister _lister;
     private readonly IGitClient _git;
 
+    /// <summary>
+    /// Creates an engine that discovers repositories through <paramref name="lister"/>
+    /// and runs git operations through <paramref name="git"/>.
+    /// </summary>
     public OrgSyncEngine(IRepositoryLister lister, IGitClient git)
     {
         _lister = lister ?? throw new ArgumentNullException(nameof(lister));

@@ -20,24 +20,26 @@ public sealed class LibGit2GitClient : IGitClient
 
     private static readonly JsonSerializerOptions RecoveryJsonOptions = new() { WriteIndented = true };
 
+    /// <inheritdoc/>
     public bool IsValidRepository(string path)
         => Directory.Exists(path) && Repository.IsValid(path);
 
     // LongRunning: each git operation blocks a thread for its whole duration; on the
     // thread pool, MaxConcurrency operations would starve the pool and delay ramp-up.
+    /// <inheritdoc/>
     public Task CloneAsync(string url, string path, string token, Action<double>? onProgress, CancellationToken cancellationToken)
         => Task.Factory.StartNew(
             () => Clone(url, path, token, onProgress, cancellationToken),
             cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
+    /// <inheritdoc/>
     public Task FetchAndPullAsync(string path, string token, CancellationToken cancellationToken)
         => Task.Factory.StartNew(
             () => FetchAndPull(path, token, cancellationToken),
             cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-    // The token is unused today (recovery works on already-fetched objects) but is part
-    // of the contract so implementations that need to re-fetch can do so.
-    public Task ApplyRecoveryAsync(string path, string token, PathRecovery recovery, CancellationToken cancellationToken)
+    /// <inheritdoc/>
+    public Task ApplyRecoveryAsync(string path, PathRecovery recovery, CancellationToken cancellationToken)
         => Task.Factory.StartNew(
             () => ApplyRecovery(path, recovery, cancellationToken),
             cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
@@ -48,9 +50,10 @@ public sealed class LibGit2GitClient : IGitClient
 
         var options = new CloneOptions
         {
-            // Two-phase: fetch only, then checkout after core.longpaths is set and
-            // every tree path is validated against Windows rules — a repo that is
-            // fine on Linux must fail with a structured error, not a libgit2 one.
+            // Two-phase: fetch only, then checkout. On Windows the gap is used to
+            // set core.longpaths and validate every tree path against Windows rules —
+            // a repo that is fine on Linux must fail there with a structured error,
+            // not a libgit2 one. On other platforms phase two is a plain checkout.
             Checkout = false,
         };
         options.FetchOptions.CredentialsProvider = MakeCredentialsProvider(token);
@@ -76,9 +79,12 @@ public sealed class LibGit2GitClient : IGitClient
             Repository.Clone(url, path, options);
 
             using var repo = new Repository(path);
-            // Lifts the 260-character path limit before anything touches the
-            // working tree; libgit2 honors it for checkout.
-            repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
+            if (OperatingSystem.IsWindows())
+            {
+                // Lifts the 260-character path limit before anything touches the
+                // working tree; libgit2 honors it for checkout.
+                repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
+            }
 
             var tip = repo.Head.Tip;
             if (tip is null)
@@ -86,15 +92,18 @@ public sealed class LibGit2GitClient : IGitClient
                 return; // empty repository — nothing to check out
             }
 
-            var invalidPaths = WindowsPathValidator.Validate(tip.Tree);
-            if (invalidPaths.Count > 0)
+            if (OperatingSystem.IsWindows())
             {
-                // Keep the fetched repo: all objects are already downloaded, so
-                // ApplyRecoveryAsync can materialize a sanitized working tree without
-                // touching the network. The marker tells FetchAndPull that this
-                // repository was never checked out.
-                repo.Config.Set(CheckoutPendingKey, true, ConfigurationLevel.Local);
-                throw new InvalidRepositoryPathsException(invalidPaths);
+                var invalidPaths = WindowsPathValidator.Validate(tip.Tree);
+                if (invalidPaths.Count > 0)
+                {
+                    // Keep the fetched repo: all objects are already downloaded, so
+                    // ApplyRecoveryAsync can materialize a sanitized working tree without
+                    // touching the network. The marker tells FetchAndPull that this
+                    // repository was never checked out.
+                    repo.Config.Set(CheckoutPendingKey, true, ConfigurationLevel.Local);
+                    throw new InvalidRepositoryPathsException(invalidPaths);
+                }
             }
 
             ct.ThrowIfCancellationRequested();
@@ -126,8 +135,11 @@ public sealed class LibGit2GitClient : IGitClient
     {
         using var repo = new Repository(path);
 
-        // Idempotent; also covers repositories that were cloned by other tools.
-        repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
+        if (OperatingSystem.IsWindows())
+        {
+            // Idempotent; also covers repositories that were cloned by other tools.
+            repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
+        }
 
         var remote = repo.Network.Remotes["origin"]
             ?? throw new InvalidOperationException("Repository has no 'origin' remote.");
@@ -153,8 +165,8 @@ public sealed class LibGit2GitClient : IGitClient
         // Repositories whose clone hit Windows-invalid paths never had a checkout;
         // they carry a pending marker (and, once the user chose renames/skips, a
         // persisted recovery). Both take a dedicated path — their working tree is
-        // materialized manually, never by a merge checkout. Everything else behaves
-        // exactly as before.
+        // materialized manually, never by a merge checkout. Every other repository
+        // takes the normal fetch + fast-forward pull below.
         string recoveryFile = GetRecoveryFilePath(repo);
         if (File.Exists(recoveryFile))
         {
@@ -199,10 +211,13 @@ public sealed class LibGit2GitClient : IGitClient
         }
 
         // Incoming commits can introduce Windows-invalid paths just like a clone can.
-        var invalidIncoming = WindowsPathValidator.Validate(tracked.Tip.Tree);
-        if (invalidIncoming.Count > 0)
+        if (OperatingSystem.IsWindows())
         {
-            throw new InvalidRepositoryPathsException(invalidIncoming);
+            var invalidIncoming = WindowsPathValidator.Validate(tracked.Tip.Tree);
+            if (invalidIncoming.Count > 0)
+            {
+                throw new InvalidRepositoryPathsException(invalidIncoming);
+            }
         }
 
         // Fast-forward only: a mirror tool must never manufacture merge commits.
@@ -244,10 +259,13 @@ public sealed class LibGit2GitClient : IGitClient
             return; // the remote is still empty; nothing to pull
         }
 
-        var invalidPaths = WindowsPathValidator.Validate(remoteBranch.Tip.Tree);
-        if (invalidPaths.Count > 0)
+        if (OperatingSystem.IsWindows())
         {
-            throw new InvalidRepositoryPathsException(invalidPaths);
+            var invalidPaths = WindowsPathValidator.Validate(remoteBranch.Tip.Tree);
+            if (invalidPaths.Count > 0)
+            {
+                throw new InvalidRepositoryPathsException(invalidPaths);
+            }
         }
 
         repo.Refs.Add(targetRef, remoteBranch.Tip.Id);
@@ -288,12 +306,23 @@ public sealed class LibGit2GitClient : IGitClient
     /// <summary>
     /// Materializes HEAD's tree into the working directory with the recovery's renames
     /// and skips applied, after validating that the effective path set is actually
-    /// creatable on Windows. Persists the recovery so later pulls re-apply it, then
-    /// clears the pending-checkout marker.
+    /// creatable on Windows. Any recovery persisted from an earlier run is merged in
+    /// first (the incoming recovery wins on conflicts), so a recovery-managed repo
+    /// that gains new invalid paths can be fixed incrementally. Persists the merged
+    /// recovery so later pulls re-apply it, then clears the pending-checkout marker.
     /// </summary>
     private static void ApplyRecoveryCore(Repository repo, PathRecovery recovery, CancellationToken ct)
     {
-        repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
+        if (OperatingSystem.IsWindows())
+        {
+            repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
+        }
+
+        string recoveryFile = GetRecoveryFilePath(repo);
+        if (File.Exists(recoveryFile))
+        {
+            recovery = MergeRecoveries(stored: LoadRecovery(recoveryFile), incoming: recovery);
+        }
 
         var tip = repo.Head.Tip
             ?? throw new InvalidOperationException("Repository has no commits; nothing to materialize.");
@@ -334,10 +363,28 @@ public sealed class LibGit2GitClient : IGitClient
     }
 
     /// <summary>
+    /// Overlays <paramref name="incoming"/> onto <paramref name="stored"/>: renames
+    /// union with the incoming value winning on a shared original path; skips union.
+    /// </summary>
+    private static PathRecovery MergeRecoveries(PathRecovery stored, PathRecovery incoming)
+    {
+        var renames = new Dictionary<string, string>(stored.SegmentRenames, StringComparer.Ordinal);
+        foreach (var (originalPath, replacement) in incoming.SegmentRenames)
+        {
+            renames[originalPath] = replacement;
+        }
+
+        var skips = new HashSet<string>(stored.SkippedPaths, StringComparer.Ordinal);
+        skips.UnionWith(incoming.SkippedPaths);
+
+        return new PathRecovery(renames, skips);
+    }
+
+    /// <summary>
     /// Walks <paramref name="tree"/> iteratively, resolving every blob to the path it
     /// should occupy on disk: skipped files and whole skipped directories are omitted,
-    /// and a rename of any path (file or directory) relocates it — and, for a
-    /// directory, its entire subtree — to the mapped destination.
+    /// and a rename of any path (file or directory) replaces its final segment in
+    /// place — for a directory, the entire subtree moves with it.
     /// </summary>
     private static List<(string OriginalPath, string EffectivePath, Blob Blob)> CollectEffectiveEntries(
         Tree tree, PathRecovery recovery)
@@ -357,11 +404,17 @@ public sealed class LibGit2GitClient : IGitClient
                     continue; // omit the file — or the whole subtree when this is a directory
                 }
 
-                // Renames key on the full original path; unmapped entries keep their
-                // own name under the (possibly renamed) parent's effective prefix.
-                string effectivePath = recovery.SegmentRenames.TryGetValue(originalPath, out string? mapped)
-                    ? mapped
-                    : effectivePrefix.Length == 0 ? entry.Name : $"{effectivePrefix}/{entry.Name}";
+                // Renames key on the full ORIGINAL path, but a mapped value contributes
+                // only its last segment, joined onto the parent's EFFECTIVE prefix — so
+                // renaming both a directory and one of its descendants composes instead
+                // of the descendant's mapping resurrecting the parent's original name.
+                // Unmapped entries keep their own name under that same prefix.
+                string effectiveName = recovery.SegmentRenames.TryGetValue(originalPath, out string? mapped)
+                    ? mapped[(mapped.LastIndexOf('/') + 1)..]
+                    : entry.Name;
+                string effectivePath = effectivePrefix.Length == 0
+                    ? effectiveName
+                    : $"{effectivePrefix}/{effectiveName}";
 
                 switch (entry.TargetType)
                 {
@@ -397,10 +450,13 @@ public sealed class LibGit2GitClient : IGitClient
         var tip = repo.Head.Tip;
         if (tip is not null)
         {
-            var invalidPaths = WindowsPathValidator.Validate(tip.Tree);
-            if (invalidPaths.Count > 0)
+            if (OperatingSystem.IsWindows())
             {
-                throw new InvalidRepositoryPathsException(invalidPaths);
+                var invalidPaths = WindowsPathValidator.Validate(tip.Tree);
+                if (invalidPaths.Count > 0)
+                {
+                    throw new InvalidRepositoryPathsException(invalidPaths);
+                }
             }
 
             ct.ThrowIfCancellationRequested();
@@ -445,6 +501,8 @@ public sealed class LibGit2GitClient : IGitClient
         => Path.Combine(repo.Info.Path, RecoveryFileName);
 
     /// <summary>Serializable shape of <see cref="PathRecovery"/> for .git\gclo-recovery.json.</summary>
+    /// <param name="SegmentRenames">Original path to replacement path map; null when absent from the file.</param>
+    /// <param name="SkippedPaths">Paths omitted from the working tree; null when absent from the file.</param>
     private sealed record RecoveryDocument(Dictionary<string, string>? SegmentRenames, List<string>? SkippedPaths);
 
     private static void SaveRecovery(Repository repo, PathRecovery recovery)

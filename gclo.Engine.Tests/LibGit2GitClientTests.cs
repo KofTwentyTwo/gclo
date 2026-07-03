@@ -1,5 +1,6 @@
 using gclo.Engine;
 using LibGit2Sharp;
+using static gclo.Engine.Tests.GitTestHelpers;
 
 namespace gclo.Engine.Tests;
 
@@ -65,7 +66,7 @@ public sealed class LibGit2GitClientTests : IDisposable
         // failures, the fetched repository is KEPT — everything is already downloaded,
         // so path recovery can run without hitting the network — and marked as
         // checkout-pending so a later pull cannot mistake it for an up-to-date clone.
-        string source = CreateRepoWithWindowsInvalidFileName();
+        string source = CreateForgedRepo(_root, ("bad:name.txt", "unwritable on Windows"));
         string target = NewPath("partial-clone");
 
         var ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
@@ -290,58 +291,7 @@ public sealed class LibGit2GitClientTests : IDisposable
         using var repo = new Repository(workdir);
         File.WriteAllText(Path.Combine(workdir, fileName), content);
         Commands.Stage(repo, fileName);
-        var signature = new Signature("tester", "tester@example.test", DateTimeOffset.Now);
+        var signature = MakeSignature();
         return repo.Commit(message, signature, signature).Sha;
-    }
-
-    /// <summary>
-    /// Builds a repository whose single commit contains a file name that Windows rejects.
-    /// The tree is written through the object database, so nothing ever touches the disk
-    /// under that name until a clone tries to check it out.
-    /// </summary>
-    private string CreateRepoWithWindowsInvalidFileName()
-    {
-        string path = NewPath("invalid-name-source");
-        Repository.Init(path);
-        using var repo = new Repository(path);
-
-        var blob = repo.ObjectDatabase.CreateBlob(new MemoryStream("unwritable on Windows"u8.ToArray()));
-        var treeDefinition = new TreeDefinition().Add("bad:name.txt", blob, Mode.NonExecutableFile);
-        var tree = repo.ObjectDatabase.CreateTree(treeDefinition);
-        var signature = new Signature("tester", "tester@example.test", DateTimeOffset.Now);
-        var commit = repo.ObjectDatabase.CreateCommit(
-            signature, signature, "commit with a Windows-invalid file name", tree, [], prettifyMessage: false);
-        repo.Refs.Add(repo.Refs.Head.TargetIdentifier, commit.Id);
-        return path;
-    }
-
-    private static string HeadSha(string workdir)
-    {
-        using var repo = new Repository(workdir);
-        return repo.Head.Tip.Sha;
-    }
-
-    /// <summary>
-    /// Same approach as the class under test: pack files under .git are written read-only
-    /// on Windows, so clear attributes before deleting.
-    /// </summary>
-    private static void TryDeleteDirectory(string path)
-    {
-        try
-        {
-            if (!Directory.Exists(path))
-            {
-                return;
-            }
-            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-            {
-                File.SetAttributes(file, FileAttributes.Normal);
-            }
-            Directory.Delete(path, recursive: true);
-        }
-        catch
-        {
-            // Best effort; stray temp dirs are harmless.
-        }
     }
 }
