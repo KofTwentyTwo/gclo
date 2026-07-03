@@ -48,7 +48,7 @@ namespace gclo
         {
             if (Content is FrameworkElement root)
             {
-                root.RequestedTheme = AppSettings.ToElementTheme(_settings.Theme);
+                root.RequestedTheme = StatusFormat.ToElementTheme(_settings.Theme);
             }
             if (string.IsNullOrWhiteSpace(ViewModel.TargetFolder)
                 && !string.IsNullOrWhiteSpace(_settings.DefaultTargetFolder))

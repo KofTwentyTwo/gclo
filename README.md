@@ -139,10 +139,11 @@ To F5-debug the packaged app in Visual Studio, open `gclo.slnx`, set `gclo` as t
 
 | Project | Description |
 | --- | --- |
-| `gclo` | WinUI 3 packaged desktop app (Windows App SDK, CommunityToolkit.Mvvm) |
+| `gclo` | WinUI 3 packaged desktop app — XAML, dialogs, pickers, and update plumbing only; no business logic |
 | `gclo.Cli` | Cross-platform command-line head over the engine ([docs/CLI.md](docs/CLI.md)) |
-| `gclo.Engine` | Core sync engine: `OrgSyncEngine`, Octokit-based repository lister, LibGit2Sharp git client |
-| `gclo.Engine.Tests` | xunit tests for the engine, using fake `IRepositoryLister` / `IGitClient` implementations |
+| `gclo.Engine` | Core sync engine: `OrgSyncEngine`, Octokit-based listers, LibGit2Sharp git client, Windows path validation |
+| `gclo.ViewModels` | UI-framework-free view models and settings persistence, shared presentation logic |
+| `gclo.Engine.Tests` | xunit tests: engine (with fakes), real-git integration suite, and view-model tests |
 
 ## Contributing
 

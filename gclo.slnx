@@ -7,6 +7,7 @@
   <Project Path="gclo.Cli/gclo.Cli.csproj" />
   <Project Path="gclo.Engine.Tests/gclo.Engine.Tests.csproj" />
   <Project Path="gclo.Engine/gclo.Engine.csproj" />
+  <Project Path="gclo.ViewModels/gclo.ViewModels.csproj" />
   <Project Path="gclo/gclo.csproj">
     <Platform Solution="*|ARM64" Project="ARM64" />
     <Platform Solution="*|x64" Project="x64" />

@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Microsoft.UI.Xaml;
 
 namespace gclo.Services;
 
@@ -83,13 +82,6 @@ public sealed class AppSettings
         }
     }
 
-    /// <summary>Maps the persisted theme string to a XAML theme ("System"/unknown => Default).</summary>
-    public static ElementTheme ToElementTheme(string theme) => theme switch
-    {
-        "Light" => ElementTheme.Light,
-        "Dark" => ElementTheme.Dark,
-        _ => ElementTheme.Default,
-    };
 
     private void Sanitize()
     {

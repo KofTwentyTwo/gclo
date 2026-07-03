@@ -15,15 +15,28 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly IRepositoryLister _lister;
     private readonly IGitClient _git;
     private readonly IOrganizationLister _orgLister;
+    private readonly Func<Action<RepoProgress>, IProgress<RepoProgress>> _progressFactory;
+    private readonly TimeSpan _orgLookupDebounce;
     private readonly Dictionary<string, RepoItemViewModel> _itemsByName = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _orgLoadCts;
 
-    /// <summary>Production dependencies by default; pass fakes for testing.</summary>
-    public MainViewModel(IRepositoryLister? lister = null, IGitClient? git = null, IOrganizationLister? orgLister = null)
+    /// <summary>
+    /// Production dependencies by default; pass fakes for testing. The default progress
+    /// factory is <see cref="Progress{T}"/>, which marshals via the SynchronizationContext
+    /// captured at construction (the UI thread in the app); tests inject a synchronous one.
+    /// </summary>
+    public MainViewModel(
+        IRepositoryLister? lister = null,
+        IGitClient? git = null,
+        IOrganizationLister? orgLister = null,
+        Func<Action<RepoProgress>, IProgress<RepoProgress>>? progressFactory = null,
+        TimeSpan? orgLookupDebounce = null)
     {
         _lister = lister ?? new GitHubRepositoryLister();
         _git = git ?? new LibGit2GitClient();
         _orgLister = orgLister ?? new GitHubOrganizationLister();
+        _progressFactory = progressFactory ?? (handler => new Progress<RepoProgress>(handler));
+        _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
         Organization = "";
         Token = "";
         TargetFolder = "";
@@ -86,7 +99,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         try
         {
-            await Task.Delay(600, cts.Token); // debounce keystrokes / rapid pastes
+            await Task.Delay(_orgLookupDebounce, cts.Token); // debounce keystrokes / rapid pastes
             IsLoadingOrgs = true;
             var orgs = await _orgLister.ListOrganizationsAsync(token, cts.Token);
             cts.Token.ThrowIfCancellationRequested();
@@ -164,7 +177,7 @@ public sealed partial class MainViewModel : ObservableObject
 
             // Constructed on the UI thread: Progress<T> captures the WinUI
             // SynchronizationContext, so HandleProgress always runs on the UI thread.
-            var progress = new Progress<RepoProgress>(HandleProgress);
+            var progress = _progressFactory(HandleProgress);
 
             var engine = new OrgSyncEngine(_lister, _git);
             var request = new SyncRequest(
