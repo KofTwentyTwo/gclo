@@ -1,0 +1,19 @@
+# Categories for GitHub's auto-generated release notes (uses issue/PR labels).
+changelog:
+  exclude:
+    labels: [deferred]
+  categories:
+    - title: Fixed
+      labels: [bug]
+    - title: Added
+      labels: [enhancement]
+    - title: Quality & internals
+      labels: [quality, refactor]
+    - title: Release & packaging
+      labels: [release]
+    - title: Documentation
+      labels: [documentation]
+    - title: Dependencies
+      labels: [dependencies]
+    - title: Other changes
+      labels: ["*"]

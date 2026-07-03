@@ -15,7 +15,7 @@
 
             <!-- App identity -->
             <StackPanel Spacing="4">
-                <TextBlock Text="gclo" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                <TextBlock Text="gclo — Git Clone Large Organizations" Style="{ThemeResource SubtitleTextBlockStyle}" />
                 <TextBlock
                     Text="Clone and update every repository in a GitHub organization."
                     TextWrapping="Wrap" />

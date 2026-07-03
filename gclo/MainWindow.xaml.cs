@@ -22,7 +22,7 @@ namespace gclo
             ViewModel = new MainViewModel();
             InitializeComponent();
 
-            Title = "gclo - GitHub organization sync";
+            Title = "gclo — Git Clone Large Organizations";
 
             _settings = AppSettings.Load();
             ApplySettings();

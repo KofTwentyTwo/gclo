@@ -6,7 +6,7 @@ namespace gclo.Cli;
 internal static class Program
 {
     private const string RootHelp = """
-        gclo - clone or update every repository of a GitHub organization or user account.
+        gclo (Git Clone Large Organizations) - clone or update every repository of a GitHub organization or user account.
 
         Usage:
           gclo sync --org <name> --target <folder> [options]

@@ -1,4 +1,4 @@
-# gclo CLI
+# gclo CLI — Git Clone Large Organizations
 
 `gclo` is a scriptable command-line head over the same engine (`gclo.Engine`) that
 powers the gclo desktop app. It clones every repository of a GitHub organization

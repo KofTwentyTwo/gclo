@@ -118,6 +118,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload $env:GITHUB_REF_NAME artifacts/gclo-cli-win-x64.zip --clobber
 
+      # Auto-generated changelog (categorized by labels via .github/release.yml),
+      # appended to the release vpk just created.
+      - name: Generate release changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/releases/generate-notes" -f tag_name=$env:GITHUB_REF_NAME --jq .body | Out-File -FilePath notes.md -Encoding utf8
+          gh release edit $env:GITHUB_REF_NAME --notes-file notes.md
+
       # ----------------------------------------------------------------------
       # (c) NuGet: pack gclo.Engine and push to nuget.org - only when the
       # NUGET_API_KEY secret is configured on the repository.

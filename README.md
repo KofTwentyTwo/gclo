@@ -1,4 +1,4 @@
-# gclo
+# gclo — Git Clone Large Organizations
 
 **Clone an entire GitHub organization. Keep it up to date. In parallel.**
 
@@ -6,7 +6,7 @@
 [![Platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-blue)](https://github.com/KofTwentyTwo/gclo)
 [![.NET 10](https://img.shields.io/badge/.NET-10-blueviolet)](https://dotnet.microsoft.com/)
 
-gclo is a Windows 11 desktop app (WinUI 3, Windows App SDK) that mirrors a whole GitHub organization to a local folder in one pass. Point it at an org, give it a personal access token and a target folder, and it clones the repositories that are missing and fast-forwards the ones that already exist — with live per-repo progress and bounded parallelism.
+**gclo** (**G**it **C**lone **L**arge **O**rganizations) is a Windows 11 desktop app (WinUI 3, Windows App SDK) that mirrors a whole GitHub organization to a local folder in one pass. Point it at an org, give it a personal access token and a target folder, and it clones the repositories that are missing and fast-forwards the ones that already exist — with live per-repo progress and bounded parallelism.
 
 <!-- TODO: screenshot — ![gclo main window](docs/screenshot.png) -->
 
