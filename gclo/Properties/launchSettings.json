@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "gclo (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "gclo (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
