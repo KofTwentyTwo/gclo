@@ -6,95 +6,147 @@
 [![Platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-blue)](https://github.com/KofTwentyTwo/gclo)
 [![.NET 10](https://img.shields.io/badge/.NET-10-blueviolet)](https://dotnet.microsoft.com/)
 
-**gclo** (**G**it **C**lone **L**arge **O**rganizations) is a Windows 11 desktop app (WinUI 3, Windows App SDK) that mirrors a whole GitHub organization to a local folder in one pass. Point it at an org, give it a personal access token and a target folder, and it clones the repositories that are missing and fast-forwards the ones that already exist — with live per-repo progress and bounded parallelism.
+**gclo** (**G**it **C**lone **L**arge **O**rganizations) mirrors every repository of a GitHub organization or user account into a local folder in one pass: it clones the repositories that are missing and fast-forwards the ones that already exist, with live per-repo progress and bounded parallelism. It ships as a Windows 11 desktop app (WinUI 3) and a scriptable CLI built on the same engine.
 
-<!-- TODO: screenshot — ![gclo main window](docs/screenshot.png) -->
+<!-- SCREENSHOT (hero): main window mid-sync — token and org filled in, overall progress bar partway,
+     per-repo list showing a mix of Cloning (with %), Pulling, and Done. Tracked in issue #10. -->
 
-## Features
+## Download & install
 
-- Syncs an entire GitHub organization in one pass: clones new repositories, fast-forwards existing ones
-- Parallel git operations with bounded concurrency (default 8)
-- Live per-repo status: Queued, Cloning (with transfer percentage), Pulling, Done, Failed, Canceled
-- Overall progress bar and end-of-run summary (total / cloned / updated / failed / canceled)
-- Cancellation: in-flight repos stop cleanly, unstarted repos are marked Canceled
-- Per-repo failure isolation — one broken repo never aborts the rest
-- Failed clones are cleaned up so a partial checkout is never mistaken for a valid repo on the next run
-- Testable core: the sync engine is a plain .NET class library behind `IRepositoryLister` / `IGitClient` interfaces, covered by xunit tests
+All builds are published on the [**GitHub Releases** page](https://github.com/KofTwentyTwo/gclo/releases).
 
-## Getting started
+**Desktop app (GUI)** — download and run `gclo-stable-Setup.exe`. It installs per-user (no admin rights needed) and updates itself in-app via **Help > Check for updates**. A portable build (`gclo-stable-Portable.zip`) is also attached to each release; portable builds do not self-update.
 
-### Requirements
+**CLI** — download `gclo-cli-win-x64.zip` and unzip it anywhere. It is a self-contained single `gclo.exe` — no .NET runtime required.
 
-- Windows 11, or Windows 10 version 1809 (build 17763) or later
-- [.NET 10 SDK](https://dotnet.microsoft.com/)
-- Visual Studio 2026 with the Windows App SDK / WinUI workload (for F5 debugging of the packaged app)
-- A GitHub personal access token (see [Usage](#usage) for the required scopes)
+Plain version tags (`v1.2.3`) are **stable** releases; pre-release tags (`v1.2.3-beta.1`) publish to the **dev** channel, and an installed app only ever updates within its own channel.
 
-### Run from Visual Studio
+Installation via `winget` is coming soon.
 
-1. Clone the repository:
+## Getting a token
 
-   ```powershell
-   git clone https://github.com/KofTwentyTwo/gclo.git
-   ```
-
-2. Open `gclo.slnx`.
-3. Set `gclo` as the startup project and select the `x64` platform.
-4. Press F5 (packaged deployment).
-
-### Build from the command line
-
-```powershell
-# Packaged build
-dotnet build gclo.slnx -p:Platform=x64
-
-# Unpackaged build — runs without MSIX deployment or package identity
-dotnet build gclo.slnx -p:Platform=x64 -p:WindowsPackageType=None
-
-# Run the engine test suite
-dotnet test
-```
-
-The unpackaged build produces a plain executable under `gclo\bin\x64\Debug\` that you can launch directly — no installer or package registration required.
-
-## Usage
-
-1. **Paste your token first.** The organization dropdown fills with the orgs the token can see; if the token cannot list your orgs, type the org name manually.
-2. **Pick the organization** from the dropdown.
-3. **Choose a target folder.** Each repository syncs into a subfolder named after the repo.
-4. **Press Sync.** Watch per-repo progress live; cancel at any time.
-
-### Token scopes
+gclo authenticates to GitHub with a personal access token — it is used for both the API (listing repositories) and the git transport (cloning and fetching). Create one under [GitHub Settings > Developer settings > Personal access tokens](https://github.com/settings/tokens).
 
 | Token type | What you need |
 | --- | --- |
-| Classic PAT | `repo` scope (read access to the org's repositories); optionally `read:org` so the organization dropdown can list your orgs |
+| Classic PAT | `repo` scope (read access to the org's repositories); optionally `read:org` so the organization dropdown / `gclo orgs` can list your orgs |
 | Fine-grained PAT | Repository read access for the organization |
 
 The token is used in memory for the duration of a sync and is never stored on disk.
 
+## Using the GUI
+
+<!-- SCREENSHOT: empty main window on first launch — token box, org dropdown, target folder,
+     Parallel spinner, Sync/Cancel buttons. Tracked in issue #10. -->
+
+1. **Paste your token first.** After a moment, the **Organization or account** dropdown fills with everything the token can sync — your personal account is listed first, then your organizations alphabetically. If the token cannot list organizations (a fine-grained PAT, or a classic PAT without `read:org`), the status line says so; the dropdown is editable, so just type the name.
+2. **Pick the organization or account** from the dropdown.
+
+   <!-- SCREENSHOT: org dropdown open, personal account at the top followed by orgs. Tracked in issue #10. -->
+
+3. **Choose a target folder** — type a path or click **Browse...**. Each repository syncs into `<target>\<repo>`.
+4. **Set parallelism** if you like (1–64, default 8): how many git operations run at once.
+5. **Press Sync.** Every repository appears in the list and moves through its states live: Queued, Cloning (with transfer percentage), Pulling, Done, Failed, or Canceled. The overall progress bar, completed/total counter, and an end-of-run summary (`Finished: 3 cloned, 41 updated, 1 failed, 0 canceled of 45.`) track the whole run.
+
+   <!-- SCREENSHOT: sync in progress — several repos Cloning with percentages, progress bar advancing. Tracked in issue #10. -->
+
+6. **Cancel** at any time: in-flight repos stop cleanly, unstarted repos are marked Canceled, and the summary still appears.
+
+**When something goes wrong:** failures are isolated per repository — one broken repo never stops the rest. A failed repo shows its error message inline in the list, and failed clones are cleaned up so a partial checkout is never mistaken for a valid repo on the next run. gclo also checks every path in a repository against Windows file-system rules *before* checkout: paths that are legal in git but impossible on Windows (invalid characters, reserved device names like `CON`, trailing spaces or dots, names that differ only by case) mark the repo Failed with a per-path list of reasons instead of a cryptic checkout error — and nothing half-written is left on disk. Long paths beyond the classic 260-character limit are handled automatically (`core.longpaths`).
+
+**Settings** (File > Settings…) let you set the default target folder, the default parallelism, and the theme (System, Light, or Dark).
+
+<!-- SCREENSHOT: Settings dialog — default target folder, default parallelism, theme. Tracked in issue #10. -->
+
+**Updates:** Help > Check for updates… downloads and applies the latest release for your channel. Self-update is only available in installed builds (not the portable zip or a local debug build).
+
+## Using the CLI
+
+The CLI drives the same engine from scripts and scheduled jobs. There is deliberately no `--token <value>` option — command-line arguments leak to other processes — so the token comes from the `GITHUB_TOKEN` environment variable by default, or from `--token-env`, `--token-file`, or `--token-stdin`.
+
+PowerShell:
+
+```powershell
+# List everything the token can sync (your account first, then orgs)
+$env:GITHUB_TOKEN = (Get-Secret -Name GitHubPat -AsPlainText)
+gclo orgs
+
+# Mirror an organization, 16 git operations at a time
+gclo sync --org contoso --target C:\src\contoso --parallel 16
+
+# Pipe the token from a secret store — it never touches a command line or disk
+gh auth token | gclo sync --org contoso --target C:\src\contoso --token-stdin
+
+# Machine-readable result
+$result = gclo sync --org contoso --target C:\src\contoso --json | ConvertFrom-Json
+if ($result.failed -gt 0) { $result.failures | ForEach-Object { "$($_.repo): $($_.error)" } }
+```
+
+bash:
+
+```bash
+# List orgs, then mirror one
+export GITHUB_TOKEN="$(pass show github/pat)"
+gclo orgs
+gclo sync --org contoso --target ~/src/contoso
+
+# Pipe the token from a secret store
+op read "op://Private/GitHub PAT/token" | gclo sync --org contoso --target ~/src/contoso --token-stdin
+
+# Machine-readable result with jq
+gclo sync --org contoso --target ~/src/contoso --json |
+  jq -r '.failures[] | "\(.repo): \(.error)"'
+```
+
+`--org` accepts an organization or a user account login. `--json` suppresses progress output and prints a single JSON summary line; combined with the exit code it makes gclo easy to wire into cron/scheduled tasks:
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Everything succeeded. |
+| 1 | The run completed, but some repositories failed or the run was canceled (Ctrl+C). |
+| 2 | Fatal: bad arguments, missing/empty/rejected token, or organization not found. |
+
+Full reference — all options, output streams, Ctrl+C behavior, and more examples: [docs/CLI.md](docs/CLI.md).
+
 ## How it works
 
-The engine first lists every repository in the organization through the GitHub REST API using Octokit, following pagination to the end (100 repos per page). Each repo is reported as Queued, then `OrgSyncEngine` runs the set through `Parallel.ForEachAsync` bounded by `MaxConcurrency`. If the target folder already contains a valid git repository, it is updated; otherwise it is cloned. Every repo ends in exactly one terminal state — Done, Failed (with the error message), or Canceled — and per-repo exceptions are contained so the rest of the run continues.
+The engine lists every repository through the GitHub REST API (Octokit, paginated 100 per page), then runs the set through `Parallel.ForEachAsync` bounded by the parallelism setting. Git operations use LibGit2Sharp: missing repos are cloned with object-transfer progress; existing repos get a fetch from `origin` followed by a **fast-forward-only** merge — if a local branch has diverged from its upstream, the repo is reported Failed rather than auto-merged, so gclo never manufactures merge commits. Archived repositories are included and sync normally. Every repo ends in exactly one terminal state — Done, Failed (with the error), or Canceled — and per-repo exceptions are contained so the rest of the run continues. The PAT is the only credential; on the git side it is sent as HTTPS basic credentials with username `x-access-token`.
 
-Git operations are performed with LibGit2Sharp: clones report object-transfer progress, and updates do a fetch from `origin` followed by a fast-forward-only merge of the current branch onto its upstream. For both the API and git transport, the PAT is the only credential — on the git side it is sent as HTTPS basic credentials with username `x-access-token` and the token as the password.
+## Build from source
 
-A few behavioral notes:
+Requirements: Windows 11 (or Windows 10 1809+), the [.NET 10 SDK](https://dotnet.microsoft.com/), and — for the desktop app — Visual Studio 2026 with the Windows App SDK / WinUI workload.
 
-- Updates are fast-forward only: if a local branch has diverged from its upstream, the repo is reported as Failed rather than auto-merged. gclo never manufactures merge commits.
-- Archived repositories are included in the sync; they are read-only on GitHub but still clone and update normally.
+```powershell
+git clone https://github.com/KofTwentyTwo/gclo.git
+cd gclo
+
+# Desktop app (packaged build)
+dotnet build gclo.slnx -p:Platform=x64
+
+# Desktop app, unpackaged — a plain exe under gclo\bin\x64\Debug\, no MSIX deployment
+dotnet build gclo.slnx -p:Platform=x64 -p:WindowsPackageType=None
+
+# CLI only (plain net10.0 — also builds on Linux/macOS)
+dotnet run --project gclo.Cli -- sync --org contoso --target C:\src\contoso
+
+# Tests
+dotnet test
+```
+
+To F5-debug the packaged app in Visual Studio, open `gclo.slnx`, set `gclo` as the startup project, select the `x64` platform, and make sure Windows **Developer Mode** is enabled (Settings > System > For developers) — packaged deployment requires it.
 
 ## Project layout
 
 | Project | Description |
 | --- | --- |
 | `gclo` | WinUI 3 packaged desktop app (Windows App SDK, CommunityToolkit.Mvvm) |
+| `gclo.Cli` | Cross-platform command-line head over the engine ([docs/CLI.md](docs/CLI.md)) |
 | `gclo.Engine` | Core sync engine: `OrgSyncEngine`, Octokit-based repository lister, LibGit2Sharp git client |
 | `gclo.Engine.Tests` | xunit tests for the engine, using fake `IRepositoryLister` / `IGitClient` implementations |
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, build and test commands, and pull request expectations.
+Contributions are welcome. Development happens on the `dev` branch; `main` is the stable branch and only advances via pull requests with passing status checks — so base your PRs on `dev`. See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, build and test commands, and pull request expectations (zero-warning builds, green tests, unpackaged mode kept working).
 
 ## License
 
@@ -109,3 +161,4 @@ gclo builds on the following open-source projects:
 | [libgit2](https://github.com/libgit2/libgit2) (native library used by LibGit2Sharp) | GPLv2 with linking exception |
 | [CommunityToolkit.Mvvm](https://github.com/CommunityToolkit/dotnet) | MIT |
 | [Windows App SDK](https://github.com/microsoft/WindowsAppSDK) | MIT |
+| [Velopack](https://github.com/velopack/velopack) (self-update) | MIT |

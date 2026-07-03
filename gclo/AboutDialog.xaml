@@ -58,6 +58,9 @@
                     <Run FontWeight="SemiBold" Text="CommunityToolkit.Mvvm" /><Run Text=" — MIT License" />
                 </TextBlock>
                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
+                    <Run FontWeight="SemiBold" Text="Velopack" /><Run Text=" — MIT License" />
+                </TextBlock>
+                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
                     <Run FontWeight="SemiBold" Text="Windows App SDK / WinUI 3" /><Run Text=" — MIT License, with Microsoft binary components" />
                 </TextBlock>
                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">

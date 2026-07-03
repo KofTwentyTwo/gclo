@@ -1,32 +1,67 @@
 # Contributing to gclo
 
-Thanks for your interest in contributing. This document covers what you need to get set up and what is expected of a pull request.
+Thanks for your interest in contributing. This document covers what you need to get set up, how changes flow through the repository, and what is expected of a pull request.
+
+Before starting on a feature, check the [development roadmap (#11)](https://github.com/KofTwentyTwo/gclo/issues/11) — it may already be planned (or deliberately out of scope). For anything non-trivial, open an issue first so the approach can be agreed before you invest time.
 
 ## Prerequisites
 
 - Windows 11, or Windows 10 version 1809 (build 17763) or later
 - [.NET 10 SDK](https://dotnet.microsoft.com/)
-- Visual Studio 2026 with the Windows App SDK / WinUI workload (recommended for working on the app UI; the engine and its tests only need the SDK)
+- Visual Studio 2026 with the Windows App SDK / WinUI workload (recommended for working on the app UI; the engine, the CLI, and the tests only need the SDK)
+
+## Branch model
+
+- **`dev`** is the integration branch. **Pull requests target `dev`**, not `main`.
+- **`main`** is the stable branch. It only moves via reviewed PRs from `dev` and is protected by required status checks. Releases are tagged from `main`.
+
+Fork the repository, branch from `dev`, and open your PR against `dev`.
 
 ## Building and testing
 
+All commands run from the repository root:
+
 ```powershell
-# Packaged build (what F5 in Visual Studio does)
+# Packaged build (what F5 in Visual Studio does).
+# CI runs this with -warnaserror — the build must produce ZERO warnings.
 dotnet build gclo.slnx -p:Platform=x64
 
-# Unpackaged build — verify this still works before opening a PR
+# Unpackaged build — runs without MSIX deployment or package identity.
+# Verify this still works before opening a PR.
 dotnet build gclo.slnx -p:Platform=x64 -p:WindowsPackageType=None
 
-# Run the test suite
-dotnet test
+# Run the engine test suite
+dotnet test gclo.Engine.Tests
+
+# Formatting/style gate — must report no changes needed
+dotnet format gclo.slnx --verify-no-changes --severity error
 ```
+
+## What CI enforces
+
+Every pull request must pass:
+
+| Check | What it gates |
+| --- | --- |
+| **Build and test (x64)** | `dotnet build gclo.slnx -p:Platform=x64 -warnaserror` — zero warnings, including NuGetAudit vulnerability warnings; then `dotnet test gclo.Engine.Tests` with coverage, and `gclo.Engine` line coverage must stay **≥ 60%** |
+| **Format (style gate)** | `dotnet format gclo.slnx --verify-no-changes --severity error` |
+| **Dependency review** | New/changed dependencies must have no known vulnerabilities (any severity fails) and a license on the repo's allowlist |
+| **CodeQL** | Static security analysis (runs on PRs targeting `main` and weekly) |
+
+Running the build, test, and format commands above locally before pushing will catch almost everything CI would.
 
 ## Pull request expectations
 
 - **Zero warnings.** The build must complete with 0 warnings. Treat any new warning as a failure.
-- **Tests pass.** `dotnet test` must be green. Engine changes should come with corresponding xunit tests in `gclo.Engine.Tests`.
+- **Tests pass.** `dotnet test gclo.Engine.Tests` must be green. Engine changes should come with corresponding xunit tests.
+- **Tests stay offline.** The engine tests exercise real git operations against **local fixture repositories** created on disk (via LibGit2Sharp) — no network access, no GitHub calls, no tokens. Keep new tests that way; fake `IRepositoryLister` / `IGitClient` implementations live in `gclo.Engine.Tests/Fakes.cs`.
 - **Unpackaged mode keeps working.** The app must run when built with `-p:WindowsPackageType=None`. Do not call APIs that require package identity (for example `Windows.Storage.ApplicationData` or `Package.Current`) without a try/catch fallback.
+- **Docs follow behavior.** If your change alters user-visible behavior, update the affected docs (`README.md`, `docs/CLI.md`) in the same PR.
 - Keep changes focused; unrelated refactors belong in separate PRs.
+
+## Architecture rule: no business logic in the UI project
+
+The `gclo` WinUI project contains views, view models, and app-level services (settings, self-update) — **nothing else**. All sync/business logic lives in `gclo.Engine`, a plain class library behind the `IRepositoryLister` / `IGitClient` / `IOrganizationLister` interfaces, so it stays testable without the app and is shared by the CLI (`gclo.Cli`). If you find yourself writing GitHub or git logic in the `gclo` project, it belongs in the engine.
 
 ## Code style
 
@@ -43,7 +78,7 @@ Match the existing code. In particular:
 
   Do not use the field-based form (it emits MVVMTK0045 warnings).
 
-- Engine code stays UI-free: `gclo.Engine` is a plain class library behind `IRepositoryLister` / `IGitClient` interfaces so it remains testable without the app.
+- Never write a token to disk, logs, or process output, and never accept one as a command-line argument. See [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest an improvement to gclo
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Before filing, please check the
+        [development roadmap (#11)](https://github.com/KofTwentyTwo/gclo/issues/11) —
+        your idea may already be planned, or deliberately out of scope.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation where gclo currently falls short for you.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you would like gclo to do instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Which part of gclo?
+      options:
+        - Desktop app (GUI)
+        - CLI
+        - Both / engine
+        - Not sure
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use today, or other approaches you thought about.
+    validations:
+      required: false

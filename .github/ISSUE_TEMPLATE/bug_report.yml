@@ -1,0 +1,77 @@
+name: Bug report
+description: Something in gclo (desktop app or CLI) is broken
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: gclo version
+      description: >-
+        Desktop app: **Help → About gclo…** shows the version.
+        CLI: run `gclo --version`.
+      placeholder: "e.g. 0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Where does it happen?
+      options:
+        - Desktop app (GUI)
+        - CLI
+        - Both
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong, including any exact error message (for a failed repo, the error text shown next to it).
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        As specifically as you can — org size, target folder, parallelism, whether the
+        repos already existed locally, the exact CLI command line, etc.
+      placeholder: |
+        1. Paste token, pick org "..."
+        2. Choose target folder D:\src
+        3. Press Sync
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant output / log excerpt
+      description: >-
+        Paste the relevant part of the CLI output (`--json` output, stderr failure lines)
+        or the error text from the app. **Before pasting, make sure it contains no
+        tokens.** gclo never prints your PAT, but your shell command, environment, or
+        surrounding output might include one — redact anything that looks like a
+        credential (`ghp_...`, `github_pat_...`).
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      description: Run `winver` — e.g. "Windows 11 24H2 (build 26100)". For the CLI on Linux/macOS, name the OS instead.
+    validations:
+      required: false
