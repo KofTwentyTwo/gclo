@@ -17,33 +17,64 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
             Credentials = new Credentials(token),
         };
 
-        var repositories = new List<Repository>();
-        try
+        // Pages manually (instead of one GetAll* call) so cancellation is honored
+        // between round trips on owners with hundreds of repositories.
+        async Task<List<Repository>> PageAsync(Func<ApiOptions, Task<IReadOnlyList<Repository>>> fetchPage)
         {
-            // Page manually (instead of one GetAllForOrg call) so cancellation is
-            // honored between round trips on orgs with hundreds of repositories.
+            var all = new List<Repository>();
             for (int page = 1; ; page++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var batch = await client.Repository
-                    .GetAllForOrg(organization, new ApiOptions { PageSize = 100, PageCount = 1, StartPage = page })
+                var batch = await fetchPage(new ApiOptions { PageSize = 100, PageCount = 1, StartPage = page })
                     .ConfigureAwait(false);
-                repositories.AddRange(batch);
+                all.AddRange(batch);
                 if (batch.Count < 100)
                 {
                     break;
+                }
+            }
+            return all;
+        }
+
+        List<Repository> repositories;
+        try
+        {
+            try
+            {
+                repositories = await PageAsync(o => client.Repository.GetAllForOrg(organization, o))
+                    .ConfigureAwait(false);
+            }
+            catch (NotFoundException)
+            {
+                // /orgs/{name}/repos 404s for user accounts: the token's own account
+                // gets its owned repos (including private); any other user account
+                // yields the repos the token can see there (public).
+                var currentUser = await client.User.Current().ConfigureAwait(false);
+                if (string.Equals(currentUser.Login, organization, StringComparison.OrdinalIgnoreCase))
+                {
+                    var owned = new RepositoryRequest { Affiliation = RepositoryAffiliation.Owner };
+                    repositories = await PageAsync(o => client.Repository.GetAllForCurrent(owned, o))
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    try
+                    {
+                        repositories = await PageAsync(o => client.Repository.GetAllForUser(organization, o))
+                            .ConfigureAwait(false);
+                    }
+                    catch (NotFoundException ex)
+                    {
+                        throw new InvalidOperationException(
+                            $"'{organization}' was found neither as an organization nor as a user account (404) — or the token cannot see it.", ex);
+                    }
                 }
             }
         }
         catch (AuthorizationException ex)
         {
             throw new InvalidOperationException(
-                "GitHub rejected the token (401). Check the PAT and make sure it has 'repo' (classic) or organization repository read access (fine-grained).", ex);
-        }
-        catch (NotFoundException ex)
-        {
-            throw new InvalidOperationException(
-                $"Organization '{organization}' was not found (404), or the token cannot see it.", ex);
+                "GitHub rejected the token (401). Check the PAT and make sure it has 'repo' (classic) or repository read access (fine-grained).", ex);
         }
         catch (RateLimitExceededException ex)
         {

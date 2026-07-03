@@ -15,9 +15,15 @@ public sealed class GitHubOrganizationLister : IOrganizationLister
             Credentials = new Credentials(token),
         };
 
+        string userLogin;
         IReadOnlyList<Organization> organizations;
         try
         {
+            // The token's own account is a valid sync target too (personal repos
+            // live under /users, not /orgs), so it heads the list.
+            var currentUser = await client.User.Current().ConfigureAwait(false);
+            userLogin = currentUser.Login;
+
             organizations = await client.Organization
                 .GetAllForCurrent(new ApiOptions { PageSize = 100 })
                 .ConfigureAwait(false);
@@ -33,9 +39,11 @@ public sealed class GitHubOrganizationLister : IOrganizationLister
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        return organizations
+        var result = new List<string> { userLogin };
+        result.AddRange(organizations
             .Select(o => o.Login)
-            .OrderBy(login => login, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .Where(login => !string.Equals(login, userLogin, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(login => login, StringComparer.OrdinalIgnoreCase));
+        return result;
     }
 }

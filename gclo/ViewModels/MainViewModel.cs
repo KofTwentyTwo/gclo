@@ -97,8 +97,8 @@ public sealed partial class MainViewModel : ObservableObject
                 Organizations.Add(org);
             }
             StatusText = orgs.Count == 0
-                ? "Token accepted, but it cannot list organizations (fine-grained PAT or missing read:org?). Type the organization name manually."
-                : $"{orgs.Count} organization(s) found.";
+                ? "Token accepted, but it cannot list organizations (fine-grained PAT or missing read:org?). Type an organization or account name manually."
+                : $"Found {orgs.Count} organizations and accounts.";
         }
         catch (OperationCanceledException)
         {
