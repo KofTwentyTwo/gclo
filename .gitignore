@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# WinUI packaged apps need their publish profiles in source control
+!**/Properties/PublishProfiles/*.pubxml
