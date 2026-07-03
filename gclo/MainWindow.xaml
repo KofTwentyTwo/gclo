@@ -22,22 +22,33 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Organization + token -->
+        <!-- Token first: it determines which organizations the dropdown can offer -->
         <Grid Grid.Row="0" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBox
-                Grid.Column="0"
-                Header="GitHub organization"
-                PlaceholderText="my-org"
-                Text="{x:Bind ViewModel.Organization, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
             <PasswordBox
-                Grid.Column="1"
+                Grid.Column="0"
                 Header="Personal access token"
                 PlaceholderText="ghp_..."
                 PasswordChanged="TokenBox_PasswordChanged" />
+            <ComboBox
+                Grid.Column="1"
+                HorizontalAlignment="Stretch"
+                Header="GitHub organization"
+                IsEditable="True"
+                ItemsSource="{x:Bind ViewModel.Organizations}"
+                PlaceholderText="paste a token first, or type an org"
+                Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
+            <ProgressRing
+                Grid.Column="2"
+                Width="20"
+                Height="20"
+                Margin="0,0,0,8"
+                VerticalAlignment="Bottom"
+                IsActive="{x:Bind ViewModel.IsLoadingOrgs, Mode=OneWay}" />
         </Grid>
 
         <!-- Target folder + concurrency + actions -->

@@ -29,7 +29,7 @@ gclo is a Windows 11 desktop tool that clones and updates every repository in a 
 1. Open `gclo.slnx`.
 2. Set `gclo` as the startup project and select the `x64` platform.
 3. Press F5 (packaged deployment).
-4. Enter the organization name, your PAT, and a target folder, then start the sync.
+4. Paste your PAT first — the organization dropdown fills with the orgs the token can see (or type an org name manually if the token cannot list them) — then pick a target folder and start the sync.
 
 **Command line**
 

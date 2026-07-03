@@ -14,13 +14,16 @@ public sealed partial class MainViewModel : ObservableObject
 {
     private readonly IRepositoryLister _lister;
     private readonly IGitClient _git;
+    private readonly IOrganizationLister _orgLister;
     private readonly Dictionary<string, RepoItemViewModel> _itemsByName = new(StringComparer.OrdinalIgnoreCase);
+    private CancellationTokenSource? _orgLoadCts;
 
     /// <summary>Production dependencies by default; pass fakes for testing.</summary>
-    public MainViewModel(IRepositoryLister? lister = null, IGitClient? git = null)
+    public MainViewModel(IRepositoryLister? lister = null, IGitClient? git = null, IOrganizationLister? orgLister = null)
     {
         _lister = lister ?? new GitHubRepositoryLister();
         _git = git ?? new LibGit2GitClient();
+        _orgLister = orgLister ?? new GitHubOrganizationLister();
         Organization = "";
         Token = "";
         TargetFolder = "";
@@ -29,6 +32,9 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     public ObservableCollection<RepoItemViewModel> Repos { get; } = new();
+
+    /// <summary>Organizations discovered from the current token; feeds the org dropdown.</summary>
+    public ObservableCollection<string> Organizations { get; } = new();
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
@@ -57,6 +63,62 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     public partial int TotalCount { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsLoadingOrgs { get; set; }
+
+    // Runs on the UI thread (Token is only set from UI handlers), so the async
+    // continuations below stay on the UI thread and may touch Organizations directly.
+    partial void OnTokenChanged(string value) => _ = RefreshOrganizationsAsync();
+
+    /// <summary>Debounced: each token edit cancels the previous lookup.</summary>
+    private async Task RefreshOrganizationsAsync()
+    {
+        _orgLoadCts?.Cancel();
+        var cts = _orgLoadCts = new CancellationTokenSource();
+
+        string token = Token.Trim();
+        if (token.Length < 10)
+        {
+            Organizations.Clear();
+            return; // not plausibly a complete PAT yet
+        }
+
+        try
+        {
+            await Task.Delay(600, cts.Token); // debounce keystrokes / rapid pastes
+            IsLoadingOrgs = true;
+            var orgs = await _orgLister.ListOrganizationsAsync(token, cts.Token);
+            cts.Token.ThrowIfCancellationRequested();
+
+            Organizations.Clear();
+            foreach (string org in orgs)
+            {
+                Organizations.Add(org);
+            }
+            StatusText = orgs.Count == 0
+                ? "Token accepted, but it cannot list organizations (fine-grained PAT or missing read:org?). Type the organization name manually."
+                : $"{orgs.Count} organization(s) found.";
+        }
+        catch (OperationCanceledException)
+        {
+            // superseded by a newer token edit
+        }
+        catch (Exception ex)
+        {
+            if (_orgLoadCts == cts)
+            {
+                StatusText = ex.Message;
+            }
+        }
+        finally
+        {
+            if (_orgLoadCts == cts)
+            {
+                IsLoadingOrgs = false;
+            }
+        }
+    }
 
     /// <summary>
     /// Double-typed view of <see cref="MaxConcurrency"/> for NumberBox.Value, which binds a double.
