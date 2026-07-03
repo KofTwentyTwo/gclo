@@ -33,6 +33,11 @@ namespace gclo
 
             Title = "gclo — Git Clone Large Organizations";
 
+            // The view model stays UI-free: when ResolvePathsCommand needs the user's
+            // path-recovery choices, it calls back through here and the window answers
+            // with PathRecoveryDialog.
+            ViewModel.RecoveryInteraction = ShowPathRecoveryDialogAsync;
+
             _settings = AppSettings.Load();
             ApplySettings();
 
@@ -176,6 +181,23 @@ namespace gclo
             {
                 await ShowUpdateMessageAsync("Update failed", error);
             }
+        }
+
+        /// <summary>
+        /// Shows <see cref="PathRecoveryDialog"/> for a repository whose checkout was
+        /// blocked by Windows-invalid paths. Returns the user's recovery choice, or null
+        /// when the dialog was dismissed (or the row carries no path details).
+        /// </summary>
+        private async Task<PathRecovery?> ShowPathRecoveryDialogAsync(RepoItemViewModel item)
+        {
+            if (item.InvalidPaths is not { Count: > 0 } paths)
+            {
+                return null;
+            }
+
+            var dialog = new PathRecoveryDialog(item.Name, paths) { XamlRoot = Content.XamlRoot };
+            await dialog.ShowAsync();
+            return dialog.Result;
         }
 
         private async Task ShowUpdateMessageAsync(string title, string message)

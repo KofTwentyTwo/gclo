@@ -29,6 +29,7 @@ public sealed class FakeRepositoryLister : IRepositoryLister
 
 public sealed record CloneCall(string Url, string LocalPath, string Token);
 public sealed record PullCall(string LocalPath, string Token);
+public sealed record ApplyRecoveryCall(string LocalPath, string Token, PathRecovery Recovery);
 
 /// <summary>
 /// An <see cref="IGitClient"/> whose behavior is configured with delegates.
@@ -38,6 +39,7 @@ public sealed class FakeGitClient : IGitClient
 {
     private readonly ConcurrentQueue<CloneCall> _cloneCalls = new();
     private readonly ConcurrentQueue<PullCall> _pullCalls = new();
+    private readonly ConcurrentQueue<ApplyRecoveryCall> _applyRecoveryCalls = new();
     private readonly ConcurrentQueue<string> _validityChecks = new();
 
     /// <summary>Decides whether a local path counts as an existing valid repository. Default: never.</summary>
@@ -51,8 +53,13 @@ public sealed class FakeGitClient : IGitClient
     public Func<string, string, CancellationToken, Task> FetchAndPullHandler { get; set; }
         = (_, _, _) => Task.CompletedTask;
 
+    /// <summary>Body of <see cref="ApplyRecoveryAsync"/> (path, token, recovery, ct). Default: completes immediately.</summary>
+    public Func<string, string, PathRecovery, CancellationToken, Task> ApplyRecoveryHandler { get; set; }
+        = (_, _, _, _) => Task.CompletedTask;
+
     public IReadOnlyList<CloneCall> CloneCalls => _cloneCalls.ToArray();
     public IReadOnlyList<PullCall> PullCalls => _pullCalls.ToArray();
+    public IReadOnlyList<ApplyRecoveryCall> ApplyRecoveryCalls => _applyRecoveryCalls.ToArray();
     public IReadOnlyList<string> ValidityChecks => _validityChecks.ToArray();
 
     /// <summary>Repo folder names (last path segment) passed to <see cref="CloneAsync"/>.</summary>
@@ -79,6 +86,12 @@ public sealed class FakeGitClient : IGitClient
     {
         _pullCalls.Enqueue(new PullCall(path, token));
         await FetchAndPullHandler(path, token, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task ApplyRecoveryAsync(string path, string token, PathRecovery recovery, CancellationToken cancellationToken)
+    {
+        _applyRecoveryCalls.Enqueue(new ApplyRecoveryCall(path, token, recovery));
+        await ApplyRecoveryHandler(path, token, recovery, cancellationToken).ConfigureAwait(false);
     }
 }
 

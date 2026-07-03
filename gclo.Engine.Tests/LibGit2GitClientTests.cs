@@ -58,11 +58,13 @@ public sealed class LibGit2GitClientTests : IDisposable
     }
 
     [Fact]
-    public async Task Clone_WindowsInvalidPath_ThrowsTypedExceptionAndCleansUp()
+    public async Task Clone_WindowsInvalidPath_ThrowsTypedExceptionAndKeepsRepoWithPendingMarker()
     {
         // A tree entry whose name is invalid on Windows must surface as the structured
-        // InvalidRepositoryPathsException (not a raw libgit2 error), after the fetch has
-        // already written read-only pack files — exercising the attribute-clearing delete.
+        // InvalidRepositoryPathsException (not a raw libgit2 error). Unlike other clone
+        // failures, the fetched repository is KEPT — everything is already downloaded,
+        // so path recovery can run without hitting the network — and marked as
+        // checkout-pending so a later pull cannot mistake it for an up-to-date clone.
         string source = CreateRepoWithWindowsInvalidFileName();
         string target = NewPath("partial-clone");
 
@@ -73,7 +75,9 @@ public sealed class LibGit2GitClientTests : IDisposable
         Assert.Equal("bad:name.txt", info.RepoPath);
         Assert.Contains("invalid on Windows", info.Reason);
         Assert.Equal("bad_name.txt", info.SuggestedName);
-        Assert.False(Directory.Exists(target));
+        Assert.True(_client.IsValidRepository(target));
+        using var repo = new Repository(target);
+        Assert.True(repo.Config.Get<bool>("gclo.checkoutpending")?.Value);
     }
 
     [Fact]

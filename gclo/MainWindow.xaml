@@ -238,9 +238,13 @@
                 CommandParameter="Archived" />
         </Grid>
 
-        <!-- Per-repo table body -->
+        <!-- Per-repo table body. The ListView carries the view model as DataContext so
+             the row template's Resolve link can reach MainViewModel.ResolvePathsCommand
+             via ElementName (x:Bind inside the template is scoped to the row item). -->
         <ListView
+            x:Name="RepoListView"
             Grid.Row="6"
+            DataContext="{x:Bind ViewModel, Mode=OneTime}"
             ItemsSource="{x:Bind ViewModel.Repos, Mode=OneTime}"
             SelectionMode="None">
             <ListView.ItemContainerStyle>
@@ -254,6 +258,7 @@
                 <DataTemplate x:DataType="vm:RepoItemViewModel">
                     <Grid Padding="0,6,0,6">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
@@ -316,6 +321,16 @@
                             Foreground="Crimson"
                             Text="{x:Bind Error, Mode=OneWay}"
                             Visibility="{x:Bind local:StatusFormat.VisibleIf(HasError), Mode=OneWay}" />
+                        <HyperlinkButton
+                            Grid.Row="2"
+                            Grid.Column="0"
+                            Grid.ColumnSpan="5"
+                            Padding="0"
+                            HorizontalAlignment="Left"
+                            Content="Resolve…"
+                            Command="{Binding DataContext.ResolvePathsCommand, ElementName=RepoListView}"
+                            CommandParameter="{x:Bind}"
+                            Visibility="{x:Bind local:StatusFormat.VisibleIf(HasPathIssue), Mode=OneWay}" />
                     </Grid>
                 </DataTemplate>
             </ListView.ItemTemplate>

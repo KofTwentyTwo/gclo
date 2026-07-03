@@ -260,6 +260,199 @@ public sealed class MainViewModelTests
         Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
+    // ---------------------------------------------------------------- path recovery
+
+    private static readonly IReadOnlyList<InvalidPathInfo> SampleInvalidPaths =
+    [
+        new InvalidPathInfo("aux", "'aux' is a reserved Windows device name", "aux_"),
+        new InvalidPathInfo("docs/bad:name.txt", "contains a character that is invalid on Windows", "bad_name.txt"),
+    ];
+
+    /// <summary>Clones of 'alpha' fail with <see cref="SampleInvalidPaths"/>; everything else succeeds.</summary>
+    private void MakeAlphaFailWithInvalidPaths()
+        => _git.CloneHandler = (url, path, token, onProgress, ct) =>
+            Path.GetFileName(path) == "alpha"
+                ? Task.FromException(new InvalidRepositoryPathsException(SampleInvalidPaths))
+                : Task.CompletedTask;
+
+    [Fact]
+    public async Task Sync_InvalidPathFailure_FlowsPayloadToRow_AndEnablesResolve()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        var byName = vm.Repos.ToDictionary(r => r.Name);
+        Assert.Equal(SyncStatus.Failed, byName["alpha"].Status);
+        Assert.True(byName["alpha"].HasPathIssue);
+        Assert.Equal(SampleInvalidPaths, byName["alpha"].InvalidPaths);
+        Assert.Equal(SyncStatus.Done, byName["bravo"].Status);
+        Assert.False(byName["bravo"].HasPathIssue);
+        Assert.Null(byName["bravo"].InvalidPaths);
+
+        Assert.True(vm.ResolvePathsCommand.CanExecute(byName["alpha"]));
+        Assert.False(vm.ResolvePathsCommand.CanExecute(byName["bravo"])); // no path issue
+        Assert.False(vm.ResolvePathsCommand.CanExecute(null));
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task ResolvePaths_AppliesRecovery_AndMarksRowDone()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        RepoItemViewModel row = vm.Repos[0];
+
+        var recovery = new PathRecovery(
+            new Dictionary<string, string> { ["aux"] = "aux_" },
+            new HashSet<string> { "docs/bad:name.txt" });
+        var asked = new List<RepoItemViewModel>();
+        vm.RecoveryInteraction = item =>
+        {
+            asked.Add(item);
+            return Task.FromResult<PathRecovery?>(recovery);
+        };
+
+        await vm.ResolvePathsCommand.ExecuteAsync(row);
+
+        Assert.Equal([row], asked);
+        ApplyRecoveryCall call = Assert.Single(_git.ApplyRecoveryCalls);
+        Assert.Equal(Path.Combine(vm.EffectiveTargetRoot, "alpha"), call.LocalPath);
+        Assert.Equal("token-1234567890", call.Token);
+        Assert.Same(recovery, call.Recovery);
+
+        Assert.Equal(SyncStatus.Done, row.Status);
+        Assert.Null(row.Error);
+        Assert.Null(row.InvalidPaths);
+        Assert.False(row.HasPathIssue);
+        Assert.False(vm.ResolvePathsCommand.CanExecute(row)); // nothing left to resolve
+        Assert.False(vm.RetryFailedCommand.CanExecute(null)); // nothing failed anymore
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task ResolvePaths_InteractionReturnsNull_LeavesRowFailed()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        RepoItemViewModel row = vm.Repos[0];
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(null);
+
+        await vm.ResolvePathsCommand.ExecuteAsync(row);
+
+        Assert.Empty(_git.ApplyRecoveryCalls); // canceled: nothing applied
+        Assert.Equal(SyncStatus.Failed, row.Status);
+        Assert.True(row.HasPathIssue); // payload kept for another attempt
+        Assert.True(vm.ResolvePathsCommand.CanExecute(row));
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task ResolvePaths_ApplyStillInvalid_KeepsRowFailed_WithFreshPayload()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        var stillInvalid = new List<InvalidPathInfo>
+        {
+            new("aux_", "differs only by case from 'AUX_'", null),
+        };
+        _git.ApplyRecoveryHandler = (_, _, _, _) =>
+            Task.FromException(new InvalidRepositoryPathsException(stillInvalid));
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        RepoItemViewModel row = vm.Repos[0];
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(
+            new PathRecovery(new Dictionary<string, string>(), new HashSet<string>()));
+
+        await vm.ResolvePathsCommand.ExecuteAsync(row);
+
+        Assert.Single(_git.ApplyRecoveryCalls);
+        Assert.Equal(SyncStatus.Failed, row.Status);
+        Assert.Contains("aux_", row.Error);
+        Assert.Equal(stillInvalid, row.InvalidPaths); // the fresh list, ready for another round
+        Assert.True(vm.ResolvePathsCommand.CanExecute(row));
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task ResolvePaths_ApplyFailsForAnotherReason_ClearsPayload()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        _git.ApplyRecoveryHandler = (_, _, _, _) =>
+            Task.FromException(new IOException("disk full"));
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        RepoItemViewModel row = vm.Repos[0];
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(
+            new PathRecovery(new Dictionary<string, string>(), new HashSet<string>()));
+
+        await vm.ResolvePathsCommand.ExecuteAsync(row);
+
+        Assert.Equal(SyncStatus.Failed, row.Status);
+        Assert.Equal("disk full", row.Error);
+        Assert.False(row.HasPathIssue); // renaming again would not help
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task ResolvePaths_DisabledWhileARunIsInFlight()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        var byName = vm.Repos.ToDictionary(r => r.Name);
+        RepoItemViewModel alpha = byName["alpha"];
+        Assert.True(vm.ResolvePathsCommand.CanExecute(alpha));
+
+        // Second run touches only bravo, so alpha keeps its payload throughout.
+        alpha.IsSelected = false;
+        var gate = new TaskCompletionSource();
+        int started = 0;
+        _git.CloneHandler = async (url, path, token, onProgress, ct) =>
+        {
+            Interlocked.Increment(ref started);
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        };
+
+        Task run = vm.SyncCommand.ExecuteAsync(null);
+        await WaitUntilAsync(() => started > 0, "second run to start");
+        Assert.True(alpha.HasPathIssue);
+        Assert.False(vm.ResolvePathsCommand.CanExecute(alpha)); // locked while running
+
+        gate.SetResult();
+        await run;
+        Assert.True(vm.ResolvePathsCommand.CanExecute(alpha)); // unlocked again
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task Sync_ReRun_ClearsAStalePathPayload()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        RepoItemViewModel row = vm.Repos[0];
+        Assert.True(row.HasPathIssue);
+
+        _git.CloneHandler = (_, _, _, _, _) => Task.CompletedTask; // upstream fixed the paths
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.Equal(SyncStatus.Done, row.Status);
+        Assert.Null(row.InvalidPaths);
+        Assert.False(row.HasPathIssue);
+        Assert.False(vm.ResolvePathsCommand.CanExecute(row));
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
     // ---------------------------------------------------------------- selection
 
     [Fact]

@@ -84,7 +84,7 @@ public sealed class WindowsPathValidationTests : IDisposable
     // ---------------------------------------------------------------- clone behavior
 
     [Fact]
-    public async Task Clone_MixedValidAndInvalidPaths_ReportsOnlyInvalidOnes_AndCleansUp()
+    public async Task Clone_MixedValidAndInvalidPaths_ReportsOnlyInvalidOnes_AndKeepsFetchedRepo()
     {
         string source = CreateForgedRepo(("good.txt", true), ("bad:name.txt", true), ("NUL.log", true));
         string target = NewPath("mixed-clone");
@@ -94,7 +94,12 @@ public sealed class WindowsPathValidationTests : IDisposable
 
         Assert.Equal(2, ex.Paths.Count);
         Assert.DoesNotContain(ex.Paths, p => p.RepoPath == "good.txt");
-        Assert.False(Directory.Exists(target));
+        // The fetched repo is kept for path recovery (marked checkout-pending),
+        // but nothing may have been checked out.
+        Assert.True(_client.IsValidRepository(target));
+        Assert.False(File.Exists(Path.Combine(target, "good.txt")));
+        using var repo = new Repository(target);
+        Assert.True(repo.Config.Get<bool>("gclo.checkoutpending")?.Value);
     }
 
     [Fact]
