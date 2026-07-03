@@ -1,5 +1,6 @@
 using gclo.Engine;
 using LibGit2Sharp;
+using static gclo.Engine.Tests.GitTestHelpers;
 
 namespace gclo.Engine.Tests;
 
@@ -86,7 +87,7 @@ public sealed class WindowsPathValidationTests : IDisposable
     [Fact]
     public async Task Clone_MixedValidAndInvalidPaths_ReportsOnlyInvalidOnes_AndKeepsFetchedRepo()
     {
-        string source = CreateForgedRepo(("good.txt", true), ("bad:name.txt", true), ("NUL.log", true));
+        string source = CreateForgedRepo(_root, "good.txt", "bad:name.txt", "NUL.log");
         string target = NewPath("mixed-clone");
 
         var ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
@@ -122,11 +123,11 @@ public sealed class WindowsPathValidationTests : IDisposable
     [Fact]
     public async Task FetchAndPull_IncomingCommitWithInvalidPath_ThrowsTypedException()
     {
-        string source = CreateForgedRepo(("original.txt", true));
+        string source = CreateForgedRepo(_root, "original.txt");
         string target = NewPath("pull-target");
         await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
 
-        AppendForgedCommit(source, "bad:incoming.txt");
+        AppendForgedCommit(source, ("bad:incoming.txt", "x"));
 
         var ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
             () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
@@ -156,42 +157,6 @@ public sealed class WindowsPathValidationTests : IDisposable
         return WindowsPathValidator.Validate(repo.ObjectDatabase.CreateTree(definition));
     }
 
-    /// <summary>Builds a repo whose single commit holds the given forged entry names.</summary>
-    private string CreateForgedRepo(params (string Name, bool _)[] entries)
-    {
-        string path = NewPath("forged-" + Guid.NewGuid().ToString("N")[..8]);
-        Repository.Init(path);
-        using var repo = new Repository(path);
-
-        var blob = repo.ObjectDatabase.CreateBlob(new MemoryStream("content"u8.ToArray()));
-        var definition = new TreeDefinition();
-        foreach (var (name, _) in entries)
-        {
-            definition.Add(name, blob, Mode.NonExecutableFile);
-        }
-        var tree = repo.ObjectDatabase.CreateTree(definition);
-        var signature = new Signature("tester", "tester@example.test", DateTimeOffset.Now);
-        var commit = repo.ObjectDatabase.CreateCommit(
-            signature, signature, "forged commit", tree, [], prettifyMessage: false);
-        repo.Refs.Add(repo.Refs.Head.TargetIdentifier, commit.Id);
-        return path;
-    }
-
-    /// <summary>Adds a commit on top of HEAD introducing a forged entry name.</summary>
-    private static void AppendForgedCommit(string workdir, string entryName)
-    {
-        using var repo = new Repository(workdir);
-        var head = repo.Head.Tip;
-
-        var blob = repo.ObjectDatabase.CreateBlob(new MemoryStream("x"u8.ToArray()));
-        var definition = TreeDefinition.From(head.Tree).Add(entryName, blob, Mode.NonExecutableFile);
-        var tree = repo.ObjectDatabase.CreateTree(definition);
-        var signature = new Signature("tester", "tester@example.test", DateTimeOffset.Now);
-        var commit = repo.ObjectDatabase.CreateCommit(
-            signature, signature, "forged follow-up", tree, [head], prettifyMessage: false);
-        repo.Refs.UpdateTarget(repo.Refs.Head.ResolveToDirectReference(), commit.Id);
-    }
-
     /// <summary>Creates a repo containing one file at a deep path exceeding legacy MAX_PATH.</summary>
     private string CreateSourceRepoWithLongPath(string repoPath)
     {
@@ -205,28 +170,8 @@ public sealed class WindowsPathValidationTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         File.WriteAllText(fullPath, "deep content");
         Commands.Stage(repo, repoPath);
-        var signature = new Signature("tester", "tester@example.test", DateTimeOffset.Now);
+        var signature = MakeSignature();
         repo.Commit("long path commit", signature, signature);
         return path;
-    }
-
-    private static void TryDeleteDirectory(string path)
-    {
-        try
-        {
-            if (!Directory.Exists(path))
-            {
-                return;
-            }
-            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-            {
-                File.SetAttributes(file, FileAttributes.Normal);
-            }
-            Directory.Delete(path, recursive: true);
-        }
-        catch
-        {
-            // Best effort; stray temp dirs are harmless.
-        }
     }
 }

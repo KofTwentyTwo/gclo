@@ -1,11 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using gclo.Engine;
@@ -56,7 +50,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Organization = "";
         Token = "";
         TargetFolder = "";
-        MaxConcurrency = 8;
+        MaxConcurrency = AppSettings.DefaultConcurrency;
         StatusText = "";
         AllSelected = true;
     }
@@ -177,29 +171,37 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private async Task RefreshOrganizationsAsync()
     {
         _orgLoadCts?.Cancel();
+        _orgLoadCts?.Dispose();
         var cts = _orgLoadCts = new CancellationTokenSource();
+        // Captured before any successor can dispose cts; used everywhere below.
+        CancellationToken lookupToken = cts.Token;
 
         string token = Token.Trim();
         if (token.Length < 10)
         {
             Organizations.Clear();
+            // The newest invocation owns the flag: a canceled predecessor deliberately
+            // leaves it alone, so an early return must clear any spinner it left behind.
+            IsLoadingOrgs = false;
             return; // not plausibly a complete PAT yet
         }
 
         try
         {
-            await Task.Delay(_orgLookupDebounce, cts.Token); // debounce keystrokes / rapid pastes
+            await Task.Delay(_orgLookupDebounce, lookupToken); // debounce keystrokes / rapid pastes
             IsLoadingOrgs = true;
-            var orgs = await _orgLister.ListOrganizationsAsync(token, cts.Token);
-            cts.Token.ThrowIfCancellationRequested();
+            var orgs = await _orgLister.ListOrganizationsAsync(token, lookupToken);
+            lookupToken.ThrowIfCancellationRequested();
 
             Organizations.Clear();
             foreach (string org in orgs)
             {
                 Organizations.Add(org);
             }
-            StatusText = orgs.Count == 0
-                ? "Token accepted, but it cannot list organizations (fine-grained PAT or missing read:org?). Type an organization or account name manually."
+            // The production lister always lists the token's own account first, so a
+            // single entry means no organizations were visible.
+            StatusText = orgs.Count <= 1
+                ? "Only your personal account is visible — add read:org (classic) for organizations, or type an org name manually."
                 : $"Found {orgs.Count} organizations and accounts.";
         }
         catch (OperationCanceledException)
@@ -230,7 +232,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         get => MaxConcurrency;
         set
         {
-            int clamped = double.IsNaN(value) ? 8 : (int)Math.Clamp(Math.Round(value), 1, 64);
+            int clamped = double.IsNaN(value)
+                ? AppSettings.DefaultConcurrency
+                : (int)Math.Clamp(Math.Round(value), AppSettings.MinConcurrency, AppSettings.MaxConcurrency);
             if (MaxConcurrency != clamped)
             {
                 MaxConcurrency = clamped; // OnMaxConcurrencyChanged notifies MaxConcurrencyValue too
@@ -410,11 +414,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
             SyncSummary summary = await engine.SyncAsync(request, descriptors, progress, cancellationToken);
 
-            StatusText = summary.WasCanceled
-                ? $"Canceled: {summary.Cloned} cloned, {summary.Updated} updated, {summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}."
-                : $"Finished: {summary.Cloned} cloned, {summary.Updated} updated, {summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.";
-            _log.Info($"Sync finished: {summary.Cloned} cloned, {summary.Updated} updated, "
-                + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.");
+            string summaryText = (summary.WasCanceled ? "Canceled" : "Finished")
+                + $": {summary.Cloned} cloned, {summary.Updated} updated, "
+                + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.";
+            StatusText = summaryText;
+            _log.Info(summaryText);
         }
         catch (OperationCanceledException)
         {
@@ -485,7 +489,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             _log.Info($"{item.Name}: applying path recovery "
                 + $"({recovery.SegmentRenames.Count} renamed, {recovery.SkippedPaths.Count} skipped).");
-            await _git.ApplyRecoveryAsync(path, Token.Trim(), recovery, CancellationToken.None);
+            await _git.ApplyRecoveryAsync(path, recovery, CancellationToken.None);
 
             item.Status = SyncStatus.Done;
             item.Error = null;

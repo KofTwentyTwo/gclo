@@ -79,9 +79,9 @@ internal sealed class TokenOptions
         string? line;
         try
         {
-            // First line only: token files often end with a newline, and some
-            // editors append trailing blank lines.
-            line = File.ReadLines(path).FirstOrDefault();
+            // First non-blank line: token files often end with a newline, and some
+            // editors append trailing (or prepend leading) blank lines.
+            line = File.ReadLines(path).FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {

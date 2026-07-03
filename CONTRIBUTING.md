@@ -61,7 +61,7 @@ Running the build, test, and format commands above locally before pushing will c
 
 ## Architecture rule: no business logic in the UI project
 
-The `gclo` WinUI project contains views, view models, and app-level services (settings, self-update) — **nothing else**. All sync/business logic lives in `gclo.Engine`, a plain class library behind the `IRepositoryLister` / `IGitClient` / `IOrganizationLister` interfaces, so it stays testable without the app and is shared by the CLI (`gclo.Cli`). If you find yourself writing GitHub or git logic in the `gclo` project, it belongs in the engine.
+The `gclo` WinUI project contains XAML views, dialogs, and self-update plumbing — **nothing else**. View models and settings persistence live in `gclo.ViewModels`, a UI-framework-free library the test suite exercises headlessly. All sync/GitHub/git logic lives in `gclo.Engine`, a plain class library behind the `IRepositoryLister` / `IGitClient` / `IOrganizationLister` interfaces, shared by the scriptable CLI head (`gclo.Cli`). If you find yourself writing logic in the `gclo` project, it belongs in a library — GitHub or git logic in the engine, presentation state in the view models.
 
 ## Code style
 

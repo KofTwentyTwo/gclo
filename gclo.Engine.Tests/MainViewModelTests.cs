@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using gclo.Engine;
 using gclo.ViewModels;
+using static gclo.Engine.Tests.GitTestHelpers;
 
 namespace gclo.Engine.Tests;
 
@@ -27,9 +27,6 @@ public sealed class MainViewModelTests
                debounce ?? TimeSpan.FromMilliseconds(1),
                new NullActivityLog());
 
-    private static RepoDescriptor Repo(string name, string? branch = "main", bool archived = false)
-        => new(name, $"https://example.test/acme/{name}.git", branch, archived);
-
     /// <summary>
     /// A view model with valid inputs and the given repositories already loaded into the
     /// table. Waits out the token-triggered org lookup first so its status message cannot
@@ -47,17 +44,6 @@ public sealed class MainViewModelTests
 
         await vm.LoadReposCommand.ExecuteAsync(null);
         return vm;
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition, string description)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        while (!condition())
-        {
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15),
-                $"Timed out after {stopwatch.Elapsed} waiting for: {description}");
-            await Task.Delay(10);
-        }
     }
 
     // ---------------------------------------------------------------- command gating
@@ -322,7 +308,6 @@ public sealed class MainViewModelTests
         Assert.Equal([row], asked);
         ApplyRecoveryCall call = Assert.Single(_git.ApplyRecoveryCalls);
         Assert.Equal(Path.Combine(vm.EffectiveTargetRoot, "alpha"), call.LocalPath);
-        Assert.Equal("token-1234567890", call.Token);
         Assert.Same(recovery, call.Recovery);
 
         Assert.Equal(SyncStatus.Done, row.Status);
@@ -362,7 +347,7 @@ public sealed class MainViewModelTests
         {
             new("aux_", "differs only by case from 'AUX_'", null),
         };
-        _git.ApplyRecoveryHandler = (_, _, _, _) =>
+        _git.ApplyRecoveryHandler = (_, _, _) =>
             Task.FromException(new InvalidRepositoryPathsException(stillInvalid));
         var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
         await vm.SyncCommand.ExecuteAsync(null);
@@ -385,7 +370,7 @@ public sealed class MainViewModelTests
     public async Task ResolvePaths_ApplyFailsForAnotherReason_ClearsPayload()
     {
         MakeAlphaFailWithInvalidPaths();
-        _git.ApplyRecoveryHandler = (_, _, _, _) =>
+        _git.ApplyRecoveryHandler = (_, _, _) =>
             Task.FromException(new IOException("disk full"));
         var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
         await vm.SyncCommand.ExecuteAsync(null);
@@ -568,15 +553,42 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
-    public async Task TokenChange_EmptyOrgList_ExplainsAndAllowsManualEntry()
+    public async Task TokenChange_OnlyPersonalLoginVisible_ExplainsAndAllowsManualEntry()
     {
+        // The production lister always includes the token's own account, so a
+        // single-entry answer means no organizations were visible.
+        _orgs.Handler = (_, _) => Task.FromResult<IReadOnlyList<string>>(["KofTwentyTwo"]);
         var vm = CreateViewModel();
 
         vm.Token = "token-1234567890";
 
         await WaitUntilAsync(() => vm.StatusText.Length > 0, "status text");
-        Assert.Contains("read:org", vm.StatusText);
+        Assert.Equal(
+            "Only your personal account is visible — add read:org (classic) for organizations, "
+            + "or type an org name manually.",
+            vm.StatusText);
+        Assert.Equal(["KofTwentyTwo"], vm.Organizations);
+    }
+
+    [Fact]
+    public async Task TokenChange_ToShortTokenDuringLookup_ClearsTheLoadingFlag()
+    {
+        // The first lookup blocks inside the lister; editing the token to something
+        // implausibly short cancels it and returns early — the early return owns the
+        // flag now, so it must not leave the spinner stuck on.
+        var gate = new TaskCompletionSource<IReadOnlyList<string>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _orgs.Handler = (_, _) => gate.Task;
+        var vm = CreateViewModel();
+
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.IsLoadingOrgs, "the first lookup to start");
+
+        vm.Token = "short";
+
+        Assert.False(vm.IsLoadingOrgs);
         Assert.Empty(vm.Organizations);
+        gate.SetResult(["acme"]); // release the abandoned lookup; it was canceled and is ignored
     }
 
     [Fact]

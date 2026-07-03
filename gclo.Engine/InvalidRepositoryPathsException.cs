@@ -7,8 +7,10 @@ namespace gclo.Engine;
 /// </summary>
 public sealed class InvalidRepositoryPathsException : Exception
 {
+    /// <summary>The offending paths, one entry per invalid path.</summary>
     public IReadOnlyList<InvalidPathInfo> Paths { get; }
 
+    /// <summary>Creates the exception from the validator's findings.</summary>
     public InvalidRepositoryPathsException(IReadOnlyList<InvalidPathInfo> paths)
         : base(BuildMessage(paths))
     {

@@ -17,7 +17,7 @@ internal static class OrgsCommand
         Options:
           --token-env <VAR>    Read the token from environment variable VAR
                                (default: GITHUB_TOKEN when no token option is given).
-          --token-file <path>  Read the token from the first line of a file.
+          --token-file <path>  Read the token from the first non-blank line of a file.
           --token-stdin        Read the token as one line from standard input.
           --json               Print a single-line JSON array instead.
           --help               Show this help.

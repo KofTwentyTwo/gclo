@@ -74,13 +74,19 @@ names (`aux`, `con`, `nul`, `com1`, ...), characters like `:`, `?`, or `*`,
 names ending in a dot or a space, and pairs of paths that differ only by case.
 gclo validates every incoming tree *before* it touches the working tree, so such
 a repository fails cleanly — nothing is half-checked-out — and the offending
-paths are listed on stderr (at most 10, plus a count of the rest):
+paths are listed on stderr (at most 10, plus a count of the rest). Each line
+reports the path of the offending *segment* itself — a bad directory name like
+`aux` is reported once as `aux`, not repeated for every file inside it:
 
 ```
 legacy-repo  Failed  2 path(s) in this repository cannot be created on Windows: ...
-legacy-repo    aux/driver.c  ('aux' is a reserved Windows device name)
+legacy-repo    aux  ('aux' is a reserved Windows device name)
 legacy-repo    docs/spec?.md  (contains a character that is invalid on Windows)
 ```
+
+This validation — like the automatic `core.longpaths` handling — applies on
+Windows only: on Linux and macOS these paths are perfectly legal, so gclo
+performs a plain checkout and `--sanitize-paths` has nothing to do.
 
 With `--sanitize-paths`, gclo checks such a repository out anyway:
 
@@ -94,8 +100,10 @@ With `--sanitize-paths`, gclo checks such a repository out anyway:
   `Finished: 3 cloned (1 with sanitized paths), 41 updated, 0 failed, 0 canceled of 45.`
 - The mapping is remembered inside the repository
   (`.git\gclo-recovery.json`) and reapplied by later syncs. A later sync that
-  brings *new* invalid paths not covered by the stored mapping fails again with
-  those paths listed.
+  brings *new* invalid paths not covered by the stored mapping fails with those
+  paths listed — sync again with `--sanitize-paths` (or use the GUI's
+  **Resolve…** dialog) and the new renames and skips are merged into the stored
+  mapping.
 
 Only the working tree is renamed — the repository's history and index still hold
 the original paths, so `git status` reports the renamed and skipped files as
@@ -135,11 +143,20 @@ gclo needs a GitHub Personal Access Token for both the API and the git transport
 | --- | --- |
 | *(none)* | Reads the `GITHUB_TOKEN` environment variable. |
 | `--token-env VAR` | Reads environment variable `VAR`. |
-| `--token-file PATH` | Reads the first non-blank content line of `PATH` (trimmed). |
+| `--token-file PATH` | Reads the first non-blank line of `PATH`, trimmed. |
 | `--token-stdin` | Reads one line from standard input — made for piping from a secret store. |
 
 The options are mutually exclusive. A missing or empty token prints an error to
 stderr and exits with code 2.
+
+## Activity log
+
+Every invocation appends to a daily activity log file, `gclo-yyyy-MM-dd.log`,
+under `%LOCALAPPDATA%\gclo\logs` (on Linux/macOS: the platform's local
+application data folder). It records the run's parameters, per-repository
+failures, and path-sanitization notes — the same log the desktop app shows
+under **View > Activity log**. Tokens are never written to the log, or anywhere
+else on disk; see [SECURITY.md](../SECURITY.md).
 
 ## Exit codes
 

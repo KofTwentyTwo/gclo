@@ -36,27 +36,32 @@ The token is used in memory for the duration of a sync and is never stored on di
 
 ## Using the GUI
 
-<!-- SCREENSHOT: empty main window on first launch — token box, org dropdown, target folder,
-     Parallel spinner, Sync/Cancel buttons. Tracked in issue #10. -->
+<!-- SCREENSHOT: empty main window on first launch — token box, org dropdown, target folder
+     with subfolder checkbox and path preview, Parallel spinner, Load repos / Sync selected
+     buttons. Tracked in issue #10. -->
 
 1. **Paste your token first.** After a moment, the **Organization or account** dropdown fills with everything the token can sync — your personal account is listed first, then your organizations alphabetically. If the token cannot list organizations (a fine-grained PAT, or a classic PAT without `read:org`), the status line says so; the dropdown is editable, so just type the name.
 2. **Pick the organization or account** from the dropdown.
 
    <!-- SCREENSHOT: org dropdown open, personal account at the top followed by orgs. Tracked in issue #10. -->
 
-3. **Choose a target folder** — type a path or click **Browse...**. Each repository syncs into `<target>\<repo>`.
+3. **Choose a target folder** — type a path or click **Browse...**. Tick **Create a `<org>` subfolder** to keep several organizations under one root; the live preview line underneath always shows exactly where repositories will land (e.g. `C:\src\acme\my-repo`).
 4. **Set parallelism** if you like (1–64, default 8): how many git operations run at once.
-5. **Press Sync.** Every repository appears in the list and moves through its states live: Queued, Cloning (with transfer percentage), Pulling, Done, Failed, or Canceled. The overall progress bar, completed/total counter, and an end-of-run summary (`Finished: 3 cloned, 41 updated, 1 failed, 0 canceled of 45.`) track the whole run.
+5. **Press Load repos.** The table fills with every repository of the organization — name, status, default branch, and an Archived marker — all selected. Click a column header to sort by it; click it again to flip the direction.
+6. **Uncheck anything you don't want.** The header checkbox selects or clears every row at once.
+7. **Press Sync selected.** Each row moves through its states live — Queued, Cloning (with a per-row progress bar and transfer percentage), Pulling, Done, Failed, or Canceled — while the overall progress bar and completed/total counter track the run, which ends in a summary (`Finished: 3 cloned, 41 updated, 1 failed, 0 canceled of 45.`).
 
-   <!-- SCREENSHOT: sync in progress — several repos Cloning with percentages, progress bar advancing. Tracked in issue #10. -->
+   <!-- SCREENSHOT: sync in progress — several rows Cloning with per-row progress bars, overall bar advancing. Tracked in issue #10. -->
 
-6. **Cancel** at any time: in-flight repos stop cleanly, unstarted repos are marked Canceled, and the summary still appears.
+8. **Cancel** at any time: in-flight repos stop cleanly, unstarted repos are marked Canceled, and the summary still appears. After a run, **Retry failed** re-runs exactly the failed rows, and **Open folder** opens the target folder in Explorer.
 
-**When something goes wrong:** failures are isolated per repository — one broken repo never stops the rest. A failed repo shows its error message inline in the list, and failed clones are cleaned up so a partial checkout is never mistaken for a valid repo on the next run. gclo also checks every path in a repository against Windows file-system rules *before* checkout: paths that are legal in git but impossible on Windows (invalid characters, reserved device names like `CON`, trailing spaces or dots, names that differ only by case) mark the repo Failed with a per-path list of reasons instead of a cryptic checkout error — and nothing half-written is left on disk. Long paths beyond the classic 260-character limit are handled automatically (`core.longpaths`).
+**When something goes wrong:** failures are isolated per repository — one broken repo never stops the rest, and a failed row shows its error message inline. Most failed clones are cleaned up, so a partial checkout is never mistaken for a valid repo on the next run. Repositories with Windows-impossible paths are the deliberate exception: gclo checks every path in the incoming tree against Windows file-system rules *before* checkout — invalid characters, reserved device names like `CON`, trailing spaces or dots, names that differ only by case — and when it finds any, the repo is marked Failed with a per-path list of reasons, but the fully fetched `.git` is **kept** (nothing was ever checked out). Recovery happens in place, with no re-download: click the row's **Resolve…** link to rename each offending path (safe names are pre-suggested) or skip it, and gclo materializes the working tree right there; the CLI does the same automatically with [`--sanitize-paths`](docs/CLI.md#windows-invalid-paths-and---sanitize-paths). Long paths beyond the classic 260-character limit are handled automatically (`core.longpaths`).
 
 **Settings** (File > Settings…) let you set the default target folder, the default parallelism, and the theme (System, Light, or Dark).
 
 <!-- SCREENSHOT: Settings dialog — default target folder, default parallelism, theme. Tracked in issue #10. -->
+
+**Activity log:** View > Activity log… shows the tail of today's log and links to the logs folder. Logs live under `%LOCALAPPDATA%\gclo\logs`, one file per day; they record run parameters and per-repo failures and never contain your token (see [SECURITY.md](SECURITY.md)).
 
 **Updates:** Help > Check for updates… downloads and applies the latest release for your channel. Self-update is only available in installed builds (not the portable zip or a local debug build).
 

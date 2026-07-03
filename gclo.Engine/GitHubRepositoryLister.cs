@@ -5,6 +5,7 @@ namespace gclo.Engine;
 /// <summary>Lists org repositories through the GitHub REST API via Octokit.</summary>
 public sealed class GitHubRepositoryLister : IRepositoryLister
 {
+    /// <inheritdoc/>
     public async Task<IReadOnlyList<RepoDescriptor>> ListOrganizationRepositoriesAsync(
         string organization, string token, CancellationToken cancellationToken = default)
     {
