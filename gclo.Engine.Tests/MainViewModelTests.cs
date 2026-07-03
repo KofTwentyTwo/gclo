@@ -24,10 +24,30 @@ public sealed class MainViewModelTests
     private MainViewModel CreateViewModel(TimeSpan? debounce = null)
         => new(_lister, _git, _orgs,
                handler => new SyncProgress(handler),
-               debounce ?? TimeSpan.FromMilliseconds(1));
+               debounce ?? TimeSpan.FromMilliseconds(1),
+               new NullActivityLog());
 
-    private static RepoDescriptor Repo(string name)
-        => new(name, $"https://example.test/acme/{name}.git", "main", IsArchived: false);
+    private static RepoDescriptor Repo(string name, string? branch = "main", bool archived = false)
+        => new(name, $"https://example.test/acme/{name}.git", branch, archived);
+
+    /// <summary>
+    /// A view model with valid inputs and the given repositories already loaded into the
+    /// table. Waits out the token-triggered org lookup first so its status message cannot
+    /// land on top of a later assertion.
+    /// </summary>
+    private async Task<MainViewModel> CreateLoadedViewModelAsync(params RepoDescriptor[] repos)
+    {
+        _lister.Repositories = repos;
+        var vm = CreateViewModel();
+        vm.Organization = "acme";
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+        vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+        vm.MaxConcurrencyValue = 1; // serialize progress: the sync fake reports inline across threads
+
+        await vm.LoadReposCommand.ExecuteAsync(null);
+        return vm;
+    }
 
     private static async Task WaitUntilAsync(Func<bool> condition, string description)
     {
@@ -43,76 +63,136 @@ public sealed class MainViewModelTests
     // ---------------------------------------------------------------- command gating
 
     [Fact]
-    public void SyncCommand_RequiresAllInputs_AndNotRunning()
+    public void LoadReposCommand_RequiresOrganizationAndToken()
     {
         var vm = CreateViewModel();
-        Assert.False(vm.SyncCommand.CanExecute(null));
+        Assert.False(vm.LoadReposCommand.CanExecute(null));
 
         vm.Organization = "acme";
+        Assert.False(vm.LoadReposCommand.CanExecute(null));
+
         vm.Token = "token-1234567890";
+        Assert.True(vm.LoadReposCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void SyncCommand_DisabledBeforeAnyReposLoaded()
+    {
+        var vm = CreateViewModel();
+        vm.Organization = "acme";
+        vm.Token = "token-1234567890";
+        vm.TargetFolder = @"C:\src\acme";
+
+        Assert.False(vm.SyncCommand.CanExecute(null)); // nothing loaded, so nothing selected
+        Assert.False(vm.RetryFailedCommand.CanExecute(null)); // and nothing has failed
+    }
+
+    [Fact]
+    public async Task SyncCommand_RequiresTargetFolder_AndASelectedRepo()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        Assert.True(vm.SyncCommand.CanExecute(null));
+
+        vm.Repos[0].IsSelected = false;
         Assert.False(vm.SyncCommand.CanExecute(null));
 
-        vm.TargetFolder = @"C:\src\acme";
-        Assert.True(vm.SyncCommand.CanExecute(null));
+        vm.Repos[0].IsSelected = true;
+        vm.TargetFolder = "  ";
+        Assert.False(vm.SyncCommand.CanExecute(null));
+    }
+
+    // ---------------------------------------------------------------- load flow
+
+    [Fact]
+    public async Task LoadRepos_FillsTable_AllSelected_AllQueued()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
+
+        Assert.Equal(3, vm.Repos.Count);
+        Assert.Equal(3, vm.TotalCount);
+        Assert.Equal(0, vm.CompletedCount);
+        Assert.Equal("3 repositories loaded.", vm.StatusText);
+        Assert.False(vm.IsLoadingRepos);
+        Assert.True(vm.AllSelected);
+        Assert.All(vm.Repos, r => Assert.True(r.IsSelected));
+        Assert.All(vm.Repos, r => Assert.Equal(SyncStatus.Queued, r.Status));
+        Assert.Empty(_git.CloneCalls); // loading must not touch git
+        Assert.Empty(_git.PullCalls);
+    }
+
+    [Fact]
+    public async Task LoadRepos_ListerFailure_SurfacesMessage_AndResetsLoading()
+    {
+        _lister.ExceptionToThrow = new InvalidOperationException("org not found");
+        var vm = CreateViewModel();
+        vm.Organization = "acme";
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+
+        await vm.LoadReposCommand.ExecuteAsync(null);
+
+        Assert.Equal("org not found", vm.StatusText);
+        Assert.Empty(vm.Repos);
+        Assert.False(vm.IsLoadingRepos);
+        Assert.True(vm.LoadReposCommand.CanExecute(null));
+        Assert.False(vm.SyncCommand.CanExecute(null));
     }
 
     // ---------------------------------------------------------------- sync flow
 
     [Fact]
-    public async Task Sync_PopulatesItems_TracksCounts_AndSummarizesFailures()
+    public async Task LoadThenSync_SyncsOnlySelectedRepos()
     {
-        _lister.Repositories = [Repo("alpha"), Repo("bravo"), Repo("charlie")];
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
+        var byName = vm.Repos.ToDictionary(r => r.Name);
+        byName["bravo"].IsSelected = false;
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.Equal(["alpha", "charlie"], _git.ClonedRepoNames);
+        Assert.DoesNotContain(_git.ValidityChecks, p => Path.GetFileName(p) == "bravo");
+        Assert.Empty(_git.PullCalls);
+        Assert.Equal(SyncStatus.Done, byName["alpha"].Status);
+        Assert.Equal(SyncStatus.Queued, byName["bravo"].Status); // untouched by the run
+        Assert.Equal(SyncStatus.Done, byName["charlie"].Status);
+        Assert.Equal(2, vm.CompletedCount);
+        Assert.Equal(3, vm.TotalCount);
+        Assert.Contains("2 cloned", vm.StatusText);
+        Assert.True(vm.HasCompletedRun);
+        Assert.False(vm.IsRunning);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task Sync_TracksPulls_AndSummarizesFailures()
+    {
         _git.IsValidRepositoryHandler = path => Path.GetFileName(path) == "alpha"; // alpha pulls
         _git.CloneHandler = (url, path, token, onProgress, ct) =>
             Path.GetFileName(path) == "charlie"
                 ? Task.FromException(new InvalidOperationException("boom"))
                 : Task.CompletedTask;
 
-        var vm = CreateViewModel();
-        vm.Organization = "acme";
-        vm.Token = "token-1234567890";
-        vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
-        vm.MaxConcurrencyValue = 1; // serialize progress: the sync fake reports inline across threads
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
 
         await vm.SyncCommand.ExecuteAsync(null);
 
-        Assert.Equal(3, vm.Repos.Count);
-        Assert.Equal(3, vm.TotalCount);
-        Assert.Equal(3, vm.CompletedCount);
-        Assert.False(vm.IsRunning);
-
         var byName = vm.Repos.ToDictionary(r => r.Name);
+        Assert.Equal(["alpha"], _git.PulledRepoNames);
         Assert.Equal(SyncStatus.Done, byName["alpha"].Status);
         Assert.Equal(SyncStatus.Done, byName["bravo"].Status);
         Assert.Equal(SyncStatus.Failed, byName["charlie"].Status);
         Assert.Contains("boom", byName["charlie"].Error);
+        Assert.Equal(3, vm.CompletedCount);
+        Assert.Contains("1 updated", vm.StatusText);
         Assert.Contains("1 failed", vm.StatusText);
 
         Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
-    public async Task Sync_ListerFailure_SurfacesMessage_AndResetsRunning()
-    {
-        _lister.ExceptionToThrow = new InvalidOperationException("org not found");
-
-        var vm = CreateViewModel();
-        vm.Organization = "acme";
-        vm.Token = "token-1234567890";
-        vm.TargetFolder = @"C:\src\acme";
-
-        await vm.SyncCommand.ExecuteAsync(null);
-
-        Assert.Equal("org not found", vm.StatusText);
-        Assert.Empty(vm.Repos);
-        Assert.False(vm.IsRunning);
-        Assert.True(vm.SyncCommand.CanExecute(null));
-    }
-
-    [Fact]
     public async Task Sync_CancelCommand_CancelsRun_AndReportsCanceled()
     {
-        _lister.Repositories = [Repo("alpha"), Repo("bravo")];
         var gate = new TaskCompletionSource();
         int started = 0;
         _git.CloneHandler = async (url, path, token, onProgress, ct) =>
@@ -122,14 +202,15 @@ public sealed class MainViewModelTests
             ct.ThrowIfCancellationRequested();
         };
 
-        var vm = CreateViewModel();
-        vm.Organization = "acme";
-        vm.Token = "token-1234567890";
-        vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
-        vm.MaxConcurrencyValue = 1;
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
 
         Task run = vm.SyncCommand.ExecuteAsync(null);
         await WaitUntilAsync(() => started > 0, "first clone to start");
+
+        Assert.True(vm.IsRunning);
+        Assert.False(vm.SyncCommand.CanExecute(null)); // all three commands lock while running
+        Assert.False(vm.LoadReposCommand.CanExecute(null));
+        Assert.False(vm.RetryFailedCommand.CanExecute(null));
 
         vm.SyncCancelCommand.Execute(null);
         gate.SetResult();
@@ -137,11 +218,142 @@ public sealed class MainViewModelTests
 
         Assert.StartsWith("Canceled", vm.StatusText);
         Assert.False(vm.IsRunning);
+        Assert.True(vm.HasCompletedRun);
         Assert.All(vm.Repos, r => Assert.True(
             r.Status is SyncStatus.Canceled or SyncStatus.Done or SyncStatus.Failed,
             $"{r.Name} left in non-terminal state {r.Status}"));
 
         Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    // ---------------------------------------------------------------- retry failed
+
+    [Fact]
+    public async Task RetryFailed_ReRunsOnlyTheFailedRepos()
+    {
+        _git.CloneHandler = (url, path, token, onProgress, ct) =>
+            Path.GetFileName(path) == "bravo"
+                ? Task.FromException(new InvalidOperationException("boom"))
+                : Task.CompletedTask;
+
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        var byName = vm.Repos.ToDictionary(r => r.Name);
+        Assert.Equal(SyncStatus.Failed, byName["bravo"].Status);
+        Assert.True(vm.RetryFailedCommand.CanExecute(null));
+        int clonesBeforeRetry = _git.CloneCalls.Count;
+
+        _git.CloneHandler = (_, _, _, _, _) => Task.CompletedTask; // transient failure is gone
+        await vm.RetryFailedCommand.ExecuteAsync(null);
+
+        Assert.Equal(["bravo"], _git.ClonedRepoNames.Skip(clonesBeforeRetry));
+        Assert.Equal(SyncStatus.Done, byName["bravo"].Status);
+        Assert.Null(byName["bravo"].Error);
+        Assert.Equal(SyncStatus.Done, byName["alpha"].Status); // untouched by the retry
+        Assert.True(byName["bravo"].IsSelected); // retry selected exactly the failures
+        Assert.False(byName["alpha"].IsSelected);
+        Assert.False(byName["charlie"].IsSelected);
+        Assert.Equal(3, vm.CompletedCount);
+        Assert.False(vm.RetryFailedCommand.CanExecute(null)); // nothing failed anymore
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    // ---------------------------------------------------------------- selection
+
+    [Fact]
+    public async Task AllSelected_TogglesEveryRow_AndFollowsItemChanges()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
+        Assert.True(vm.AllSelected);
+
+        vm.AllSelected = false;
+        Assert.All(vm.Repos, r => Assert.False(r.IsSelected));
+        Assert.False(vm.SyncCommand.CanExecute(null)); // nothing selected
+
+        vm.AllSelected = true;
+        Assert.All(vm.Repos, r => Assert.True(r.IsSelected));
+        Assert.True(vm.SyncCommand.CanExecute(null));
+
+        vm.Repos[1].IsSelected = false;
+        Assert.False(vm.AllSelected);
+        Assert.True(vm.Repos[0].IsSelected); // header recompute must not cascade to other rows
+        Assert.True(vm.Repos[2].IsSelected);
+
+        vm.Repos[1].IsSelected = true;
+        Assert.True(vm.AllSelected);
+    }
+
+    // ---------------------------------------------------------------- sorting
+
+    [Fact]
+    public async Task Sort_ByName_TogglesDirection_AndSwitchingColumnResetsIt()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("bravo"), Repo("alpha"), Repo("charlie"));
+
+        vm.SortCommand.Execute("Name");
+        Assert.Equal(["alpha", "bravo", "charlie"], vm.Repos.Select(r => r.Name));
+        Assert.Equal("Name", vm.SortColumn);
+        Assert.False(vm.SortDescending);
+
+        vm.SortCommand.Execute("Name");
+        Assert.Equal(["charlie", "bravo", "alpha"], vm.Repos.Select(r => r.Name));
+        Assert.True(vm.SortDescending);
+
+        vm.SortCommand.Execute("Status");
+        Assert.Equal("Status", vm.SortColumn);
+        Assert.False(vm.SortDescending); // direction resets on a new column
+    }
+
+    [Fact]
+    public async Task Sort_ByStatus_OrdersByLifecycle_AndIsStable()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
+        var byName = vm.Repos.ToDictionary(r => r.Name);
+        byName["alpha"].Status = SyncStatus.Done;
+        byName["bravo"].Status = SyncStatus.Failed;
+        byName["charlie"].Status = SyncStatus.Done;
+
+        vm.SortCommand.Execute("Status");
+
+        // Done sorts before Failed; the two Done rows keep their load order (stable sort).
+        Assert.Equal(["alpha", "charlie", "bravo"], vm.Repos.Select(r => r.Name));
+    }
+
+    // ---------------------------------------------------------------- target preview
+
+    [Fact]
+    public void TargetPreview_ReflectsOrgSubfolder_AndRaisesChange()
+    {
+        var vm = CreateViewModel();
+        var raised = new List<string?>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        vm.Organization = "acme";
+        vm.TargetFolder = @"C:\src";
+
+        Assert.Equal(@"C:\src", vm.EffectiveTargetRoot);
+        Assert.Equal(@"C:\src\my-repo", vm.TargetPreview);
+
+        raised.Clear();
+        vm.CreateOrgSubfolder = true;
+
+        Assert.Equal(@"C:\src\acme", vm.EffectiveTargetRoot);
+        Assert.Equal(@"C:\src\acme\my-repo", vm.TargetPreview);
+        Assert.Contains(nameof(MainViewModel.EffectiveTargetRoot), raised);
+        Assert.Contains(nameof(MainViewModel.TargetPreview), raised);
+    }
+
+    [Fact]
+    public async Task TargetPreview_UsesFirstLoadedRepoName()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("zulu"), Repo("alpha"));
+
+        Assert.Equal(Path.Combine(vm.TargetFolder, "zulu"), vm.TargetPreview);
+
+        vm.CreateOrgSubfolder = true;
+        Assert.Equal(Path.Combine(vm.TargetFolder, "acme", "zulu"), vm.TargetPreview);
     }
 
     // ---------------------------------------------------------------- org lookup
@@ -230,18 +442,44 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
-    public void RepoItem_StatusText_ShowsClonePercent_AndErrorFlag()
+    public void RepoItem_ExposesDescriptorFields_AndProgressShape()
     {
-        var item = new RepoItemViewModel("alpha");
+        var descriptor = new RepoDescriptor(
+            "alpha", "https://example.test/acme/alpha.git", "develop", IsArchived: true);
+        var item = new RepoItemViewModel(descriptor);
+
+        Assert.Same(descriptor, item.Descriptor);
+        Assert.Equal("alpha", item.Name);
+        Assert.Equal("develop", item.BranchText);
+        Assert.True(item.IsArchived);
+        Assert.True(item.IsSelected); // rows start selected
         Assert.Equal("Queued", item.StatusText);
+        Assert.False(item.ShowProgress);
         Assert.False(item.HasError);
+        Assert.Equal(0, item.ProgressValue);
 
         item.Status = SyncStatus.Cloning;
         item.Percent = 0.42;
         Assert.Equal("Cloning 42%", item.StatusText);
+        Assert.True(item.ShowProgress);
+        Assert.False(item.IsIndeterminate);
+        Assert.Equal(0.42, item.ProgressValue);
+
+        item.Status = SyncStatus.Pulling;
+        Assert.True(item.ShowProgress);
+        Assert.True(item.IsIndeterminate); // pulls report no percentage
 
         item.Status = SyncStatus.Failed;
         item.Error = "boom";
         Assert.True(item.HasError);
+        Assert.False(item.ShowProgress);
+    }
+
+    [Fact]
+    public void RepoItem_EmptyRepository_HasEmptyBranchText()
+    {
+        var item = new RepoItemViewModel(Repo("empty", branch: null));
+
+        Assert.Equal("", item.BranchText);
     }
 }

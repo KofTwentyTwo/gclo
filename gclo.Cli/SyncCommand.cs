@@ -106,48 +106,95 @@ internal static class SyncCommand
             throw new CliUsageException("--target is required.");
         }
 
-        string token = tokenOptions.Resolve();
+        // One activity log per invocation. Only non-secret parameters are ever
+        // written to it; the token is not.
+        var log = new FileActivityLog();
+        log.Info($"sync started: org='{org}', target='{target}', parallel={parallel}, json={json}, quiet={quiet}");
 
-        var printer = new ProgressPrinter(printProgress: !quiet && !json, printFailures: !json);
-        var engine = new OrgSyncEngine(new GitHubRepositoryLister(), new LibGit2GitClient());
-        var request = new SyncRequest(org.Trim(), token, target.Trim(), parallel);
-
-        SyncSummary summary;
         try
         {
-            summary = await engine.SyncAsync(request, printer, cancellationToken).ConfigureAwait(false);
+            string token = tokenOptions.Resolve();
+
+            var printer = new ProgressPrinter(printProgress: !quiet && !json, printFailures: !json);
+            var engine = new OrgSyncEngine(new GitHubRepositoryLister(), new LibGit2GitClient());
+            var request = new SyncRequest(org.Trim(), token, target.Trim(), parallel);
+
+            SyncSummary summary;
+            try
+            {
+                summary = await engine
+                    .SyncAsync(request, new FailureLoggingProgress(printer, log), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Canceled while still listing repositories: nothing was processed yet.
+                summary = new SyncSummary(0, 0, 0, 0, 0, WasCanceled: true);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // The engine's listers translate auth failures, rate limiting, and
+                // unknown organizations into InvalidOperationException.
+                throw new CliErrorException(ex.Message, ex);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                throw new CliErrorException($"Cannot use target folder '{target}': {ex.Message}", ex);
+            }
+
+            log.Info(
+                $"sync finished: total={summary.Total}, cloned={summary.Cloned}, updated={summary.Updated}, "
+                + $"failed={summary.Failed}, canceled={summary.Canceled}, wasCanceled={summary.WasCanceled}");
+
+            if (json)
+            {
+                var result = new SyncJsonResult(
+                    summary.Total, summary.Cloned, summary.Updated, summary.Failed,
+                    summary.Canceled, summary.WasCanceled, printer.Failures);
+                Console.Out.WriteLine(JsonSerializer.Serialize(result, CliJsonContext.Default.SyncJsonResult));
+            }
+            else
+            {
+                string verb = summary.WasCanceled ? "Canceled" : "Finished";
+                Console.Out.WriteLine(
+                    $"{verb}: {summary.Cloned} cloned, {summary.Updated} updated, "
+                    + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.");
+            }
+
+            return summary.Failed > 0 || summary.WasCanceled ? 1 : 0;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception ex)
         {
-            // Canceled while still listing repositories: nothing was processed yet.
-            summary = new SyncSummary(0, 0, 0, 0, 0, WasCanceled: true);
+            // Fatal path: missing or rejected token, unusable target folder,
+            // unknown organization. Program prints the message; the log keeps it.
+            log.Error($"sync failed: {ex.Message}", ex);
+            throw;
         }
-        catch (InvalidOperationException ex)
+    }
+
+    /// <summary>
+    /// Forwards every engine report to the console printer unchanged and mirrors
+    /// failures into the activity log, so console output stays exactly what the
+    /// printer alone would have produced.
+    /// </summary>
+    private sealed class FailureLoggingProgress : IProgress<RepoProgress>
+    {
+        private readonly ProgressPrinter _printer;
+        private readonly IActivityLog _log;
+
+        public FailureLoggingProgress(ProgressPrinter printer, IActivityLog log)
         {
-            // The engine's listers translate auth failures, rate limiting, and
-            // unknown organizations into InvalidOperationException.
-            throw new CliErrorException(ex.Message, ex);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            throw new CliErrorException($"Cannot use target folder '{target}': {ex.Message}", ex);
+            _printer = printer;
+            _log = log;
         }
 
-        if (json)
+        public void Report(RepoProgress value)
         {
-            var result = new SyncJsonResult(
-                summary.Total, summary.Cloned, summary.Updated, summary.Failed,
-                summary.Canceled, summary.WasCanceled, printer.Failures);
-            Console.Out.WriteLine(JsonSerializer.Serialize(result, CliJsonContext.Default.SyncJsonResult));
+            if (value.Status == SyncStatus.Failed)
+            {
+                _log.Error($"{value.RepoName} failed: {value.Error ?? "unknown error"}");
+            }
+            _printer.Report(value);
         }
-        else
-        {
-            string verb = summary.WasCanceled ? "Canceled" : "Finished";
-            Console.Out.WriteLine(
-                $"{verb}: {summary.Cloned} cloned, {summary.Updated} updated, "
-                + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.");
-        }
-
-        return summary.Failed > 0 || summary.WasCanceled ? 1 : 0;
     }
 }

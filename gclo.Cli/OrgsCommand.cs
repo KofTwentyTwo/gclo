@@ -59,33 +59,54 @@ internal static class OrgsCommand
             }
         }
 
-        string token = tokenOptions.Resolve();
+        // One activity log per invocation; the token itself is never written to it.
+        var log = new FileActivityLog();
+        log.Info($"orgs started: json={json}");
 
-        IReadOnlyList<string> logins;
         try
         {
-            logins = await new GitHubOrganizationLister()
-                .ListOrganizationsAsync(token, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (InvalidOperationException ex)
-        {
-            // The lister translates auth failures and rate limiting into
-            // InvalidOperationException.
-            throw new CliErrorException(ex.Message, ex);
-        }
+            string token = tokenOptions.Resolve();
 
-        if (json)
-        {
-            Console.Out.WriteLine(JsonSerializer.Serialize(logins, CliJsonContext.Default.IReadOnlyListString));
-        }
-        else
-        {
-            foreach (string login in logins)
+            IReadOnlyList<string> logins;
+            try
             {
-                Console.Out.WriteLine(login);
+                logins = await new GitHubOrganizationLister()
+                    .ListOrganizationsAsync(token, cancellationToken)
+                    .ConfigureAwait(false);
             }
+            catch (InvalidOperationException ex)
+            {
+                // The lister translates auth failures and rate limiting into
+                // InvalidOperationException.
+                throw new CliErrorException(ex.Message, ex);
+            }
+
+            log.Info($"orgs finished: {logins.Count} login(s) listed.");
+
+            if (json)
+            {
+                Console.Out.WriteLine(JsonSerializer.Serialize(logins, CliJsonContext.Default.IReadOnlyListString));
+            }
+            else
+            {
+                foreach (string login in logins)
+                {
+                    Console.Out.WriteLine(login);
+                }
+            }
+            return 0;
         }
-        return 0;
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            log.Info("orgs canceled.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Fatal path: missing or rejected token. Program prints the message;
+            // the log keeps it.
+            log.Error($"orgs failed: {ex.Message}", ex);
+            throw;
+        }
     }
 }
