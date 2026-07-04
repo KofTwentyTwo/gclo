@@ -561,6 +561,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     // ---------------------------------------------------------------- progress
 
+    /// <summary>
+    /// Raised with a message that assistive technology should announce. Per-repo
+    /// failures use this channel; run summaries land in <see cref="StatusText"/>,
+    /// whose live region already announces changes. Raised on the UI thread.
+    /// </summary>
+    public event Action<string>? AnnouncementRequested;
+
     /// <summary>Applies one engine progress report to the table. Runs on the UI thread.</summary>
     private void HandleProgress(RepoProgress report)
     {
@@ -580,6 +587,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (report.Status == SyncStatus.Failed)
         {
             _log.Error($"{report.RepoName} failed: {report.Error}");
+            // Failures never reach StatusText (which has a live region), so assistive
+            // technology hears them only through this explicit channel.
+            AnnouncementRequested?.Invoke($"{report.RepoName} failed. {report.Error}");
         }
 
         if (report.Status is SyncStatus.Done or SyncStatus.Failed or SyncStatus.Canceled)

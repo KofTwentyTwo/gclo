@@ -31,6 +31,18 @@ namespace gclo
             ViewModel = new MainViewModel(log: _log);
             InitializeComponent();
 
+            ViewModel.AnnouncementRequested += AnnounceToAssistiveTechnology;
+            // LiveSetting alone does not announce: XAML never raises LiveRegionChanged
+            // automatically, so each StatusText update must raise it in code-behind.
+            ViewModel.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.StatusText))
+                {
+                    // Enqueued so the binding has pushed the new text before the event.
+                    DispatcherQueue.TryEnqueue(RaiseStatusLiveRegionChanged);
+                }
+            };
+
             Title = "gclo — Git Clone Large Organizations";
 
             // The view model stays UI-free: when ResolvePathsCommand needs the user's
@@ -116,6 +128,35 @@ namespace gclo
         }
 
         private void ExitMenuItem_Click(object sender, RoutedEventArgs e) => Close();
+
+        private void RaiseStatusLiveRegionChanged()
+        {
+            var peer = Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(StatusTextBlock)
+                ?? Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(StatusTextBlock);
+            peer?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged);
+        }
+
+        /// <summary>
+        /// Raises a UIA notification so screen readers hear per-repo failures. Routed
+        /// through the ListView's peer: panels like Grid have no automation peer.
+        /// ImportantMostRecent coalesces bursts when many repositories fail at once.
+        /// </summary>
+        private void AnnounceToAssistiveTechnology(string message)
+        {
+            if (!DispatcherQueue.HasThreadAccess)
+            {
+                DispatcherQueue.TryEnqueue(() => AnnounceToAssistiveTechnology(message));
+                return;
+            }
+
+            var peer = Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(RepoListView)
+                ?? Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(RepoListView);
+            peer?.RaiseNotificationEvent(
+                Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationKind.ActionCompleted,
+                Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationProcessing.ImportantMostRecent,
+                message,
+                "gclo-repo-status");
+        }
 
         private async void ActivityLogMenuItem_Click(object sender, RoutedEventArgs e)
         {

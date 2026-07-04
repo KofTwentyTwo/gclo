@@ -1,3 +1,4 @@
+using gclo.ViewModels;
 using Microsoft.UI.Xaml;
 
 namespace gclo
@@ -16,6 +17,20 @@ namespace gclo
         public App()
         {
             InitializeComponent();
+
+            // App-level so Application.Current.Resources theme lookups (the status
+            // brushes) agree with the visible theme. Only settable here, before any
+            // window exists; mid-session theme changes still use the root element's
+            // RequestedTheme, and status brushes adopt them as row statuses update.
+            string theme = AppSettings.Load().Theme;
+            if (theme == "Light")
+            {
+                RequestedTheme = ApplicationTheme.Light;
+            }
+            else if (theme == "Dark")
+            {
+                RequestedTheme = ApplicationTheme.Dark;
+            }
         }
 
         /// <summary>
