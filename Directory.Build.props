@@ -10,4 +10,14 @@
     <Deterministic>true</Deterministic>
   </PropertyGroup>
 
+  <!-- Single version source. Local builds are 0.1.0-dev; release builds pass an
+       explicit -p:Version=<tag-version>, which overrides both parts. The SDK's
+       built-in SourceLink appends the git commit as "+<sha>" build metadata on
+       AssemblyInformationalVersion, which the About dialog and the CLI's
+       version output surface as the short hash. -->
+  <PropertyGroup>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>dev</VersionSuffix>
+  </PropertyGroup>
+
 </Project>

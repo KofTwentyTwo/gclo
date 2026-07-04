@@ -234,5 +234,5 @@ done
 
 ```console
 $ gclo --version
-0.1.0
+0.1.0-beta.6 (9ac6c2bde)
 ```
