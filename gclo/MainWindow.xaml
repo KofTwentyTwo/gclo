@@ -60,6 +60,15 @@
                 <NavigationViewItemSeparator />
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
+                <NavigationViewItem
+                    x:Name="SyncAllNavItem"
+                    Content="Sync all"
+                    Tag="syncall"
+                    IsEnabled="False">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE895;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem Content="Add account" Tag="add">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE710;" />

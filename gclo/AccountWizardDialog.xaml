@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="gclo.AccountWizardDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:gclo"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="{x:Bind ViewModel.Title}"
+    PrimaryButtonText="{x:Bind PrimaryButtonLabel(ViewModel.Step), Mode=OneWay}"
+    SecondaryButtonText="Back"
+    CloseButtonText="Cancel"
+    DefaultButton="Primary"
+    IsPrimaryButtonEnabled="{x:Bind PrimaryEnabled(ViewModel.IsValidatingToken), Mode=OneWay}"
+    IsSecondaryButtonEnabled="{x:Bind BackEnabled(ViewModel.Step), Mode=OneWay}"
+    PrimaryButtonClick="OnPrimaryButtonClick"
+    SecondaryButtonClick="OnSecondaryButtonClick">
+
+    <!-- The four step panels overlay each other; StepVisible shows exactly one. -->
+    <Grid MinWidth="400">
+
+        <!-- ============================================================ Step 1
+             Identity: the unique display name plus an optional note. -->
+        <StackPanel Spacing="12" Visibility="{x:Bind StepVisible(1, ViewModel.Step), Mode=OneWay}">
+            <TextBlock
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="Step 1 of 4: Identity" />
+            <TextBox
+                Header="Account name"
+                PlaceholderText="e.g. Work – Acme"
+                Text="{x:Bind ViewModel.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock
+                x:Name="NameErrorText"
+                AutomationProperties.LiveSetting="Polite"
+                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                TextWrapping="Wrap"
+                Text="{x:Bind ViewModel.NameError, Mode=OneWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.NameError), Mode=OneWay}" />
+            <TextBox
+                Header="Description (optional)"
+                PlaceholderText="What this account is for"
+                Text="{x:Bind ViewModel.Description, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+        </StackPanel>
+
+        <!-- ============================================================ Step 2
+             Access token: validated against GitHub when Next is pressed. -->
+        <StackPanel Spacing="12" Visibility="{x:Bind StepVisible(2, ViewModel.Step), Mode=OneWay}">
+            <TextBlock
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="Step 2 of 4: Access token" />
+            <PasswordBox
+                x:Name="TokenBox"
+                Header="Personal access token"
+                PlaceholderText="ghp_…"
+                PasswordChanged="TokenBox_PasswordChanged" />
+            <HyperlinkButton
+                Padding="0"
+                Content="How to create a token"
+                NavigateUri="https://github.com/settings/tokens" />
+            <TextBlock
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                TextWrapping="Wrap"
+                Text="Next validates the token and lists the organizations it can see." />
+            <StackPanel
+                Orientation="Horizontal"
+                Spacing="8"
+                Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.IsValidatingToken), Mode=OneWay}">
+                <ProgressRing
+                    Width="20"
+                    Height="20"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Validating token"
+                    IsActive="{x:Bind ViewModel.IsValidatingToken, Mode=OneWay}" />
+                <TextBlock VerticalAlignment="Center" Text="Validating token…" />
+            </StackPanel>
+            <TextBlock
+                x:Name="TokenErrorText"
+                AutomationProperties.LiveSetting="Polite"
+                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                TextWrapping="Wrap"
+                Text="{x:Bind ViewModel.TokenError, Mode=OneWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.TokenError), Mode=OneWay}" />
+        </StackPanel>
+
+        <!-- ============================================================ Step 3
+             Organization: pick from what the token can see, or type any name. -->
+        <StackPanel Spacing="12" Visibility="{x:Bind StepVisible(3, ViewModel.Step), Mode=OneWay}">
+            <TextBlock
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="Step 3 of 4: Organization" />
+            <ComboBox
+                HorizontalAlignment="Stretch"
+                Header="Organization or account"
+                IsEditable="True"
+                ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
+                PlaceholderText="Choose from the list, or type a name"
+                Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
+        </StackPanel>
+
+        <!-- ============================================================ Step 4
+             Destination: where clones land and how many run in parallel. -->
+        <StackPanel Spacing="12" Visibility="{x:Bind StepVisible(4, ViewModel.Step), Mode=OneWay}">
+            <TextBlock
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="Step 4 of 4: Destination" />
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox
+                    Grid.Column="0"
+                    Header="Target folder"
+                    PlaceholderText="C:\src\my-org"
+                    Text="{x:Bind ViewModel.TargetRoot, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <Button
+                    Grid.Column="1"
+                    VerticalAlignment="Bottom"
+                    Content="Browse…"
+                    Click="BrowseButton_Click" />
+            </Grid>
+            <CheckBox
+                MinWidth="0"
+                Content="{x:Bind OrgSubfolderLabel(ViewModel.Organization), Mode=OneWay}"
+                IsChecked="{x:Bind ViewModel.CreateOrgSubfolder, Mode=TwoWay}" />
+            <NumberBox
+                x:Name="ConcurrencyBox"
+                Header="Parallel clones and pulls"
+                Minimum="1"
+                Maximum="64"
+                SmallChange="1"
+                SpinButtonPlacementMode="Inline"
+                ValueChanged="ConcurrencyBox_ValueChanged" />
+            <InfoBar
+                x:Name="SaveErrorBar"
+                Severity="Error"
+                IsClosable="True"
+                Title="Could not save the account" />
+        </StackPanel>
+    </Grid>
+</ContentDialog>
