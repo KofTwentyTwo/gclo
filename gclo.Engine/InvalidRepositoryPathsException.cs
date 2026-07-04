@@ -21,7 +21,8 @@ public sealed class InvalidRepositoryPathsException : Exception
     {
         var examples = string.Join("; ", paths.Take(3).Select(p => $"'{p.RepoPath}' ({p.Reason})"));
         var suffix = paths.Count > 3 ? $" and {paths.Count - 3} more" : "";
-        return $"{paths.Count} path(s) in this repository cannot be created on Windows: {examples}{suffix}. " +
+        string subject = paths.Count == 1 ? "1 path" : $"{paths.Count} paths";
+        return $"{subject} in this repository cannot be created on Windows: {examples}{suffix}. " +
                "Nothing was checked out.";
     }
 }

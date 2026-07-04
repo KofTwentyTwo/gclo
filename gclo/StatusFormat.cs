@@ -1,6 +1,8 @@
 using gclo.Engine;
+using gclo.ViewModels;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
 namespace gclo;
@@ -51,6 +53,49 @@ public static class StatusFormat
     public static Visibility VisibleIf(bool value)
         => value ? Visibility.Visible : Visibility.Collapsed;
 
+    /// <summary>Inverse of <see cref="VisibleIf"/>: collapsed when <paramref name="value"/> is true.</summary>
+    public static Visibility VisibleIfNot(bool value)
+        => value ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>Visible only once <paramref name="value"/> has text; hides empty preview lines.</summary>
+    public static Visibility VisibleIfNotEmpty(string value)
+        => string.IsNullOrEmpty(value) ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>InfoBar severity for a run outcome (None and Canceled read as informational).</summary>
+    public static InfoBarSeverity SeverityFor(RunResultKind kind) => kind switch
+    {
+        RunResultKind.Success => InfoBarSeverity.Success,
+        RunResultKind.PartialFailure => InfoBarSeverity.Warning,
+        RunResultKind.Error => InfoBarSeverity.Error,
+        _ => InfoBarSeverity.Informational, // Canceled, None
+    };
+
+    /// <summary>Short InfoBar title for a run outcome; empty for <see cref="RunResultKind.None"/>.</summary>
+    public static string TitleFor(RunResultKind kind) => kind switch
+    {
+        RunResultKind.Success => "Sync complete",
+        RunResultKind.PartialFailure => "Completed with failures",
+        RunResultKind.Canceled => "Canceled",
+        RunResultKind.Error => "Sync failed",
+        _ => "",
+    };
+
+    /// <summary>Repository count with explicit pluralization, e.g. "87 repositories".</summary>
+    public static string RepoCountText(int count)
+        => count == 1 ? "1 repository" : $"{count} repositories";
+
+    /// <summary>Toolbar selection summary, e.g. "12 of 87 selected".</summary>
+    public static string SelectionSummary(int selected, int total)
+        => $"{selected} of {total} selected";
+
+    /// <summary>Run progress shown beside the toolbar's progress bar, e.g. "34 of 87".</summary>
+    public static string RunProgressText(int completed, int total)
+        => $"{completed} of {total}";
+
+    /// <summary>Screen-reader name for a repository's progress bar in the active strip.</summary>
+    public static string ProgressAutomationName(string repoName)
+        => $"{repoName} sync progress";
+
     /// <summary>Maps the persisted theme string to a XAML theme ("System"/unknown => Default).</summary>
     public static ElementTheme ToElementTheme(string theme) => theme switch
     {
@@ -58,7 +103,4 @@ public static class StatusFormat
         "Dark" => ElementTheme.Dark,
         _ => ElementTheme.Default,
     };
-
-    public static string Fraction(int completed, int total)
-        => $"{completed} / {total}";
 }

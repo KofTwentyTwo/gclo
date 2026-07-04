@@ -81,7 +81,7 @@ reports the path of the offending *segment* itself — a bad directory name like
 `aux` is reported once as `aux`, not repeated for every file inside it:
 
 ```
-legacy-repo  Failed  2 path(s) in this repository cannot be created on Windows: ...
+legacy-repo  Failed  2 paths in this repository cannot be created on Windows: ...
 legacy-repo    aux  ('aux' is a reserved Windows device name)
 legacy-repo    docs/spec?.md  (contains a character that is invalid on Windows)
 ```
