@@ -1,5 +1,6 @@
 using System.Text.Json;
 using gclo.Engine;
+using gclo.ViewModels;
 
 namespace gclo.Cli;
 
@@ -8,15 +9,27 @@ internal static class SyncCommand
 {
     private const string HelpText = """
         Usage: gclo sync --org <name> --target <folder> [options]
+               gclo sync --account <name> [options]
 
         Clones every repository of <name> into <folder>\<repo>. Repositories that
         already exist locally are fetched and fast-forwarded instead. Repositories
         fail independently; one failure never stops the rest.
 
         Options:
-          --org <name>         GitHub organization or user account to sync (required).
+          --org <name>         GitHub organization or user account to sync
+                               (required unless --account provides it).
           --target <folder>    Local root folder; each repository becomes a subfolder
-                               (required; created if missing).
+                               (required unless --account provides it; created if
+                               missing).
+          --account <name>     Use a saved account (see 'gclo accounts'; Windows
+                               only): seeds --org, --target, and --parallel from
+                               the account and reads the token from Windows
+                               Credential Manager. When the account opts into an
+                               organization subfolder the target becomes
+                               <targetRoot>\<org>. Explicit options override the
+                               account's values; a token option overrides the
+                               stored token. On completion the run's time and
+                               summary are recorded on the account.
           --parallel <N>       Maximum simultaneous git operations (default 8).
           --sanitize-paths     When a repository contains paths that are legal in
                                git but invalid on Windows (reserved device names,
@@ -53,7 +66,8 @@ internal static class SyncCommand
         Exit codes:
           0  every repository synced
           1  run completed but some repositories failed, or it was canceled
-          2  fatal: bad arguments, missing or rejected token, organization not found
+          2  fatal: bad arguments, missing or rejected token, organization not
+             found, or an unknown account or missing account token
 
         Security:
           There is deliberately no '--token <value>' option: process command lines
@@ -65,7 +79,8 @@ internal static class SyncCommand
     {
         string? org = null;
         string? target = null;
-        int parallel = 8;
+        string? accountName = null;
+        int? parallel = null;
         bool json = false;
         bool quiet = false;
         bool sanitizePaths = false;
@@ -89,13 +104,17 @@ internal static class SyncCommand
                 case "--target":
                     target = reader.RequireValue();
                     break;
+                case "--account":
+                    accountName = reader.RequireValue();
+                    break;
                 case "--parallel":
                     {
                         string value = reader.RequireValue();
-                        if (!int.TryParse(value, out parallel) || parallel < 1)
+                        if (!int.TryParse(value, out int parsed) || parsed < 1)
                         {
                             throw new CliUsageException($"--parallel expects a positive integer, got '{value}'.");
                         }
+                        parallel = parsed;
                         break;
                     }
                 case "--json":
@@ -115,29 +134,46 @@ internal static class SyncCommand
             }
         }
 
-        if (string.IsNullOrWhiteSpace(org))
-        {
-            throw new CliUsageException("--org is required.");
-        }
-        if (string.IsNullOrWhiteSpace(target))
-        {
-            throw new CliUsageException("--target is required.");
-        }
-
         // One activity log per invocation. Only non-secret parameters are ever
         // written to it; the token is not.
         var log = new FileActivityLog();
-        log.Info($"sync started: org='{org}', target='{target}', parallel={parallel}, "
-            + $"sanitizePaths={sanitizePaths}, json={json}, quiet={quiet}");
 
         try
         {
-            string token = tokenOptions.Resolve();
+            // --account: seed org/target/parallel from the saved account. Explicit
+            // options given alongside win because ??= only fills what is still unset.
+            Account? account = null;
+            AccountsStore? store = null;
+            ITokenVault? vault = null;
+            if (accountName is not null)
+            {
+                (store, vault) = AccountsCommand.Open(log);
+                account = store.FindByName(accountName) ?? throw UnknownAccount(accountName, store);
+                org ??= account.Organization;
+                target ??= account.CreateOrgSubfolder ? Path.Combine(account.TargetRoot, org) : account.TargetRoot;
+                parallel ??= account.MaxConcurrency;
+            }
+
+            if (string.IsNullOrWhiteSpace(org))
+            {
+                throw new CliUsageException("--org is required (or use --account).");
+            }
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                throw new CliUsageException("--target is required (or use --account).");
+            }
+            int effectiveParallel = parallel ?? AppSettings.DefaultConcurrency;
+
+            log.Info($"sync started: org='{org}', target='{target}', parallel={effectiveParallel}, "
+                + $"sanitizePaths={sanitizePaths}, json={json}, quiet={quiet}"
+                + (account is null ? "" : $", account='{account.Name}'"));
+
+            string token = ResolveToken(tokenOptions, account, vault);
 
             var printer = new ProgressPrinter(printProgress: !quiet && !json, printFailures: !json);
             var git = new LibGit2GitClient();
             var engine = new OrgSyncEngine(new GitHubRepositoryLister(), git);
-            var request = new SyncRequest(org.Trim(), token, target.Trim(), parallel);
+            var request = new SyncRequest(org.Trim(), token, target.Trim(), effectiveParallel);
             var progress = new SyncProgressHandler(printer, log, printDetails: !json, collectForSanitize: sanitizePaths);
 
             SyncSummary summary;
@@ -185,6 +221,13 @@ internal static class SyncCommand
                 + $"failed={summary.Failed}, canceled={summary.Canceled}, wasCanceled={summary.WasCanceled}"
                 + (sanitizePaths ? $", sanitizedPaths={sanitized}" : ""));
 
+            string verb = summary.WasCanceled ? "Canceled" : "Finished";
+            string clonedText = sanitized > 0
+                ? $"{summary.Cloned} cloned ({sanitized} with sanitized paths)"
+                : $"{summary.Cloned} cloned";
+            string summaryLine = $"{verb}: {clonedText}, {summary.Updated} updated, "
+                + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.";
+
             if (json)
             {
                 var result = new SyncJsonResult(
@@ -194,13 +237,14 @@ internal static class SyncCommand
             }
             else
             {
-                string verb = summary.WasCanceled ? "Canceled" : "Finished";
-                string clonedText = sanitized > 0
-                    ? $"{summary.Cloned} cloned ({sanitized} with sanitized paths)"
-                    : $"{summary.Cloned} cloned";
-                Console.Out.WriteLine(
-                    $"{verb}: {clonedText}, {summary.Updated} updated, "
-                    + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.");
+                Console.Out.WriteLine(summaryLine);
+            }
+
+            if (account is not null)
+            {
+                // The run completed (exit 0 or 1): remember when and how it went,
+                // so 'gclo accounts' and the desktop app can show it.
+                TryRecordSyncResult(store!, account, summaryLine, log);
             }
 
             return summary.Failed > 0 || summary.WasCanceled ? 1 : 0;
@@ -212,6 +256,60 @@ internal static class SyncCommand
             log.Error($"sync failed: {ex.Message}", ex);
             throw;
         }
+    }
+
+    /// <summary>
+    /// The token for this run. Any explicit token option wins; otherwise a saved
+    /// account's token comes from Windows Credential Manager; plain runs fall back
+    /// to the default environment variable.
+    /// </summary>
+    private static string ResolveToken(TokenOptions tokenOptions, Account? account, ITokenVault? vault)
+    {
+        if (account is null || tokenOptions.HasExplicitSource)
+        {
+            return tokenOptions.Resolve();
+        }
+
+        // vault is non-null whenever account is: both come from AccountsCommand.Open.
+        string? token = vault!.TryRetrieve(account.Id);
+        if (string.IsNullOrEmpty(token))
+        {
+            throw new CliErrorException(
+                $"Account '{account.Name}' has no token in Windows Credential Manager "
+                + $"(entry 'gclo:account:{account.Id:N}'). Re-enter the token in the gclo "
+                + "desktop app's account wizard, restore the credential entry manually, "
+                + "or pass a token with --token-env, --token-file, or --token-stdin.");
+        }
+        return token;
+    }
+
+    /// <summary>
+    /// Records the completed run's time and summary on the account. A persistence
+    /// failure must not change the sync's exit code — the repositories are already
+    /// on disk — so it is reported as a warning instead of propagating.
+    /// </summary>
+    private static void TryRecordSyncResult(AccountsStore store, Account account, string summaryLine, IActivityLog log)
+    {
+        try
+        {
+            store.RecordSyncResult(account.Id, DateTimeOffset.UtcNow, summaryLine);
+        }
+        catch (Exception ex)
+        {
+            log.Error($"could not record the sync result on account '{account.Name}': {ex.Message}", ex);
+            Console.Error.WriteLine(
+                $"Warning: could not record the sync result on account '{account.Name}': {ex.Message}");
+        }
+    }
+
+    /// <summary>Unknown --account name: tell the user what does exist (exit code 2).</summary>
+    private static CliErrorException UnknownAccount(string name, AccountsStore store)
+    {
+        IReadOnlyList<Account> all = store.GetAll();
+        string available = all.Count == 0
+            ? "No accounts exist yet; create one in the gclo desktop app."
+            : "Available accounts: " + string.Join(", ", all.Select(a => a.Name)) + ".";
+        return new CliErrorException($"No account named '{name}'. {available}");
     }
 
     /// <summary>

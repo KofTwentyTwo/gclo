@@ -47,9 +47,14 @@ New in `gclo.ViewModels` (app-layer library, headless-testable):
   `MaxConcurrency`, `LastSyncUtc`, `LastSyncSummary` (counts string).
   Metadata JSON at `%LOCALAPPDATA%\gclo\accounts.json` — never contains tokens.
 - `ITokenVault` { `Store(accountId, token)`, `TryRetrieve(accountId)`,
-  `Delete(accountId)` } — implementation `CredentialManagerVault` using
-  `Windows.Security.Credentials.PasswordVault`, resource name
-  `gclo:account:<id>`; `InMemoryVault` fake for tests.
+  `Delete(accountId)` } — implementation `CredentialManagerVault` using Win32
+  `CredWrite/CredRead/CredDelete` P/Invoke (generic credentials, target name
+  `gclo:account:<id>`); `InMemoryVault` fake for tests. **Decision changed from
+  PasswordVault after the spike**: the WinRT API would force Windows-only TFMs
+  onto gclo.ViewModels and the cross-platform CLI, while the Win32 store works
+  from plain net10.0 (spike-verified: write/read/delete round-trip without
+  package identity) and surfaces tokens in Credential Manager's "Windows
+  Credentials" UI where the owner can inspect them.
 - `AccountsStore`: CRUD + rename-safe persistence (same never-throw discipline
   as `AppSettings`); deleting an account deletes its vault entry.
 - CLI (`gclo.Cli`): `gclo accounts` (list: name, org, target, last sync);
@@ -94,6 +99,12 @@ Inside `WorkspacePage`, replacing the stacked form:
    progress-honesty P2).
 3. **Results InfoBar** (severity-aware): summary + inline Retry failed / Open
    folder; replaces permanent buttons and the stale Retry visibility bug.
+3b. **In-progress visibility** (owner decision on #16): a pinned **active
+   strip** docked between toolbar and table showing exactly the repos currently
+   Cloning/Pulling with per-repo progress — bounded by the parallelism setting,
+   so it never scrolls and the table never moves under the user. Plus **status
+   filter chips** on the toolbar (All · Active · Failed · Pending); Failed
+   doubles as retry triage. Rejected: viewport auto-scroll and live re-sorting.
 4. **Designed empty states**: no token → connect card (+ "how to create a
    token" link, fixing that P2); connected → "Load N repositories from {org}";
    filter-no-match state.

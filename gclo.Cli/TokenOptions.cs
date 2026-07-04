@@ -17,6 +17,13 @@ internal sealed class TokenOptions
     private string? _filePath;
     private bool _useStdin;
 
+    /// <summary>
+    /// True when any token option (--token-env, --token-file, --token-stdin) was
+    /// given. 'gclo sync --account' uses this to let an explicit token source
+    /// override the account's vault-stored token.
+    /// </summary>
+    public bool HasExplicitSource => _envVariable is not null || _filePath is not null || _useStdin;
+
     /// <summary>Consumes the reader's current option when it is a token option.</summary>
     public bool TryConsume(OptionReader reader)
     {
@@ -98,18 +105,49 @@ internal sealed class TokenOptions
 
     private static string FromStdin()
     {
-        if (!Console.IsInputRedirected)
+        string? line;
+        if (Console.IsInputRedirected)
         {
-            // Interactive use: make it obvious the process is waiting. The prompt
-            // goes to stderr so redirected stdout stays clean.
+            line = Console.In.ReadLine()?.Trim();
+        }
+        else
+        {
+            // Interactive use: prompt on stderr (redirected stdout stays clean) and
+            // read WITHOUT echo, like git/gh credential prompts — an echoed token
+            // would sit on screen and in the terminal scrollback.
             Console.Error.Write("Token: ");
+            line = ReadLineNoEcho().Trim();
+            Console.Error.WriteLine();
         }
 
-        string? line = Console.In.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(line))
         {
             throw new CliErrorException("No token arrived on standard input (expected one line).");
         }
         return line;
+    }
+
+    private static string ReadLineNoEcho()
+    {
+        var buffer = new System.Text.StringBuilder();
+        while (true)
+        {
+            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Enter)
+            {
+                return buffer.ToString();
+            }
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (buffer.Length > 0)
+                {
+                    buffer.Length--;
+                }
+            }
+            else if (key.KeyChar != '\0')
+            {
+                buffer.Append(key.KeyChar);
+            }
+        }
     }
 }
