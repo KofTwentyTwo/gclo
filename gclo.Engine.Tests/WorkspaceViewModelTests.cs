@@ -5,11 +5,11 @@ using static gclo.Engine.Tests.GitTestHelpers;
 namespace gclo.Engine.Tests;
 
 /// <summary>
-/// Headless tests for <see cref="MainViewModel"/> using a synchronous progress factory
+/// Headless tests for <see cref="WorkspaceViewModel"/> using a synchronous progress factory
 /// (the production default, <see cref="Progress{T}"/>, posts asynchronously and would
 /// make assertions racy) and a near-zero org-lookup debounce.
 /// </summary>
-public sealed class MainViewModelTests
+public sealed class WorkspaceViewModelTests
 {
     private readonly FakeRepositoryLister _lister = new();
     private readonly FakeGitClient _git = new();
@@ -21,18 +21,23 @@ public sealed class MainViewModelTests
         public void Report(RepoProgress value) => handler(value);
     }
 
-    private MainViewModel CreateViewModel(TimeSpan? debounce = null)
+    private WorkspaceViewModel CreateViewModel(
+        TimeSpan? debounce = null,
+        Account? account = null,
+        ITokenVault? vault = null,
+        AccountsStore? store = null)
         => new(_lister, _git, _orgs,
                handler => new SyncProgress(handler),
                debounce ?? TimeSpan.FromMilliseconds(1),
-               new NullActivityLog());
+               new NullActivityLog(),
+               account, vault, store);
 
     /// <summary>
     /// A view model with valid inputs and the given repositories already loaded into the
     /// table. Waits out the token-triggered org lookup first so its status message cannot
     /// land on top of a later assertion.
     /// </summary>
-    private async Task<MainViewModel> CreateLoadedViewModelAsync(params RepoDescriptor[] repos)
+    private async Task<WorkspaceViewModel> CreateLoadedViewModelAsync(params RepoDescriptor[] repos)
     {
         _lister.Repositories = repos;
         var vm = CreateViewModel();
@@ -557,8 +562,8 @@ public sealed class MainViewModelTests
 
         Assert.Equal(@"C:\src\acme", vm.EffectiveTargetRoot);
         Assert.Equal(@"C:\src\acme\my-repo", vm.TargetPreview);
-        Assert.Contains(nameof(MainViewModel.EffectiveTargetRoot), raised);
-        Assert.Contains(nameof(MainViewModel.TargetPreview), raised);
+        Assert.Contains(nameof(WorkspaceViewModel.EffectiveTargetRoot), raised);
+        Assert.Contains(nameof(WorkspaceViewModel.TargetPreview), raised);
     }
 
     [Fact]
@@ -666,6 +671,187 @@ public sealed class MainViewModelTests
         await WaitUntilAsync(() => vm.Organizations.Count == 1, "debounced load");
         Assert.Equal("BBBB", vm.Organizations[0]);
         Assert.Equal(1, _orgs.Calls);
+    }
+
+    // ---------------------------------------------------------------- account workspaces
+
+    /// <summary>An account profile whose repositories land under <paramref name="targetRoot"/>.</summary>
+    private static Account MakeAccount(string targetRoot) => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = "Work",
+        Organization = "acme",
+        TargetRoot = targetRoot,
+        MaxConcurrency = 1, // serialize progress: the sync fake reports inline across threads
+    };
+
+    [Fact]
+    public async Task AccountConstruction_SeedsWorkspace_AndLooksUpOrgsWithVaultToken()
+    {
+        var account = new Account
+        {
+            Id = Guid.NewGuid(),
+            Name = "Work",
+            Organization = "acme",
+            TargetRoot = @"C:\repos\work",
+            CreateOrgSubfolder = true,
+            MaxConcurrency = 4,
+        };
+        var vault = new InMemoryVault();
+        vault.Store(account.Id, "vault-token-1234567890");
+        string? lookedUpToken = null;
+        _orgs.Handler = (token, _) =>
+        {
+            lookedUpToken = token;
+            return Task.FromResult<IReadOnlyList<string>>(["acme", "other"]);
+        };
+
+        var vm = CreateViewModel(account: account, vault: vault);
+
+        Assert.Equal("acme", vm.Organization);
+        Assert.Equal(@"C:\repos\work", vm.TargetFolder);
+        Assert.True(vm.CreateOrgSubfolder);
+        Assert.Equal(4, vm.MaxConcurrency);
+        Assert.Equal("vault-token-1234567890", vm.Token);
+        Assert.Equal(account.Id, vm.AccountId);
+        Assert.Equal("Work", vm.DisplayName);
+
+        await WaitUntilAsync(() => lookedUpToken is not null, "org lookup to fire");
+        Assert.Equal("vault-token-1234567890", lookedUpToken);
+    }
+
+    [Fact]
+    public void QuickSyncConstruction_KeepsDefaults_AndQuickSyncIdentity()
+    {
+        var vm = CreateViewModel();
+
+        Assert.Null(vm.AccountId);
+        Assert.Equal("Quick Sync", vm.DisplayName);
+        Assert.Equal("", vm.Organization);
+        Assert.Equal("", vm.Token);
+        Assert.Equal("", vm.TargetFolder);
+        Assert.False(vm.CreateOrgSubfolder);
+        Assert.Equal(AppSettings.DefaultConcurrency, vm.MaxConcurrency);
+        Assert.False(vm.HasFailedRepos);
+    }
+
+    [Fact]
+    public async Task HasFailedRepos_TurnsOnWithAFailure_AndOffWhenRetrySucceeds()
+    {
+        _git.CloneHandler = (url, path, token, onProgress, ct) =>
+            Path.GetFileName(path) == "bravo"
+                ? Task.FromException(new InvalidOperationException("boom"))
+                : Task.CompletedTask;
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+        Assert.False(vm.HasFailedRepos);
+
+        await vm.SyncCommand.ExecuteAsync(null);
+        Assert.True(vm.HasFailedRepos);
+
+        _git.CloneHandler = (_, _, _, _, _) => Task.CompletedTask; // transient failure is gone
+        await vm.RetryFailedCommand.ExecuteAsync(null);
+        Assert.False(vm.HasFailedRepos);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task Sync_AccountWorkspace_RecordsTheResultOnTheStore()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var vault = new InMemoryVault();
+            var store = new AccountsStore(vault, Path.Combine(root, "store"), new NullActivityLog());
+            var account = MakeAccount(Path.Combine(root, "repos"));
+            store.Save(account, "token-1234567890"); // the vault feeds the VM its token
+            _lister.Repositories = [Repo("alpha"), Repo("bravo")];
+
+            var vm = CreateViewModel(account: account, vault: vault, store: store);
+            await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+            await vm.LoadReposCommand.ExecuteAsync(null);
+
+            await vm.SyncCommand.ExecuteAsync(null);
+
+            Account recorded = Assert.Single(store.GetAll());
+            Assert.NotNull(recorded.LastSyncUtc);
+            Assert.NotNull(recorded.LastSyncSummary);
+            Assert.StartsWith("Finished", recorded.LastSyncSummary);
+            Assert.Contains("2 cloned", recorded.LastSyncSummary);
+            Assert.Equal(vm.StatusText, recorded.LastSyncSummary);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task Sync_QuickSync_DoesNotRecordOnTheStore()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var vault = new InMemoryVault();
+            var store = new AccountsStore(vault, Path.Combine(root, "store"), new NullActivityLog());
+            store.Save(MakeAccount(Path.Combine(root, "repos")), "token-1234567890");
+            _lister.Repositories = [Repo("alpha")];
+
+            // Quick Sync: the shared store exists, but no account backs this workspace.
+            var vm = CreateViewModel(vault: vault, store: store);
+            vm.Organization = "acme";
+            vm.Token = "token-1234567890";
+            await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+            vm.TargetFolder = Path.Combine(root, "quick");
+            vm.MaxConcurrencyValue = 1;
+            await vm.LoadReposCommand.ExecuteAsync(null);
+
+            await vm.SyncCommand.ExecuteAsync(null);
+
+            Assert.Contains("1 cloned", vm.StatusText);
+            Account untouched = Assert.Single(store.GetAll());
+            Assert.Null(untouched.LastSyncUtc);
+            Assert.Null(untouched.LastSyncSummary);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task Sync_RecordSyncResultFailure_StillCompletesTheRun()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+        string storeDir = Path.Combine(root, "store");
+        try
+        {
+            var vault = new InMemoryVault();
+            var store = new AccountsStore(vault, storeDir, new NullActivityLog());
+            var account = MakeAccount(Path.Combine(root, "repos"));
+            store.Save(account, "token-1234567890");
+            _lister.Repositories = [Repo("alpha")];
+
+            var vm = CreateViewModel(account: account, vault: vault, store: store);
+            await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+            await vm.LoadReposCommand.ExecuteAsync(null);
+
+            // Break persistence: a file now squats on the store's directory path, so
+            // RecordSyncResult's write throws. The finished sync must shrug that off.
+            Directory.Delete(storeDir, recursive: true);
+            File.WriteAllText(storeDir, "not a directory");
+
+            await vm.SyncCommand.ExecuteAsync(null);
+
+            Assert.Equal("Finished: 1 cloned, 0 updated, 0 failed, 0 canceled of 1.", vm.StatusText);
+            Assert.True(vm.HasCompletedRun);
+            Assert.False(vm.IsRunning);
+            Assert.False(vm.HasFailedRepos);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     // ---------------------------------------------------------------- misc bindings

@@ -7,11 +7,14 @@ using gclo.Engine;
 namespace gclo.ViewModels;
 
 /// <summary>
-/// Drives the org-sync UI in two phases: <see cref="LoadReposCommand"/> fills the repository
-/// table, then <see cref="SyncCommand"/> clones or updates the selected subset with live
-/// per-repo progress. <see cref="RetryFailedCommand"/> re-runs just the failures.
+/// Drives one workspace of the org-sync UI in two phases: <see cref="LoadReposCommand"/>
+/// fills the repository table, then <see cref="SyncCommand"/> clones or updates the
+/// selected subset with live per-repo progress. <see cref="RetryFailedCommand"/> re-runs
+/// just the failures. A workspace is either backed by a saved <see cref="Account"/>
+/// (seeded from its profile, with each finished sync recorded back to the
+/// <see cref="AccountsStore"/>) or the ad-hoc Quick Sync mode when constructed without one.
 /// </summary>
-public sealed partial class MainViewModel : ObservableObject, IDisposable
+public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 {
     private readonly IRepositoryLister _lister;
     private readonly IGitClient _git;
@@ -19,6 +22,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly Func<Action<RepoProgress>, IProgress<RepoProgress>> _progressFactory;
     private readonly TimeSpan _orgLookupDebounce;
     private readonly IActivityLog _log;
+    private readonly Account? _account;
+    private readonly AccountsStore? _accountsStore;
     private readonly Dictionary<string, RepoItemViewModel> _itemsByName = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _orgLoadCts;
 
@@ -32,14 +37,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// Production dependencies by default; pass fakes for testing. The default progress
     /// factory is <see cref="Progress{T}"/>, which marshals via the SynchronizationContext
     /// captured at construction (the UI thread in the app); tests inject a synchronous one.
+    /// A non-null <paramref name="account"/> seeds the workspace from that profile — its
+    /// organization, target folder, subfolder preference, and concurrency — and pulls the
+    /// token from <paramref name="tokenVault"/> (the Token setter's org lookup fires
+    /// naturally); finished syncs are then recorded on <paramref name="accountsStore"/>.
     /// </summary>
-    public MainViewModel(
+    public WorkspaceViewModel(
         IRepositoryLister? lister = null,
         IGitClient? git = null,
         IOrganizationLister? orgLister = null,
         Func<Action<RepoProgress>, IProgress<RepoProgress>>? progressFactory = null,
         TimeSpan? orgLookupDebounce = null,
-        IActivityLog? log = null)
+        IActivityLog? log = null,
+        Account? account = null,
+        ITokenVault? tokenVault = null,
+        AccountsStore? accountsStore = null)
     {
         _lister = lister ?? new GitHubRepositoryLister();
         _git = git ?? new LibGit2GitClient();
@@ -47,13 +59,31 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _progressFactory = progressFactory ?? (handler => new Progress<RepoProgress>(handler));
         _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
         _log = log ?? new FileActivityLog();
+        _account = account;
+        _accountsStore = accountsStore;
         Organization = "";
         Token = "";
         TargetFolder = "";
         MaxConcurrency = AppSettings.DefaultConcurrency;
         StatusText = "";
         AllSelected = true;
+
+        if (account is not null)
+        {
+            Organization = account.Organization;
+            TargetFolder = account.TargetRoot;
+            CreateOrgSubfolder = account.CreateOrgSubfolder;
+            MaxConcurrency = account.MaxConcurrency;
+            // The Token setter's existing org lookup fires naturally with the vault token.
+            Token = tokenVault?.TryRetrieve(account.Id) ?? "";
+        }
     }
+
+    /// <summary>Id of the account this workspace was created for, or null for Quick Sync.</summary>
+    public Guid? AccountId => _account?.Id;
+
+    /// <summary>Name shown for this workspace in navigation: the account's name, or "Quick Sync".</summary>
+    public string DisplayName => _account?.Name ?? "Quick Sync";
 
     public ObservableCollection<RepoItemViewModel> Repos { get; } = new();
 
@@ -110,6 +140,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>True once a sync run has finished (successfully, canceled, or faulted).</summary>
     [ObservableProperty]
     public partial bool HasCompletedRun { get; set; }
+
+    /// <summary>True while any row is in the Failed state; drives the navigation badge.</summary>
+    [ObservableProperty]
+    public partial bool HasFailedRepos { get; set; }
 
     /// <summary>Column the table is currently sorted by, or null for load order.</summary>
     [ObservableProperty]
@@ -372,6 +406,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             NotifyTargetPathChanged();
             SyncCommand.NotifyCanExecuteChanged();
             RetryFailedCommand.NotifyCanExecuteChanged();
+            RecomputeHasFailedRepos();
         }
     }
 
@@ -419,6 +454,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.";
             StatusText = summaryText;
             _log.Info(summaryText);
+
+            if (_account is not null && _accountsStore is not null)
+            {
+                try
+                {
+                    _accountsStore.RecordSyncResult(_account.Id, DateTimeOffset.UtcNow, summaryText);
+                }
+                catch (Exception ex)
+                {
+                    // Bookkeeping only: failing to stamp the account must not turn a
+                    // completed sync into an error.
+                    _log.Error(
+                        $"Failed to record the sync result for account '{_account.Name}': {ex.Message}", ex);
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -609,5 +659,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             }
         }
         CompletedCount = completed;
+        RecomputeHasFailedRepos();
     }
+
+    private void RecomputeHasFailedRepos()
+        => HasFailedRepos = Repos.Any(r => r.Status == SyncStatus.Failed);
 }

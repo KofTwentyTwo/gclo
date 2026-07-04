@@ -5,7 +5,7 @@ using Microsoft.UI.Xaml.Media;
 
 namespace gclo;
 
-/// <summary>Static helpers for x:Bind function bindings in MainWindow.xaml.</summary>
+/// <summary>Static helpers for x:Bind function bindings in WorkspacePage.xaml.</summary>
 public static class StatusFormat
 {
     /// <summary>
