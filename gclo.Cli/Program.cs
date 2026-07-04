@@ -10,16 +10,22 @@ internal static class Program
 
         Usage:
           gclo sync --org <name> --target <folder> [options]
+          gclo sync --account <name> [options]
           gclo orgs [options]
+          gclo accounts [--json]
           gclo --version
           gclo --help
 
         Commands:
-          sync   Clone every repository of an organization; fast-forward ones that
-                 already exist locally.
-          orgs   List the account and organization logins the token can see.
+          sync      Clone every repository of an organization; fast-forward ones
+                    that already exist locally. '--account <name>' runs it with a
+                    saved account's settings and stored token.
+          orgs      List the account and organization logins the token can see.
+          accounts  List the saved accounts (name, organization, target root, last
+                    sync). Accounts are created in the gclo desktop app and are
+                    Windows-only.
 
-        Run 'gclo sync --help' or 'gclo orgs --help' for command options.
+        Run 'gclo <command> --help' (e.g. 'gclo sync --help') for command options.
 
         Token:
           There is deliberately no '--token <value>' option: command-line arguments
@@ -29,7 +35,9 @@ internal static class Program
             --token-file <path>  read the first non-blank line of a file
             --token-stdin        read one line from standard input
                                  (pipe it from a secret store)
-          When no token option is given, the GITHUB_TOKEN environment variable is used.
+          When no token option is given, the GITHUB_TOKEN environment variable is
+          used — except with 'gclo sync --account', which reads the account's token
+          from Windows Credential Manager instead. A token option always wins.
         """;
 
     public static async Task<int> Main(string[] args)
@@ -90,6 +98,8 @@ internal static class Program
                 return SyncCommand.RunAsync(rest, cancellationToken);
             case "orgs":
                 return OrgsCommand.RunAsync(rest, cancellationToken);
+            case "accounts":
+                return Task.FromResult(AccountsCommand.Run(rest));
             case "--help" or "-h" or "help":
                 Console.Out.WriteLine(RootHelp);
                 return Task.FromResult(0);

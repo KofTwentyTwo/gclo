@@ -27,7 +27,9 @@ and runs on Linux/macOS hosts with the .NET 10 SDK.
 gclo sync --org <name> --target <folder> [--parallel N] [--sanitize-paths]
           [--token-env VAR | --token-file PATH | --token-stdin]
           [--json] [--quiet]
+gclo sync --account <name> [same options — each one overrides the account value]
 gclo orgs [--token-env VAR | --token-file PATH | --token-stdin] [--json]
+gclo accounts [--json]
 gclo --version
 gclo --help            (each command also accepts --help)
 ```
@@ -128,6 +130,73 @@ A token that cannot list organizations (a fine-grained PAT, or a classic PAT
 without the `read:org` scope) still prints its own account login — you can pass
 any organization name to `gclo sync` manually.
 
+## Accounts
+
+An *account* is a saved sync profile: a name, an organization, a target root
+folder, a parallelism setting, an org-subfolder preference, and a token stored
+in **Windows Credential Manager** (under `gclo:account:<id>`; the metadata file,
+`%LOCALAPPDATA%\gclo\accounts.json`, never contains the token). Accounts are
+created and edited in the gclo desktop app's account wizard for now — a CLI
+flag for creating accounts is planned.
+
+> **Windows-only.** Because the token lives in Windows Credential Manager,
+> `gclo accounts` and `gclo sync --account` exit with code 2 on Linux/macOS.
+> Plain `gclo sync` and `gclo orgs` work everywhere.
+
+### `gclo accounts`
+
+Lists the saved accounts, one per line, in aligned columns: name, organization,
+target root, and last sync time (local time, `never` when the account has not
+completed a sync yet):
+
+```
+work      contoso   C:\src\contoso   2026-07-04 09:12
+personal  octocat   D:\mirror        never
+```
+
+With `--json` it prints a single-line JSON array instead; `lastSync` is the UTC
+timestamp of the last completed sync, or `null`:
+
+```json
+[{"name":"work","organization":"contoso","targetRoot":"C:\\src\\contoso","lastSync":"2026-07-04T14:12:03+00:00"},{"name":"personal","organization":"octocat","targetRoot":"D:\\mirror","lastSync":null}]
+```
+
+When no accounts exist yet, stdout stays empty (`--json` prints `[]`) and a
+hint goes to stderr; the exit code is still 0.
+
+### `gclo sync --account <name>`
+
+Runs a sync with the account's settings and its stored token — no `--org`,
+`--target`, or token option needed:
+
+```powershell
+gclo sync --account work
+```
+
+Account values are **defaults**; any explicit option overrides them:
+
+| Setting | Account value | Overridden by |
+| --- | --- | --- |
+| Organization | the account's organization | `--org` |
+| Target folder | the account's target root — plus an `\<organization>` subfolder when the account opts into one | `--target` (used verbatim; no subfolder is appended) |
+| Parallelism | the account's max concurrency | `--parallel` |
+| Token | the Windows Credential Manager entry | `--token-env`, `--token-file`, or `--token-stdin` |
+
+Notes:
+
+- When the account opts into an organization subfolder and you override
+  `--org`, the subfolder follows the *effective* organization:
+  `<targetRoot>\<org>`.
+- When the run completes (exit code 0 or 1, including a canceled run), the
+  time and the summary line are recorded on the account — `gclo accounts` and
+  the desktop app show them as the last sync.
+- An unknown account name exits with code 2 and lists the available account
+  names on stderr.
+- An account whose Credential Manager entry is missing (deleted, or the
+  profile moved to another machine — the entry does not roam) exits with
+  code 2. Re-enter the token in the desktop app's account wizard, restore the
+  `gclo:account:<id>` credential manually, or pass a token option for this run.
+
 ## Providing the token
 
 gclo needs a GitHub Personal Access Token for both the API and the git transport.
@@ -149,6 +218,10 @@ gclo needs a GitHub Personal Access Token for both the API and the git transport
 The options are mutually exclusive. A missing or empty token prints an error to
 stderr and exits with code 2.
 
+With `gclo sync --account`, the default source is the account's token in
+Windows Credential Manager instead of `GITHUB_TOKEN`; any token option above
+still wins for that run (the stored token is left untouched).
+
 ## Activity log
 
 Every invocation appends to a daily activity log file, `gclo-yyyy-MM-dd.log`,
@@ -164,7 +237,7 @@ else on disk; see [SECURITY.md](../SECURITY.md).
 | --- | --- |
 | 0 | Everything succeeded. |
 | 1 | The run completed, but some repositories failed or the run was canceled (Ctrl+C). |
-| 2 | Fatal: bad arguments, missing/empty/rejected token, or organization not found. |
+| 2 | Fatal: bad arguments, missing/empty/rejected token, organization not found, unknown account, missing account token, or an account command on a non-Windows OS. |
 
 A repository recovered by `--sanitize-paths` counts as a success: if every other
 repository also succeeds, the exit code is `0`.
@@ -199,6 +272,18 @@ if ($LASTEXITCODE -ne 0) { Write-Error "sync ended with code $LASTEXITCODE" }
 
 # Legacy repos with Windows-invalid paths: rename/skip them instead of failing
 gclo sync --org contoso --target C:\src\contoso --sanitize-paths
+
+# Saved accounts (created in the desktop app; Windows only)
+gclo accounts                              # name, organization, target root, last sync
+gclo sync --account work                   # settings and token come from the account
+gclo sync --account work --parallel 16     # explicit options override account values
+gclo sync --account work --org other-org   # same target root, different organization
+
+# Nightly job over every account
+gclo accounts --json | ConvertFrom-Json | ForEach-Object {
+  gclo sync --account $_.name --quiet
+  if ($LASTEXITCODE -ne 0) { Write-Error "sync of '$($_.name)' ended with code $LASTEXITCODE" }
+}
 ```
 
 ### bash
