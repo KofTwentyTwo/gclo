@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="gclo.SplashOverlay"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Brand splash, rendered as a full-window overlay INSIDE the main window: a
+         separate splash Window is a UIA crash hazard (assistive tech or UI automation
+         querying it mid-close takes down the process with a stowed exception), while
+         an overlay is ordinary XAML churn. Deliberately single-theme: the gradient and
+         white type ARE the brand look in both OS themes; the root requests Dark so
+         theme-resource-driven control parts (the ProgressBar) match the palette. -->
+    <Grid
+        x:Name="SplashRoot"
+        RequestedTheme="Dark"
+        AutomationProperties.Name="gclo is starting">
+        <Grid.Background>
+            <!-- The app icon's palette, run diagonally for a little depth. -->
+            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Offset="0" Color="#3B4CCA" />
+                <GradientStop Offset="1" Color="#2A2F8F" />
+            </LinearGradientBrush>
+        </Grid.Background>
+
+        <Grid.Resources>
+            <Storyboard x:Name="FadeOut">
+                <DoubleAnimation
+                    Storyboard.TargetName="SplashRoot"
+                    Storyboard.TargetProperty="Opacity"
+                    To="0"
+                    Duration="0:0:0.25" />
+            </Storyboard>
+        </Grid.Resources>
+
+        <StackPanel
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center">
+            <FontIcon
+                Glyph="&#xE895;"
+                FontSize="56"
+                Foreground="White"
+                HorizontalAlignment="Center"
+                Margin="0,0,0,16" />
+            <TextBlock
+                Text="gclo"
+                FontFamily="Segoe UI Variable Display"
+                FontWeight="SemiBold"
+                FontSize="40"
+                Foreground="White"
+                HorizontalAlignment="Center" />
+            <TextBlock
+                Text="Git Clone Large Organizations"
+                FontSize="14"
+                Foreground="White"
+                Opacity="0.8"
+                HorizontalAlignment="Center"
+                Margin="0,4,0,0" />
+            <TextBlock
+                x:Name="VersionText"
+                FontSize="12"
+                Foreground="White"
+                Opacity="0.6"
+                HorizontalAlignment="Center"
+                Margin="0,8,0,0" />
+        </StackPanel>
+
+        <!-- Thin activity strip: white bar over a 20% white track; the track-height
+             resource is overridden so the track matches the 3px bar. -->
+        <ProgressBar
+            IsIndeterminate="True"
+            Height="3"
+            MinHeight="3"
+            Foreground="White"
+            Background="#33FFFFFF"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Bottom"
+            Margin="0,0,0,20">
+            <ProgressBar.Resources>
+                <x:Double x:Key="ProgressBarTrackHeight">3</x:Double>
+            </ProgressBar.Resources>
+        </ProgressBar>
+    </Grid>
+</UserControl>

@@ -78,6 +78,30 @@ jobs:
           path: TestResults/**/coverage.cobertura.xml
           if-no-files-found: warn
 
+  ui-tests:
+    # End-to-end FlaUI/UIA tests against the real gclo.exe. Not in the branch
+    # ruleset's required checks yet: hosted-runner UIA is new here, so this job
+    # earns required status by proving itself stable first.
+    name: UI end-to-end tests (x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      # Self-contained Windows App SDK: hosted runners do not have the runtime
+      # installed. The output path is the same one AppSession resolves by default.
+      - name: Build app (unpackaged, self-contained Windows App SDK)
+        run: dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true
+
+      - name: Run UI tests
+        run: dotnet test gclo.UiTests/gclo.UiTests.csproj
+
   format:
     name: Format (style gate)
     runs-on: windows-latest

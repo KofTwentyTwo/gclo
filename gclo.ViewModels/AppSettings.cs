@@ -4,9 +4,10 @@ using System.Text.Json.Serialization;
 namespace gclo.ViewModels;
 
 /// <summary>
-/// User preferences persisted as JSON at %LOCALAPPDATA%\gclo\settings.json.
-/// Uses Environment.GetFolderPath (not Windows.Storage.ApplicationData) so the same
-/// path works whether the app runs packaged or unpackaged.
+/// User preferences persisted as JSON at settings.json under
+/// <see cref="GcloPaths.DataRoot"/> (default %LOCALAPPDATA%\gclo, overridable via
+/// GCLO_DATA_DIR). Uses Environment.GetFolderPath (not Windows.Storage.ApplicationData)
+/// so the same path works whether the app runs packaged or unpackaged.
 /// </summary>
 public sealed class AppSettings
 {
@@ -23,10 +24,7 @@ public sealed class AppSettings
     /// <summary>App theme: "System", "Light", or "Dark". Unknown values fall back to "System".</summary>
     public string Theme { get; set; } = "System";
 
-    private static string SettingsPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "gclo",
-        "settings.json");
+    private static string SettingsPath => Path.Combine(GcloPaths.DataRoot, "settings.json");
 
     /// <summary>
     /// Loads settings from disk. Never throws: a missing, corrupt, or unreadable file

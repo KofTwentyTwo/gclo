@@ -1,0 +1,6 @@
+# Analyzer tuning local to gclo.UiTests (inherits the repo root .editorconfig).
+# Mirrors the gclo.Engine.Tests suppressions, which are keyed to that project's
+# path in the root file and therefore do not reach this one.
+[*.cs]
+# CA1707: xunit's Method_Scenario_Expectation naming uses underscores by convention.
+dotnet_diagnostic.CA1707.severity = none

@@ -28,6 +28,7 @@
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Text="Step 1 of 4: Identity" />
             <TextBox
+                AutomationProperties.AutomationId="WizardNameBox"
                 Header="Account name"
                 PlaceholderText="e.g. Work – Acme"
                 Text="{x:Bind ViewModel.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
@@ -53,6 +54,7 @@
                 Text="Step 2 of 4: Access token" />
             <PasswordBox
                 x:Name="TokenBox"
+                AutomationProperties.AutomationId="WizardTokenBox"
                 Header="Personal access token"
                 PlaceholderText="ghp_…"
                 PasswordChanged="TokenBox_PasswordChanged" />
@@ -94,6 +96,7 @@
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Text="Step 3 of 4: Organization" />
             <ComboBox
+                AutomationProperties.AutomationId="WizardOrgBox"
                 HorizontalAlignment="Stretch"
                 Header="Organization or account"
                 IsEditable="True"
@@ -116,6 +119,7 @@
                 </Grid.ColumnDefinitions>
                 <TextBox
                     Grid.Column="0"
+                    AutomationProperties.AutomationId="WizardTargetBox"
                     Header="Target folder"
                     PlaceholderText="C:\src\my-org"
                     Text="{x:Bind ViewModel.TargetRoot, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />

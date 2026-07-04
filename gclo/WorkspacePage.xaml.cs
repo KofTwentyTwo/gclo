@@ -206,8 +206,8 @@ namespace gclo
             }
 
             var dialog = new PathRecoveryDialog(item.Name, paths) { XamlRoot = XamlRoot };
-            await dialog.ShowAsync();
-            return dialog.Result;
+            await DialogGuard.ShowAsync(dialog);
+            return dialog.Result; // blocked by another open dialog reads as dismissed
         }
 
         // PasswordBox does not support reliable two-way x:Bind on Password;

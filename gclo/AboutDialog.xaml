@@ -21,6 +21,7 @@
                     TextWrapping="Wrap" />
                 <TextBlock
                     x:Name="VersionText"
+                    AutomationProperties.AutomationId="AboutVersionText"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
 

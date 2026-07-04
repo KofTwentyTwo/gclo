@@ -21,18 +21,18 @@
 
         <MenuBar Grid.Row="0">
             <MenuBarItem Title="File" AccessKey="F">
-                <MenuFlyoutItem Text="Settings…" AccessKey="S" Click="SettingsMenuItem_Click" />
+                <MenuFlyoutItem Text="Settings…" AccessKey="S" AutomationProperties.AutomationId="MenuSettings" Click="SettingsMenuItem_Click" />
                 <MenuFlyoutSeparator />
-                <MenuFlyoutItem Text="Exit" AccessKey="X" Click="ExitMenuItem_Click" />
+                <MenuFlyoutItem Text="Exit" AccessKey="X" AutomationProperties.AutomationId="MenuExit" Click="ExitMenuItem_Click" />
             </MenuBarItem>
             <MenuBarItem Title="View" AccessKey="V">
-                <MenuFlyoutItem Text="Activity log…" AccessKey="A" Click="ActivityLogMenuItem_Click" />
+                <MenuFlyoutItem Text="Activity log…" AccessKey="A" AutomationProperties.AutomationId="MenuActivityLog" Click="ActivityLogMenuItem_Click" />
             </MenuBarItem>
             <MenuBarItem Title="Help" AccessKey="H">
                 <MenuFlyoutItem Text="View on GitHub" AccessKey="G" Click="GitHubMenuItem_Click" />
-                <MenuFlyoutItem Text="Check for updates…" AccessKey="C" Click="CheckForUpdatesMenuItem_Click" />
+                <MenuFlyoutItem Text="Check for updates…" AccessKey="C" AutomationProperties.AutomationId="MenuCheckUpdates" Click="CheckForUpdatesMenuItem_Click" />
                 <MenuFlyoutSeparator />
-                <MenuFlyoutItem Text="About gclo…" AccessKey="A" Click="AboutMenuItem_Click">
+                <MenuFlyoutItem Text="About gclo…" AccessKey="A" AutomationProperties.AutomationId="MenuAbout" Click="AboutMenuItem_Click">
                     <MenuFlyoutItem.KeyboardAccelerators>
                         <KeyboardAccelerator Key="F1" />
                     </MenuFlyoutItem.KeyboardAccelerators>
@@ -45,6 +45,7 @@
              Content hosts the selected workspace's cached WorkspacePage. -->
         <NavigationView
             x:Name="WorkspaceNav"
+            AutomationProperties.AutomationId="WorkspaceNav"
             Grid.Row="1"
             PaneDisplayMode="Left"
             IsBackButtonVisible="Collapsed"
@@ -52,7 +53,10 @@
             OpenPaneLength="240"
             SelectionChanged="WorkspaceNav_SelectionChanged">
             <NavigationView.MenuItems>
-                <NavigationViewItem x:Name="QuickSyncNavItem" Content="Quick Sync">
+                <NavigationViewItem
+                    x:Name="QuickSyncNavItem"
+                    AutomationProperties.AutomationId="NavQuickSync"
+                    Content="Quick Sync">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE945;" />
                     </NavigationViewItem.Icon>
@@ -62,6 +66,7 @@
             <NavigationView.FooterMenuItems>
                 <NavigationViewItem
                     x:Name="SyncAllNavItem"
+                    AutomationProperties.AutomationId="NavSyncAll"
                     Content="Sync all"
                     Tag="syncall"
                     IsEnabled="False">
@@ -69,12 +74,22 @@
                         <FontIcon Glyph="&#xE895;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Add account" Tag="add">
+                <NavigationViewItem
+                    AutomationProperties.AutomationId="NavAddAccount"
+                    Content="Add account"
+                    Tag="add">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE710;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
         </NavigationView>
+
+        <!-- Branded startup splash: covers the whole window until MainWindow dismisses
+             it (fade + removal). An overlay, not a second Window — see SplashOverlay. -->
+        <local:SplashOverlay
+            x:Name="StartupSplash"
+            Grid.Row="0"
+            Grid.RowSpan="2" />
     </Grid>
 </Window>
