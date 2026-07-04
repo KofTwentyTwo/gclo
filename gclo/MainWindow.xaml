@@ -78,6 +78,7 @@
                 Height="20"
                 Margin="0,0,0,8"
                 VerticalAlignment="Bottom"
+                AutomationProperties.Name="Loading organizations"
                 IsActive="{x:Bind ViewModel.IsLoadingOrgs, Mode=OneWay}" />
         </Grid>
 
@@ -134,6 +135,7 @@
                 Width="20"
                 Height="20"
                 VerticalAlignment="Center"
+                AutomationProperties.Name="Loading repositories"
                 IsActive="{x:Bind ViewModel.IsLoadingRepos, Mode=OneWay}" />
             <Button
                 MinWidth="110"
@@ -163,9 +165,12 @@
             </Grid.ColumnDefinitions>
             <StackPanel Grid.Column="0" Spacing="4">
                 <ProgressBar
+                    AutomationProperties.Name="Overall sync progress"
                     Maximum="{x:Bind ViewModel.TotalCount, Mode=OneWay}"
                     Value="{x:Bind ViewModel.CompletedCount, Mode=OneWay}" />
                 <TextBlock
+                    x:Name="StatusTextBlock"
+                    AutomationProperties.LiveSetting="Polite"
                     Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     TextWrapping="Wrap" />
@@ -191,6 +196,7 @@
                 Padding="0"
                 VerticalAlignment="Center"
                 ToolTipService.ToolTip="Select all"
+                AutomationProperties.Name="Select all repositories"
                 IsChecked="{x:Bind ViewModel.AllSelected, Mode=TwoWay}" />
             <Button
                 Grid.Column="1"
@@ -275,6 +281,7 @@
                             MinWidth="0"
                             Padding="0"
                             VerticalAlignment="Center"
+                            AutomationProperties.Name="{x:Bind Name, Mode=OneTime}"
                             IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
                         <TextBlock
                             Grid.Row="0"
@@ -289,9 +296,16 @@
                             Margin="0,0,12,0"
                             VerticalAlignment="Center"
                             Spacing="2">
-                            <TextBlock
-                                Text="{x:Bind StatusText, Mode=OneWay}"
-                                Foreground="{x:Bind local:StatusFormat.BrushFor(Status), Mode=OneWay}" />
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon
+                                    FontSize="12"
+                                    VerticalAlignment="Center"
+                                    Glyph="{x:Bind local:StatusFormat.GlyphFor(Status), Mode=OneWay}"
+                                    Foreground="{x:Bind local:StatusFormat.BrushFor(Status), Mode=OneWay}" />
+                                <TextBlock
+                                    Text="{x:Bind StatusText, Mode=OneWay}"
+                                    Foreground="{x:Bind local:StatusFormat.BrushFor(Status), Mode=OneWay}" />
+                            </StackPanel>
                             <ProgressBar
                                 Maximum="1"
                                 Value="{x:Bind ProgressValue, Mode=OneWay}"
@@ -318,7 +332,7 @@
                             Grid.Column="0"
                             Grid.ColumnSpan="5"
                             TextWrapping="Wrap"
-                            Foreground="Crimson"
+                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                             Text="{x:Bind Error, Mode=OneWay}"
                             Visibility="{x:Bind local:StatusFormat.VisibleIf(HasError), Mode=OneWay}" />
                         <HyperlinkButton
@@ -327,6 +341,7 @@
                             Grid.ColumnSpan="5"
                             Padding="0"
                             HorizontalAlignment="Left"
+                            AutomationProperties.Name="{x:Bind local:StatusFormat.ResolveAutomationName(Name), Mode=OneTime}"
                             Content="Resolve…"
                             Command="{Binding DataContext.ResolvePathsCommand, ElementName=RepoListView}"
                             CommandParameter="{x:Bind}"

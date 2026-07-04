@@ -177,6 +177,42 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public async Task Sync_RepoFailure_RaisesAssistiveAnnouncement()
+    {
+        _git.CloneHandler = (url, path, token, onProgress, ct) =>
+            Path.GetFileName(path) == "bravo"
+                ? Task.FromException(new InvalidOperationException("boom"))
+                : Task.CompletedTask;
+
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+        var announcements = new List<string>();
+        vm.AnnouncementRequested += announcements.Add;
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        var announcement = Assert.Single(announcements);
+        Assert.Contains("bravo", announcement);
+        Assert.Contains("failed", announcement);
+        Assert.Contains("boom", announcement);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task Sync_AllSucceed_RaisesNoAnnouncements()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+        var announcements = new List<string>();
+        vm.AnnouncementRequested += announcements.Add;
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.Empty(announcements);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
     public async Task Sync_CancelCommand_CancelsRun_AndReportsCanceled()
     {
         var gate = new TaskCompletionSource();
