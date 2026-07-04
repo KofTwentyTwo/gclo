@@ -1,4 +1,4 @@
-using System.Reflection;
+using gclo.Engine;
 
 namespace gclo.Cli;
 
@@ -102,16 +102,7 @@ internal static class Program
     }
 
     private static string Version()
-    {
-        Assembly assembly = typeof(Program).Assembly;
-        string version =
-            assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-            ?? assembly.GetName().Version?.ToString()
-            ?? "unknown";
-
-        // Strip the '+<metadata>' suffix (e.g. a SourceLink commit hash); it is
-        // noise for a scripted version check.
-        int plus = version.IndexOf('+');
-        return plus >= 0 ? version[..plus] : version;
-    }
+        // Shared with the GUI's About dialog: "0.1.0-beta.6 (9ac6c2b)" for
+        // releases, "0.1.0-dev (<hash>)" for local builds.
+        => BuildVersion.Describe(typeof(Program).Assembly);
 }

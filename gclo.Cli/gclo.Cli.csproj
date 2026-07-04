@@ -8,7 +8,6 @@
     <AssemblyName>gclo</AssemblyName>
     <RootNamespace>gclo.Cli</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <Version>0.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

@@ -18,29 +18,13 @@ namespace gclo
         }
 
         /// <summary>
-        /// Returns the app version formatted as "major.minor.build". Prefers the MSIX
-        /// package version; Package.Current throws when the app runs unpackaged
-        /// (no package identity), in which case the assembly version is used instead.
+        /// Returns the build identity synced to the release pipeline: the semantic
+        /// version CI injects for the tag (0.1.0-dev on local builds) plus the short
+        /// git commit, e.g. "0.1.0-beta.6 (9ac6c2b)". The MSIX package version is
+        /// deliberately not used — its numeric quad cannot carry prerelease tags or
+        /// commit hashes, so it cannot distinguish a local build from a release.
         /// </summary>
         private static string GetAppVersion()
-        {
-            try
-            {
-                var packageVersion = Windows.ApplicationModel.Package.Current.Id.Version;
-                return $"{packageVersion.Major}.{packageVersion.Minor}.{packageVersion.Build}";
-            }
-            catch (Exception)
-            {
-                Version? assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version;
-                if (assemblyVersion is null)
-                {
-                    return "1.0.0";
-                }
-
-                // Version.Build is -1 when the assembly version has fewer than three parts.
-                int build = assemblyVersion.Build < 0 ? 0 : assemblyVersion.Build;
-                return $"{assemblyVersion.Major}.{assemblyVersion.Minor}.{build}";
-            }
-        }
+            => gclo.Engine.BuildVersion.Describe(Assembly.GetExecutingAssembly());
     }
 }
