@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using gclo.Engine;
 using gclo.Services;
 using gclo.ViewModels;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -22,6 +23,11 @@ namespace gclo
     public sealed partial class MainWindow : Window
     {
         private const string RepoUrl = "https://github.com/KofTwentyTwo/gclo";
+
+        // Smallest logical (DPI-independent) size at which the workspace toolbar,
+        // connect card, and repo table remain usable.
+        private const int MinWindowWidth = 700;
+        private const int MinWindowHeight = 520;
 
         private readonly AppSettings _settings;
         private readonly UpdateService _updateService = new();
@@ -87,6 +93,16 @@ namespace gclo
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
             double scale = GetDpiForWindow(hwnd) / 96.0;
             AppWindow.Resize(new Windows.Graphics.SizeInt32((int)(1000 * scale), (int)(750 * scale)));
+
+            // Keep the window from shrinking below a usable workspace layout.
+            // PreferredMinimum* takes physical pixels like Resize (WinAppSDK 1.7+,
+            // present in the installed SDK). If a future SDK removes these
+            // properties, clamp instead from an AppWindow.Changed handler.
+            if (AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.PreferredMinimumWidth = (int)(MinWindowWidth * scale);
+                presenter.PreferredMinimumHeight = (int)(MinWindowHeight * scale);
+            }
 
             Closed += (_, _) => DisposeWorkspaces();
         }

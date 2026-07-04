@@ -20,19 +20,19 @@
         </Grid.RowDefinitions>
 
         <MenuBar Grid.Row="0">
-            <MenuBarItem Title="File">
-                <MenuFlyoutItem Text="Settings…" Click="SettingsMenuItem_Click" />
+            <MenuBarItem Title="File" AccessKey="F">
+                <MenuFlyoutItem Text="Settings…" AccessKey="S" Click="SettingsMenuItem_Click" />
                 <MenuFlyoutSeparator />
-                <MenuFlyoutItem Text="Exit" Click="ExitMenuItem_Click" />
+                <MenuFlyoutItem Text="Exit" AccessKey="X" Click="ExitMenuItem_Click" />
             </MenuBarItem>
-            <MenuBarItem Title="View">
-                <MenuFlyoutItem Text="Activity log…" Click="ActivityLogMenuItem_Click" />
+            <MenuBarItem Title="View" AccessKey="V">
+                <MenuFlyoutItem Text="Activity log…" AccessKey="A" Click="ActivityLogMenuItem_Click" />
             </MenuBarItem>
-            <MenuBarItem Title="Help">
-                <MenuFlyoutItem Text="View on GitHub" Click="GitHubMenuItem_Click" />
-                <MenuFlyoutItem Text="Check for updates…" Click="CheckForUpdatesMenuItem_Click" />
+            <MenuBarItem Title="Help" AccessKey="H">
+                <MenuFlyoutItem Text="View on GitHub" AccessKey="G" Click="GitHubMenuItem_Click" />
+                <MenuFlyoutItem Text="Check for updates…" AccessKey="C" Click="CheckForUpdatesMenuItem_Click" />
                 <MenuFlyoutSeparator />
-                <MenuFlyoutItem Text="About gclo…" Click="AboutMenuItem_Click">
+                <MenuFlyoutItem Text="About gclo…" AccessKey="A" Click="AboutMenuItem_Click">
                     <MenuFlyoutItem.KeyboardAccelerators>
                         <KeyboardAccelerator Key="F1" />
                     </MenuFlyoutItem.KeyboardAccelerators>

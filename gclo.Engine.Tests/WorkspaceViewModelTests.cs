@@ -21,6 +21,17 @@ public sealed class WorkspaceViewModelTests
         public void Report(RepoProgress value) => handler(value);
     }
 
+    /// <summary>A lister that blocks until the test releases <see cref="Gate"/>.</summary>
+    private sealed class GatedLister : IRepositoryLister
+    {
+        public TaskCompletionSource<IReadOnlyList<RepoDescriptor>> Gate { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IReadOnlyList<RepoDescriptor>> ListOrganizationRepositoriesAsync(
+            string organization, string token, CancellationToken cancellationToken = default)
+            => Gate.Task;
+    }
+
     private WorkspaceViewModel CreateViewModel(
         TimeSpan? debounce = null,
         Account? account = null,
@@ -129,6 +140,67 @@ public sealed class WorkspaceViewModelTests
         Assert.False(vm.SyncCommand.CanExecute(null));
     }
 
+    // ---------------------------------------------------------------- connect card state
+
+    [Fact]
+    public async Task HasLoadedRepos_TurnsOnAfterTheFirstSuccessfulLoad_Only()
+    {
+        _lister.ExceptionToThrow = new InvalidOperationException("org not found");
+        var vm = CreateViewModel();
+        vm.Organization = "acme";
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+        Assert.False(vm.HasLoadedRepos);
+
+        await vm.LoadReposCommand.ExecuteAsync(null);
+        Assert.False(vm.HasLoadedRepos); // a failed load keeps the connect card
+
+        _lister.ExceptionToThrow = null;
+        _lister.Repositories = [Repo("alpha")];
+        await vm.LoadReposCommand.ExecuteAsync(null);
+        Assert.True(vm.HasLoadedRepos);
+    }
+
+    [Fact]
+    public async Task CanEditInputs_LocksDuringLoad_AndDuringSync()
+    {
+        var lister = new GatedLister();
+        var vm = new WorkspaceViewModel(lister, _git, _orgs,
+            handler => new SyncProgress(handler),
+            TimeSpan.FromMilliseconds(1),
+            new NullActivityLog());
+        vm.Organization = "acme";
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+        vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+        vm.MaxConcurrencyValue = 1;
+        Assert.True(vm.CanEditInputs);
+
+        Task load = vm.LoadReposCommand.ExecuteAsync(null);
+        Assert.False(vm.CanEditInputs); // locked while listing
+        lister.Gate.SetResult([Repo("alpha")]);
+        await load;
+        Assert.True(vm.CanEditInputs);
+
+        var gate = new TaskCompletionSource();
+        int started = 0;
+        _git.CloneHandler = async (url, path, token, onProgress, ct) =>
+        {
+            Interlocked.Increment(ref started);
+            // CancellationToken.None: the gate must not be cancelable — the timeout is the safety valve.
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        };
+        Task run = vm.SyncCommand.ExecuteAsync(null);
+        await WaitUntilAsync(() => started > 0, "the run to start");
+        Assert.False(vm.CanEditInputs); // locked while syncing
+
+        gate.SetResult();
+        await run;
+        Assert.True(vm.CanEditInputs);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
     // ---------------------------------------------------------------- sync flow
 
     [Fact]
@@ -147,7 +219,7 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(SyncStatus.Queued, byName["bravo"].Status); // untouched by the run
         Assert.Equal(SyncStatus.Done, byName["charlie"].Status);
         Assert.Equal(2, vm.CompletedCount);
-        Assert.Equal(3, vm.TotalCount);
+        Assert.Equal(2, vm.TotalCount); // run-scoped (#22): the run set was 2, not the table's 3
         Assert.Contains("2 cloned", vm.StatusText);
         Assert.True(vm.HasCompletedRun);
         Assert.False(vm.IsRunning);
@@ -254,6 +326,67 @@ public sealed class WorkspaceViewModelTests
         Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
+    // ---------------------------------------------------------------- run-scoped progress
+
+    [Fact]
+    public async Task Sync_SubsetRun_ScopesProgressToTheRunSet()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
+        var byName = vm.Repos.ToDictionary(r => r.Name);
+        byName["bravo"].IsSelected = false;
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, vm.TotalCount); // the two selected rows, not the table's three (#22)
+        Assert.Equal(2, vm.CompletedCount);
+        Assert.Equal(SyncStatus.Queued, byName["bravo"].Status); // unselected row untouched
+
+        // The run size sticks until the next load resets the counters to the table.
+        await vm.LoadReposCommand.ExecuteAsync(null);
+        Assert.Equal(3, vm.TotalCount);
+        Assert.Equal(0, vm.CompletedCount);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    // ---------------------------------------------------------------- active strip
+
+    [Fact]
+    public async Task ActiveRepos_TracksInFlightRows_AndEmptiesWhenTheRunEnds()
+    {
+        var gateAlpha = new TaskCompletionSource();
+        var gateBravo = new TaskCompletionSource();
+        _git.CloneHandler = async (url, path, token, onProgress, ct) =>
+        {
+            Task gate = Path.GetFileName(path) == "alpha" ? gateAlpha.Task : gateBravo.Task;
+            // CancellationToken.None: the gates must not be cancelable — the timeout is the safety valve.
+            await gate.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        };
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo")); // concurrency 1
+        var byName = vm.Repos.ToDictionary(r => r.Name);
+        Assert.Empty(vm.ActiveRepos);
+
+        Task run = vm.SyncCommand.ExecuteAsync(null);
+        await WaitUntilAsync(
+            () => byName["alpha"].Status == SyncStatus.Cloning && vm.ActiveRepos.Count == 1,
+            "alpha to enter the active strip");
+        Assert.Equal("alpha", Assert.Single(vm.ActiveRepos).Name); // bounded by parallelism (1)
+
+        gateAlpha.SetResult();
+        await WaitUntilAsync(
+            () => byName["bravo"].Status == SyncStatus.Cloning && vm.ActiveRepos.Count == 1,
+            "alpha to leave and bravo to enter the active strip");
+        Assert.Equal("bravo", Assert.Single(vm.ActiveRepos).Name); // alpha was removed on Done
+
+        gateBravo.SetResult();
+        await run;
+
+        Assert.Empty(vm.ActiveRepos); // cleared when the run ends
+        Assert.All(vm.Repos, r => Assert.Equal(SyncStatus.Done, r.Status));
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
     // ---------------------------------------------------------------- retry failed
 
     [Fact]
@@ -282,8 +415,144 @@ public sealed class WorkspaceViewModelTests
         Assert.True(byName["bravo"].IsSelected); // retry selected exactly the failures
         Assert.False(byName["alpha"].IsSelected);
         Assert.False(byName["charlie"].IsSelected);
-        Assert.Equal(3, vm.CompletedCount);
+        Assert.Equal(1, vm.TotalCount); // run-scoped (#22): the retry run was just bravo
+        Assert.Equal(1, vm.CompletedCount);
         Assert.False(vm.RetryFailedCommand.CanExecute(null)); // nothing failed anymore
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    // ---------------------------------------------------------------- run results
+
+    [Fact]
+    public async Task Sync_AllSucceed_ReportsASuccessResult()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+        Assert.False(vm.ResultOpen); // nothing to show before the first run
+        Assert.Equal(RunResultKind.None, vm.ResultKind);
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.True(vm.ResultOpen);
+        Assert.Equal(RunResultKind.Success, vm.ResultKind);
+        Assert.Contains("2 cloned", vm.ResultMessage);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task Sync_WithAFailure_ReportsAPartialFailureResult()
+    {
+        _git.CloneHandler = (url, path, token, onProgress, ct) =>
+            Path.GetFileName(path) == "bravo"
+                ? Task.FromException(new InvalidOperationException("boom"))
+                : Task.CompletedTask;
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.True(vm.ResultOpen);
+        Assert.Equal(RunResultKind.PartialFailure, vm.ResultKind);
+        Assert.Contains("1 failed", vm.ResultMessage);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task Sync_Canceled_ReportsACanceledResult()
+    {
+        var gate = new TaskCompletionSource();
+        int started = 0;
+        _git.CloneHandler = async (url, path, token, onProgress, ct) =>
+        {
+            Interlocked.Increment(ref started);
+            // CancellationToken.None: the gate must not be cancelable — the timeout is the safety valve.
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+            ct.ThrowIfCancellationRequested();
+        };
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+
+        Task run = vm.SyncCommand.ExecuteAsync(null);
+        await WaitUntilAsync(() => started > 0, "first clone to start");
+        vm.SyncCancelCommand.Execute(null);
+        gate.SetResult();
+        await run;
+
+        Assert.True(vm.ResultOpen);
+        Assert.Equal(RunResultKind.Canceled, vm.ResultKind);
+        Assert.StartsWith("Canceled", vm.ResultMessage);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task Sync_RunLevelError_ReportsAnErrorResult()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        // A file squats on the target root, so the engine's CreateDirectory throws
+        // before any repository is processed.
+        Directory.CreateDirectory(Path.GetDirectoryName(vm.TargetFolder)!);
+        File.WriteAllText(vm.TargetFolder, "not a directory");
+        try
+        {
+            await vm.SyncCommand.ExecuteAsync(null);
+
+            Assert.True(vm.ResultOpen);
+            Assert.Equal(RunResultKind.Error, vm.ResultKind);
+            Assert.Equal(vm.StatusText, vm.ResultMessage); // the error line, verbatim
+            Assert.NotEmpty(vm.ResultMessage);
+            Assert.False(vm.IsRunning);
+        }
+        finally
+        {
+            File.Delete(vm.TargetFolder);
+        }
+    }
+
+    [Fact]
+    public async Task Sync_NextRun_ResetsTheResultSurface_WhileRunning()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        Assert.True(vm.ResultOpen);
+
+        var gate = new TaskCompletionSource();
+        int started = 0;
+        _git.CloneHandler = async (url, path, token, onProgress, ct) =>
+        {
+            Interlocked.Increment(ref started);
+            // CancellationToken.None: the gate must not be cancelable — the timeout is the safety valve.
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        };
+
+        Task run = vm.SyncCommand.ExecuteAsync(null);
+        await WaitUntilAsync(() => started > 0, "second run to start");
+
+        Assert.False(vm.ResultOpen); // the stale result is gone while the new run is live
+        Assert.Equal(RunResultKind.None, vm.ResultKind);
+        Assert.Equal("", vm.ResultMessage);
+
+        gate.SetResult();
+        await run;
+
+        Assert.True(vm.ResultOpen);
+        Assert.Equal(RunResultKind.Success, vm.ResultKind);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task LoadRepos_ClearsTheResultSurface()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        Assert.True(vm.ResultOpen);
+
+        await vm.LoadReposCommand.ExecuteAsync(null);
+
+        Assert.False(vm.ResultOpen);
+        Assert.Equal(RunResultKind.None, vm.ResultKind);
+        Assert.Equal("", vm.ResultMessage);
 
         Directory.Delete(vm.TargetFolder, recursive: true);
     }
@@ -357,6 +626,34 @@ public sealed class WorkspaceViewModelTests
         Assert.False(row.HasPathIssue);
         Assert.False(vm.ResolvePathsCommand.CanExecute(row)); // nothing left to resolve
         Assert.False(vm.RetryFailedCommand.CanExecute(null)); // nothing failed anymore
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task ResolvePaths_ShowsPulling_WhileTheRecoveryIsInFlight()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        var gate = new TaskCompletionSource();
+        _git.ApplyRecoveryHandler = async (_, _, _) =>
+            // CancellationToken.None: the gate must not be cancelable — the timeout is the safety valve.
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        RepoItemViewModel row = vm.Repos[0];
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(
+            new PathRecovery(new Dictionary<string, string>(), new HashSet<string>()));
+
+        Task resolve = vm.ResolvePathsCommand.ExecuteAsync(row);
+        await WaitUntilAsync(() => row.Status == SyncStatus.Pulling, "the in-flight recovery to show");
+
+        Assert.True(row.ShowProgress); // the row's indeterminate bar is visible
+        Assert.True(row.IsIndeterminate);
+
+        gate.SetResult();
+        await resolve;
+
+        Assert.Equal(SyncStatus.Done, row.Status);
 
         Directory.Delete(vm.TargetFolder, recursive: true);
     }
@@ -506,6 +803,31 @@ public sealed class WorkspaceViewModelTests
         Assert.True(vm.AllSelected);
     }
 
+    [Fact]
+    public async Task SelectedCount_AndSyncButtonLabel_FollowSelectionChanges()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
+        var raised = new List<string?>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        Assert.Equal(3, vm.SelectedCount);
+        Assert.Equal("Sync 3 repos", vm.SyncButtonLabel);
+
+        vm.Repos[0].IsSelected = false;
+        vm.Repos[1].IsSelected = false;
+        Assert.Equal(1, vm.SelectedCount);
+        Assert.Equal("Sync 1 repo", vm.SyncButtonLabel); // singular
+        Assert.Contains(nameof(WorkspaceViewModel.SyncButtonLabel), raised);
+
+        vm.Repos[2].IsSelected = false;
+        Assert.Equal(0, vm.SelectedCount);
+        Assert.Equal("Sync 0 repos", vm.SyncButtonLabel);
+
+        vm.AllSelected = true; // header toggle recomputes too
+        Assert.Equal(3, vm.SelectedCount);
+        Assert.Equal("Sync 3 repos", vm.SyncButtonLabel);
+    }
+
     // ---------------------------------------------------------------- sorting
 
     [Fact]
@@ -540,6 +862,80 @@ public sealed class WorkspaceViewModelTests
 
         // Done sorts before Failed; the two Done rows keep their load order (stable sort).
         Assert.Equal(["alpha", "charlie", "bravo"], vm.Repos.Select(r => r.Name));
+    }
+
+    // ---------------------------------------------------------------- filtering
+
+    [Fact]
+    public async Task FilteredRepos_DefaultAll_MirrorsTheTableAfterLoad()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+
+        Assert.Equal(RepoFilter.All, vm.Filter);
+        Assert.Equal(vm.Repos, vm.FilteredRepos);
+    }
+
+    [Fact]
+    public async Task Filter_RebuildsFilteredRepos_PerMode()
+    {
+        var vm = await CreateLoadedViewModelAsync(
+            Repo("alpha"), Repo("bravo"), Repo("charlie"), Repo("delta"));
+        var byName = vm.Repos.ToDictionary(r => r.Name);
+        byName["alpha"].Status = SyncStatus.Failed;
+        byName["bravo"].Status = SyncStatus.Cloning;
+        byName["charlie"].Status = SyncStatus.Pulling;
+        // delta stays Queued
+
+        vm.Filter = RepoFilter.Active;
+        Assert.Equal(["bravo", "charlie"], vm.FilteredRepos.Select(r => r.Name));
+
+        vm.Filter = RepoFilter.Failed;
+        Assert.Equal(["alpha"], vm.FilteredRepos.Select(r => r.Name));
+
+        vm.Filter = RepoFilter.Pending;
+        Assert.Equal(["delta"], vm.FilteredRepos.Select(r => r.Name));
+
+        vm.Filter = RepoFilter.All;
+        Assert.Equal(["alpha", "bravo", "charlie", "delta"], vm.FilteredRepos.Select(r => r.Name));
+    }
+
+    [Fact]
+    public async Task Filter_WithNoMatchingRows_LeavesFilteredReposEmpty()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+
+        vm.Filter = RepoFilter.Failed; // nothing has failed
+
+        Assert.Empty(vm.FilteredRepos);
+        Assert.NotEmpty(vm.Repos); // the empty-filter hint case: rows exist, none match
+    }
+
+    [Fact]
+    public async Task FilteredRepos_FollowsTerminalTransitions_AcrossARun()
+    {
+        _git.CloneHandler = (url, path, token, onProgress, ct) =>
+            Path.GetFileName(path) == "bravo"
+                ? Task.FromException(new InvalidOperationException("boom"))
+                : Task.CompletedTask;
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+        vm.Filter = RepoFilter.Failed;
+        Assert.Empty(vm.FilteredRepos);
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.Equal(["bravo"], vm.FilteredRepos.Select(r => r.Name));
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task FilteredRepos_PreservesTheTableSortOrder()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("bravo"), Repo("alpha"), Repo("charlie"));
+
+        vm.SortCommand.Execute("Name");
+
+        Assert.Equal(["alpha", "bravo", "charlie"], vm.FilteredRepos.Select(r => r.Name));
     }
 
     // ---------------------------------------------------------------- target preview
@@ -910,5 +1306,99 @@ public sealed class WorkspaceViewModelTests
         var item = new RepoItemViewModel(Repo("empty", branch: null));
 
         Assert.Equal("", item.BranchText);
+    }
+
+    [Fact]
+    public async Task ActiveFilter_FollowsNonTerminalTransitions_DuringARun()
+    {
+        var gate = new TaskCompletionSource();
+        _git.CloneHandler = async (_, _, _, _, _) =>
+            // CancellationToken.None: the gate must not be cancelable; the timeout is the safety valve.
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        vm.Filter = RepoFilter.Active;
+        Assert.Empty(vm.FilteredRepos); // nothing in flight yet
+
+        Task run = vm.SyncCommand.ExecuteAsync(null);
+        await WaitUntilAsync(
+            () => vm.FilteredRepos.Count == 1 && vm.FilteredRepos[0].Name == "alpha",
+            "the cloning row to enter the Active filter");
+
+        gate.SetResult();
+        await run;
+        Assert.Empty(vm.FilteredRepos); // done rows leave the Active view
+    }
+
+    /// <summary>A lister whose calls each await their own gate, in order.</summary>
+    private sealed class SequencedGatedLister : IRepositoryLister
+    {
+        public Queue<TaskCompletionSource<IReadOnlyList<RepoDescriptor>>> Gates { get; } = new();
+
+        public Task<IReadOnlyList<RepoDescriptor>> ListOrganizationRepositoriesAsync(
+            string organization, string token, CancellationToken cancellationToken = default)
+            => Gates.Dequeue().Task;
+    }
+
+    [Fact]
+    public async Task Sync_IsBlocked_WhileAReloadIsInFlight()
+    {
+        var lister = new SequencedGatedLister();
+        var first = new TaskCompletionSource<IReadOnlyList<RepoDescriptor>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource<IReadOnlyList<RepoDescriptor>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        lister.Gates.Enqueue(first);
+        lister.Gates.Enqueue(second);
+
+        var vm = new WorkspaceViewModel(lister, _git, _orgs,
+            handler => new SyncProgress(handler),
+            TimeSpan.FromMilliseconds(1),
+            new NullActivityLog());
+        vm.Organization = "acme";
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+        vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+
+        Task firstLoad = vm.LoadReposCommand.ExecuteAsync(null);
+        first.SetResult([Repo("alpha")]);
+        await firstLoad; // table populated, alpha selected
+        Assert.True(vm.SyncCommand.CanExecute(null));
+
+        Task reload = vm.LoadReposCommand.ExecuteAsync(null);
+        await WaitUntilAsync(() => vm.IsLoadingRepos, "the reload to start");
+        Assert.False(vm.SyncCommand.CanExecute(null));
+        Assert.False(vm.RetryFailedCommand.CanExecute(null));
+
+        second.SetResult([Repo("alpha")]);
+        await reload;
+        Assert.True(vm.SyncCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task PathRecovery_LocksOutEveryOtherGitEntryPoint_WhileInFlight()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        var gate = new TaskCompletionSource();
+        _git.ApplyRecoveryHandler = async (_, _, _) =>
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(
+            new PathRecovery(new Dictionary<string, string>(), new HashSet<string>()));
+
+        Task resolve = vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+        await WaitUntilAsync(() => vm.IsResolvingPaths, "the recovery to start");
+        Assert.False(vm.SyncCommand.CanExecute(null));
+        Assert.False(vm.LoadReposCommand.CanExecute(null));
+        Assert.False(vm.RetryFailedCommand.CanExecute(null));
+        Assert.False(vm.CanEditInputs);
+
+        gate.SetResult();
+        await resolve;
+        Assert.False(vm.IsResolvingPaths);
+        Assert.True(vm.SyncCommand.CanExecute(null));
+        Assert.True(vm.CanEditInputs);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 }

@@ -1,16 +1,20 @@
 using System;
+using System.ComponentModel;
 using System.IO;
 using System.Threading.Tasks;
 using gclo.Engine;
 using gclo.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 
 namespace gclo
 {
     /// <summary>
-    /// One sync workspace: inputs, the two-phase Load/Sync actions, overall progress,
-    /// and the per-repo table. Hosted by <see cref="MainWindow"/>'s navigation shell —
+    /// One sync workspace in two visual states: a centered connect card until the first
+    /// successful load, then a connection chip plus the hero repository table with its
+    /// attached toolbar (filter, options, refresh, sync), the pinned active strip, and
+    /// the results InfoBar. Hosted by <see cref="MainWindow"/>'s navigation shell —
     /// one instance per saved account plus one for the pinned Quick Sync entry. Pages
     /// (and their view models) are cached by the shell, so a running sync keeps going
     /// while another workspace is displayed.
@@ -37,16 +41,13 @@ namespace gclo
             InitializeComponent();
 
             ViewModel.AnnouncementRequested += AnnounceToAssistiveTechnology;
-            // LiveSetting alone does not announce: XAML never raises LiveRegionChanged
-            // automatically, so each StatusText update must raise it in code-behind.
-            ViewModel.PropertyChanged += (_, e) =>
-            {
-                if (e.PropertyName == nameof(WorkspaceViewModel.StatusText))
-                {
-                    // Enqueued so the binding has pushed the new text before the event.
-                    DispatcherQueue.TryEnqueue(RaiseStatusLiveRegionChanged);
-                }
-            };
+            ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+
+            // The chip's repo count, the toolbar's selection summary, and the
+            // empty-filter placeholder are set from code: they derive from collection
+            // counts, which raise no property change an x:Bind function could ride on.
+            ViewModel.Repos.CollectionChanged += (_, _) => UpdateDerivedTexts();
+            ViewModel.FilteredRepos.CollectionChanged += (_, _) => UpdateDerivedTexts();
 
             // The view model stays UI-free: when ResolvePathsCommand needs the user's
             // path-recovery choices, it calls back through here and the page answers
@@ -61,6 +62,11 @@ namespace gclo
             {
                 TokenBox.Password = ViewModel.Token;
             }
+
+            // SelectorBar starts with no selection; the view model's filter default is
+            // All, so select that item (the resulting SelectionChanged is a no-op set).
+            FilterSelectorBar.SelectedItem = FilterAllItem;
+            UpdateDerivedTexts();
         }
 
         /// <summary>
@@ -71,28 +77,91 @@ namespace gclo
                 ? "Create org subfolder"
                 : $"Create {organization.Trim()} subfolder";
 
-        /// <summary>
-        /// Header text for a sortable table column, with an arrow on the active sort column.
-        /// </summary>
-        public string SortHeader(string column, string? sortColumn, bool sortDescending)
-            => column == sortColumn ? column + (sortDescending ? " ▼" : " ▲") : column;
+        /// <summary>True when this workspace is backed by a saved account (vs Quick Sync).</summary>
+        public bool IsAccountWorkspace => ViewModel.AccountId is not null;
 
         /// <summary>
-        /// Visible while any repo in the table is Failed. The parameters are not read; they
-        /// are the x:Bind re-evaluation triggers — CompletedCount changes whenever a repo
-        /// finishes (including failures) and IsRunning changes when a run starts or ends,
-        /// which together cover every point where the set of failed items can change.
+        /// Whether the edit flyout's connection fields accept input: Quick Sync follows
+        /// <see cref="WorkspaceViewModel.CanEditInputs"/>; account workspaces are always
+        /// read-only here (their settings are edited in the account wizard).
         /// </summary>
-        public Visibility AnyFailedVisibility(int completedCount, bool isRunning)
+        public bool ConnectFieldsEnabled(bool canEditInputs)
+            => canEditInputs && ViewModel.AccountId is null;
+
+        /// <summary>
+        /// Sort-direction arrow (visual only; the header button's automation name
+        /// carries the state) for the active sort column: chevron up = ascending.
+        /// </summary>
+        public string SortGlyph(string column, string? sortColumn, bool sortDescending)
+            => column == sortColumn ? (sortDescending ? "" : "") : "";
+
+        /// <summary>Shows the sort arrow only on the column the table is sorted by.</summary>
+        public Visibility SortGlyphVisibility(string column, string? sortColumn)
+            => column == sortColumn ? Visibility.Visible : Visibility.Collapsed;
+
+        /// <summary>
+        /// Composed automation name for a sortable column header, e.g.
+        /// "Name, sorted ascending" or "Branch, not sorted".
+        /// </summary>
+        public string SortAutomationName(string column, string? sortColumn, bool sortDescending)
+            => column != sortColumn
+                ? $"{column}, not sorted"
+                : sortDescending
+                    ? $"{column}, sorted descending"
+                    : $"{column}, sorted ascending";
+
+        private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
-            foreach (RepoItemViewModel repo in ViewModel.Repos)
+            if (e.PropertyName == nameof(WorkspaceViewModel.StatusText))
             {
-                if (repo.Status == SyncStatus.Failed)
-                {
-                    return Visibility.Visible;
-                }
+                // LiveSetting alone does not announce: XAML never raises
+                // LiveRegionChanged automatically, so each StatusText update must raise
+                // it here. Enqueued so the binding has pushed the new text first.
+                DispatcherQueue.TryEnqueue(RaiseStatusLiveRegionChanged);
             }
-            return Visibility.Collapsed;
+            else if (e.PropertyName == nameof(WorkspaceViewModel.SelectedCount))
+            {
+                UpdateDerivedTexts();
+            }
+        }
+
+        /// <summary>
+        /// Refreshes the count-derived texts: the chip's repository count, the
+        /// toolbar's "N of M selected" summary, and the empty-filter placeholder.
+        /// </summary>
+        private void UpdateDerivedTexts()
+        {
+            ChipRepoCountText.Text = StatusFormat.RepoCountText(ViewModel.Repos.Count);
+            SelectionSummaryText.Text =
+                StatusFormat.SelectionSummary(ViewModel.SelectedCount, ViewModel.Repos.Count);
+            EmptyFilterText.Visibility =
+                ViewModel.FilteredRepos.Count == 0 && ViewModel.Repos.Count > 0
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+
+        private void FilterSelectorBar_SelectionChanged(
+            SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
+        {
+            if (sender.SelectedItem?.Tag is string tag && Enum.TryParse(tag, out RepoFilter filter))
+            {
+                ViewModel.Filter = filter;
+            }
+        }
+
+        // The chip's Edit link opens its attached flyout (HyperlinkButton has no
+        // Flyout property of its own).
+        private void EditButton_Click(object sender, RoutedEventArgs e)
+            => FlyoutBase.ShowAttachedFlyout((FrameworkElement)sender);
+
+        // PasswordBox has no reliable two-way binding, so the flyout's token box is
+        // synchronized on open; it then always shows the token in effect.
+        private void EditFlyout_Opening(object? sender, object e)
+        {
+            if (EditTokenBox.Password != ViewModel.Token)
+            {
+                EditTokenBox.Password = ViewModel.Token;
+            }
         }
 
         private void RaiseStatusLiveRegionChanged()
@@ -142,7 +211,8 @@ namespace gclo
         }
 
         // PasswordBox does not support reliable two-way x:Bind on Password;
-        // mirror it into the view model by hand.
+        // mirror it into the view model by hand (shared by the connect card's box
+        // and the edit flyout's box).
         private void TokenBox_PasswordChanged(object sender, RoutedEventArgs e)
         {
             ViewModel.Token = ((PasswordBox)sender).Password;
