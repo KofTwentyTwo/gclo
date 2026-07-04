@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Out-of-process UI smoke tests: FlaUI drives the built gclo.exe over UI
+       Automation, so this project deliberately has NO ProjectReference to the app.
+       Build the app first (dotnet build gclo/gclo.csproj -p:Platform=x64
+       -p:WindowsPackageType=None) or point GCLO_UITEST_EXE at an exe to test.
+       CI builds this project but only runs gclo.Engine.Tests; the UI suite is run
+       locally where an interactive desktop is available. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

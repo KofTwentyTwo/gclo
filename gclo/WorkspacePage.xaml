@@ -41,6 +41,7 @@
                     <StackPanel Spacing="12">
                         <PasswordBox
                             x:Name="TokenBox"
+                            AutomationProperties.AutomationId="ConnectTokenBox"
                             Header="Personal access token"
                             PlaceholderText="ghp_…"
                             PasswordChanged="TokenBox_PasswordChanged" />
@@ -55,6 +56,7 @@
                             </Grid.ColumnDefinitions>
                             <ComboBox
                                 Grid.Column="0"
+                                AutomationProperties.AutomationId="ConnectOrgBox"
                                 HorizontalAlignment="Stretch"
                                 Header="Organization or account"
                                 IsEditable="True"
@@ -77,11 +79,13 @@
                             </Grid.ColumnDefinitions>
                             <TextBox
                                 Grid.Column="0"
+                                AutomationProperties.AutomationId="ConnectTargetBox"
                                 Header="Target folder"
                                 PlaceholderText="C:\src\my-org"
                                 Text="{x:Bind ViewModel.TargetFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <Button
                                 Grid.Column="1"
+                                AutomationProperties.AutomationId="ConnectBrowseButton"
                                 VerticalAlignment="Bottom"
                                 Content="Browse…"
                                 Click="BrowseButton_Click" />
@@ -103,6 +107,7 @@
                     <StackPanel Orientation="Horizontal" Spacing="12">
                         <Button
                             MinWidth="140"
+                            AutomationProperties.AutomationId="LoadReposButton"
                             Style="{StaticResource AccentButtonStyle}"
                             Content="Load repositories"
                             Command="{x:Bind ViewModel.LoadReposCommand, Mode=OneTime}">
@@ -175,6 +180,7 @@
                     <HyperlinkButton
                         Padding="4,0"
                         VerticalAlignment="Center"
+                        AutomationProperties.AutomationId="ChipEditButton"
                         AutomationProperties.Name="Edit connection"
                         Content="Edit"
                         Click="EditButton_Click">
@@ -286,6 +292,7 @@
                     </Grid.ColumnDefinitions>
                     <SelectorBar
                         x:Name="FilterSelectorBar"
+                        AutomationProperties.AutomationId="RepoFilterBar"
                         Grid.Column="0"
                         VerticalAlignment="Center"
                         SelectionChanged="FilterSelectorBar_SelectionChanged">
@@ -306,6 +313,7 @@
                         Visibility="{x:Bind local:StatusFormat.VisibleIfNot(ViewModel.IsRunning), Mode=OneWay}">
                         <Button
                             x:Name="OptionsButton"
+                            AutomationProperties.AutomationId="SyncOptionsButton"
                             AutomationProperties.Name="Sync options"
                             ToolTipService.ToolTip="Sync options">
                             <FontIcon FontSize="16" Glyph="&#xE713;" />
@@ -340,6 +348,7 @@
                             </Button.Flyout>
                         </Button>
                         <Button
+                            AutomationProperties.AutomationId="RefreshButton"
                             Content="Refresh"
                             Command="{x:Bind ViewModel.LoadReposCommand, Mode=OneTime}">
                             <Button.KeyboardAccelerators>
@@ -348,6 +357,7 @@
                         </Button>
                         <Button
                             MinWidth="120"
+                            AutomationProperties.AutomationId="SyncButton"
                             Style="{StaticResource AccentButtonStyle}"
                             Content="{x:Bind ViewModel.SyncButtonLabel, Mode=OneWay}"
                             Command="{x:Bind ViewModel.SyncCommand, Mode=OneTime}">
@@ -371,6 +381,7 @@
                             VerticalAlignment="Center"
                             Text="{x:Bind local:StatusFormat.RunProgressText(ViewModel.CompletedCount, ViewModel.TotalCount), Mode=OneWay}" />
                         <Button
+                            AutomationProperties.AutomationId="CancelSyncButton"
                             Content="Cancel"
                             Command="{x:Bind ViewModel.SyncCancelCommand, Mode=OneTime}">
                             <Button.KeyboardAccelerators>
@@ -432,6 +443,7 @@
                 <!-- Run results: opens when a run ends, user-dismissable (two-way IsOpen). -->
                 <InfoBar
                     Grid.Row="2"
+                    AutomationProperties.AutomationId="ResultInfoBar"
                     Margin="0,8,0,0"
                     IsOpen="{x:Bind ViewModel.ResultOpen, Mode=TwoWay}"
                     Severity="{x:Bind local:StatusFormat.SeverityFor(ViewModel.ResultKind), Mode=OneWay}"
@@ -555,6 +567,7 @@
                      via ElementName (x:Bind inside the template is scoped to the row item). -->
                 <ListView
                     x:Name="RepoListView"
+                    AutomationProperties.AutomationId="RepoListView"
                     Grid.Row="4"
                     DataContext="{x:Bind ViewModel, Mode=OneTime}"
                     ItemsSource="{x:Bind ViewModel.FilteredRepos, Mode=OneTime}"
@@ -673,6 +686,7 @@
              the tree (with its name) so announcements keep working in both states. -->
         <TextBlock
             x:Name="StatusTextBlock"
+            AutomationProperties.AutomationId="StatusTextBlock"
             Grid.Row="1"
             AutomationProperties.LiveSetting="Polite"
             Style="{ThemeResource CaptionTextBlockStyle}"

@@ -66,7 +66,8 @@ namespace gclo
 
         public MainWindow()
         {
-            _log = new FileActivityLog();
+            _log = new FileActivityLog(System.IO.Path.Combine(GcloPaths.DataRoot, "logs"));
+            App.CrashLog = _log; // the unhandled-exception net now reaches the activity log
             _tokenVault = new CredentialManagerVault();
             _accountsStore = new AccountsStore(_tokenVault, log: _log);
 
@@ -109,7 +110,18 @@ namespace gclo
             }
 
             Closed += (_, _) => DisposeWorkspaces();
+
+            // Dismiss the startup splash overlay once it has been visible long enough
+            // to read as an intentional brand moment rather than a flicker.
+            DispatcherQueue.TryEnqueue(async () =>
+            {
+                await Task.Delay(MinimumSplashMilliseconds);
+                await StartupSplash.DismissAsync();
+            });
         }
+
+        /// <summary>Minimum splash display, so a fast startup never shows a flicker.</summary>
+        private const int MinimumSplashMilliseconds = 800;
 
         private void ApplySettings()
         {
@@ -389,7 +401,7 @@ namespace gclo
             {
                 XamlRoot = Content.XamlRoot,
             };
-            await dialog.ShowAsync();
+            await DialogGuard.ShowAsync(dialog);
             if (!dialog.Saved)
             {
                 return;
@@ -486,7 +498,7 @@ namespace gclo
                 DefaultButton = ContentDialogButton.Close,
                 XamlRoot = Content.XamlRoot,
             };
-            if (await confirm.ShowAsync() != ContentDialogResult.Primary)
+            if (await DialogGuard.ShowAsync(confirm) != ContentDialogResult.Primary)
             {
                 return;
             }
@@ -598,9 +610,9 @@ namespace gclo
             catch (Exception ex)
             {
                 // Unexpected only: the coordinator reports per-account trouble by
-                // skipping. (Also lands here when the summary dialog cannot open
-                // because another ContentDialog is showing; the activity log carries
-                // the per-account outcomes either way.)
+                // skipping, and DialogGuard turns a blocked summary dialog into a
+                // no-op instead of a throw; the activity log carries the
+                // per-account outcomes either way.
                 _log.Error($"Sync all did not finish cleanly: {ex.Message}", ex);
             }
             finally
@@ -651,7 +663,7 @@ namespace gclo
         private async void SettingsMenuItem_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new SettingsDialog(_settings) { XamlRoot = Content.XamlRoot };
-            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            if (await DialogGuard.ShowAsync(dialog) == ContentDialogResult.Primary)
             {
                 dialog.ApplyAndSave();
                 ApplySettings();
@@ -663,7 +675,7 @@ namespace gclo
         private async void ActivityLogMenuItem_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new LogViewerDialog(_log) { XamlRoot = Content.XamlRoot };
-            await dialog.ShowAsync();
+            await DialogGuard.ShowAsync(dialog);
         }
 
         private async void GitHubMenuItem_Click(object sender, RoutedEventArgs e)
@@ -674,7 +686,7 @@ namespace gclo
         private async void AboutMenuItem_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new AboutDialog { XamlRoot = Content.XamlRoot };
-            await dialog.ShowAsync();
+            await DialogGuard.ShowAsync(dialog);
         }
 
         private async void CheckForUpdatesMenuItem_Click(object sender, RoutedEventArgs e)
@@ -713,7 +725,7 @@ namespace gclo
                 DefaultButton = ContentDialogButton.Primary,
                 XamlRoot = Content.XamlRoot,
             };
-            if (await confirm.ShowAsync() != ContentDialogResult.Primary)
+            if (await DialogGuard.ShowAsync(confirm) != ContentDialogResult.Primary)
             {
                 return;
             }
@@ -736,7 +748,7 @@ namespace gclo
                 CloseButtonText = "OK",
                 XamlRoot = Content.XamlRoot,
             };
-            await dialog.ShowAsync();
+            await DialogGuard.ShowAsync(dialog);
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]

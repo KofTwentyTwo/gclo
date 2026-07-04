@@ -5,7 +5,8 @@ using gclo.Engine;
 namespace gclo.ViewModels;
 
 /// <summary>
-/// Persists account profiles as JSON at %LOCALAPPDATA%\gclo\accounts.json and their
+/// Persists account profiles as JSON at accounts.json under
+/// <see cref="GcloPaths.DataRoot"/> (default %LOCALAPPDATA%\gclo) and their
 /// tokens in an <see cref="ITokenVault"/>; the file holds metadata only and never a
 /// token. Unlike <see cref="AppSettings"/>, accounts are primary user data, so write
 /// failures in <see cref="Save"/>, <see cref="Delete"/>, and
@@ -22,17 +23,16 @@ public sealed class AccountsStore
 
     /// <summary>
     /// Loads existing accounts from <paramref name="directory"/> (default:
-    /// %LOCALAPPDATA%\gclo). A missing file simply means no accounts yet; a corrupt
-    /// or unreadable one is logged (pass the app's <paramref name="log"/> to surface
-    /// that) and treated as empty rather than blocking startup.
+    /// <see cref="GcloPaths.DataRoot"/>). A missing file simply means no accounts yet;
+    /// a corrupt or unreadable one is logged (pass the app's <paramref name="log"/> to
+    /// surface that) and treated as empty rather than blocking startup.
     /// </summary>
     public AccountsStore(ITokenVault vault, string? directory = null, IActivityLog? log = null)
     {
         ArgumentNullException.ThrowIfNull(vault);
         _vault = vault;
         _log = log ?? new NullActivityLog();
-        directory ??= Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "gclo");
+        directory ??= GcloPaths.DataRoot;
         _filePath = Path.Combine(directory, "accounts.json");
         _accounts = Load();
     }
