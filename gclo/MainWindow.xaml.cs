@@ -251,6 +251,18 @@ namespace gclo
                 {
                     OnWorkspaceStateChanged(id);
                 }
+                else if (e.PropertyName is nameof(WorkspaceViewModel.CompletedCount)
+                    && viewModel.IsRunning)
+                {
+                    // Live "N of M" on the running account's sidebar item, so a
+                    // sync-all pass shows progress without switching workspaces.
+                    if (_navItems.TryGetValue(id, out NavigationViewItem? item))
+                    {
+                        ToolTipService.SetToolTip(
+                            item,
+                            $"Syncing: {viewModel.CompletedCount} of {viewModel.TotalCount} repositories");
+                    }
+                }
             };
             viewModel.PropertyChanged += handler;
             _badgeHandlers[id] = handler;
@@ -285,8 +297,18 @@ namespace gclo
         }
 
         /// <summary>
-        /// Refreshes a workspace's pane badge (attention dot while running, critical dot
-        /// when it has failures) and, after a run, its tooltip from the stored summary.
+        /// Per-account queue states of the current (or most recent) sync-all pass;
+        /// cleared when the next pass starts. Rendered by
+        /// <see cref="OnWorkspaceStateChanged"/> whenever the account is not running.
+        /// </summary>
+        private readonly Dictionary<Guid, SyncAllAccountState> _syncAllStates = new();
+
+        /// <summary>
+        /// Refreshes a workspace's pane badge and, after a run, its tooltip from the
+        /// stored summary. Badge priority: a running sync always shows the attention
+        /// dot; otherwise the sync-all pass state (queued, succeeded with a check,
+        /// failed with the failure count, skipped) when one exists; otherwise the
+        /// standing critical dot for lingering failures.
         /// </summary>
         private void OnWorkspaceStateChanged(Guid id)
         {
@@ -298,10 +320,26 @@ namespace gclo
 
             WorkspaceViewModel viewModel = workspace.ViewModel;
             item.InfoBadge = viewModel.IsRunning
-                ? CreateDotBadge("AttentionDotInfoBadgeStyle", "SystemFillColorAttentionBrush")
-                : viewModel.HasFailedRepos
-                    ? CreateDotBadge("CriticalDotInfoBadgeStyle", "SystemFillColorCriticalBrush")
-                    : null;
+                ? CreateBadge("AttentionDotInfoBadgeStyle", "SystemFillColorAttentionBrush")
+                : _syncAllStates.TryGetValue(id, out SyncAllAccountState state)
+                    ? state switch
+                    {
+                        SyncAllAccountState.Queued =>
+                            CreateBadge("InformationalDotInfoBadgeStyle", "SystemFillColorSolidNeutralBrush"),
+                        SyncAllAccountState.Succeeded =>
+                            CreateBadge("SuccessIconInfoBadgeStyle", "SystemFillColorSuccessBrush"),
+                        SyncAllAccountState.Failed =>
+                            CreateBadge(
+                                "CriticalValueInfoBadgeStyle",
+                                "SystemFillColorCriticalBrush",
+                                viewModel.Repos.Count(r => r.Status == SyncStatus.Failed)),
+                        SyncAllAccountState.Skipped =>
+                            CreateBadge("CautionDotInfoBadgeStyle", "SystemFillColorCautionBrush"),
+                        _ => null, // Running is covered by IsRunning above
+                    }
+                    : viewModel.HasFailedRepos
+                        ? CreateBadge("CriticalDotInfoBadgeStyle", "SystemFillColorCriticalBrush")
+                        : null;
 
             // A finished run has stamped its outcome onto the account by now.
             if (!viewModel.IsRunning && id != Guid.Empty)
@@ -315,12 +353,17 @@ namespace gclo
         }
 
         /// <summary>
-        /// A value-less (dot) InfoBadge, styled by the WinUI dot-badge resource when
-        /// present, otherwise tinted directly from the matching theme fill brush.
+        /// An InfoBadge styled by the WinUI badge resource when present, otherwise
+        /// tinted directly from the matching theme fill brush. A non-null
+        /// <paramref name="value"/> makes it a numeric badge (e.g. failed count).
         /// </summary>
-        private static InfoBadge CreateDotBadge(string styleKey, string fallbackBrushKey)
+        private static InfoBadge CreateBadge(string styleKey, string fallbackBrushKey, int? value = null)
         {
             var badge = new InfoBadge();
+            if (value is int number)
+            {
+                badge.Value = number;
+            }
             if (Application.Current.Resources.TryGetValue(styleKey, out object? styleValue)
                 && styleValue is Style style)
             {
@@ -612,8 +655,19 @@ namespace gclo
             SyncAllNavItem.Content = "Cancel sync all";
             try
             {
-                SyncAllResult result =
-                    await new SyncAllCoordinator(_log).RunAsync(accountWorkspaces, cts.Token);
+                // Badges from the previous pass make way for this one; the coordinator
+                // announces Queued for every scheduled account immediately. It runs on
+                // this (UI) thread, so the callback may touch the pane directly.
+                _syncAllStates.Clear();
+                var coordinator = new SyncAllCoordinator(_log)
+                {
+                    AccountStateChanged = (accountId, state) =>
+                    {
+                        _syncAllStates[accountId] = state;
+                        OnWorkspaceStateChanged(accountId);
+                    },
+                };
+                SyncAllResult result = await coordinator.RunAsync(accountWorkspaces, cts.Token);
 
                 string accounts = result.Ran == 1 ? "1 account" : $"{result.Ran} accounts";
                 string message = result.WasCanceled
