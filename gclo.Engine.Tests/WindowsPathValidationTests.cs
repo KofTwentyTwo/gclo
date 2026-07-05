@@ -82,6 +82,42 @@ public sealed class WindowsPathValidationTests : IDisposable
         Assert.Empty(invalid);
     }
 
+    [Fact]
+    public void Validate_EmptySubtree_YieldsTheDirectoryPath()
+    {
+        // A tree can carry an empty subtree (git normally cannot, but a forged tree
+        // or a filter can): the flattener yields the directory itself so an invalid
+        // directory name is still validated. A plain "emptydir" is valid, so the
+        // result is empty — but the empty-subtree branch is exercised.
+        string path = NewPath("empty-subtree-" + Guid.NewGuid().ToString("N")[..8]);
+        Repository.Init(path, isBare: true);
+        using var repo = new Repository(path);
+
+        var emptyTree = repo.ObjectDatabase.CreateTree(new TreeDefinition());
+        var definition = new TreeDefinition();
+        definition.Add("emptydir", emptyTree);
+
+        var invalid = WindowsPathValidator.Validate(repo.ObjectDatabase.CreateTree(definition));
+
+        Assert.Empty(invalid); // "emptydir" is a valid name; the branch still ran
+    }
+
+    [Fact]
+    public void Validate_EmptySubtreeWithInvalidName_IsFlagged()
+    {
+        string path = NewPath("empty-badsubtree-" + Guid.NewGuid().ToString("N")[..8]);
+        Repository.Init(path, isBare: true);
+        using var repo = new Repository(path);
+
+        var emptyTree = repo.ObjectDatabase.CreateTree(new TreeDefinition());
+        var definition = new TreeDefinition();
+        definition.Add("bad ", emptyTree); // trailing space on the empty directory
+
+        var invalid = WindowsPathValidator.Validate(repo.ObjectDatabase.CreateTree(definition));
+
+        Assert.Contains(invalid, i => i.RepoPath == "bad " && i.Reason.Contains("trailing space"));
+    }
+
     // ---------------------------------------------------------------- clone behavior
 
     [Fact]

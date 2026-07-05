@@ -1506,4 +1506,116 @@ public sealed class WorkspaceViewModelTests
 
         Directory.Delete(vm.TargetFolder, recursive: true);
     }
+
+    // ---------------------------------------------------------------- residue
+
+    [Fact]
+    public void EffectiveTargetRoot_EmptyFolder_IsEmpty()
+    {
+        var vm = CreateViewModel();
+        vm.TargetFolder = "   ";
+
+        Assert.Equal("", vm.EffectiveTargetRoot);
+    }
+
+    [Fact]
+    public void MaxConcurrencyValue_ReflectsMaxConcurrency()
+    {
+        var vm = CreateViewModel();
+        vm.MaxConcurrency = 7;
+
+        Assert.Equal(7d, vm.MaxConcurrencyValue);
+    }
+
+    [Fact]
+    public async Task Sort_UnknownColumn_IsANoOp()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("bravo"), Repo("alpha"));
+        var before = vm.Repos.Select(r => r.Name).ToList();
+
+        vm.SortCommand.Execute("Nonsense");
+
+        Assert.Null(vm.SortColumn);
+        Assert.Equal(before, vm.Repos.Select(r => r.Name));
+    }
+
+    [Fact]
+    public async Task Sort_ByBranch_OrdersOnBranchText()
+    {
+        var vm = await CreateLoadedViewModelAsync(
+            Repo("a", branch: "zeta"), Repo("b", branch: "alpha"));
+
+        vm.SortCommand.Execute("Branch");
+
+        Assert.Equal(["b", "a"], vm.Repos.Select(r => r.Name));
+    }
+
+    [Fact]
+    public async Task Sort_ByArchived_OrdersUnarchivedFirst()
+    {
+        var vm = await CreateLoadedViewModelAsync(
+            Repo("a", archived: true), Repo("b", archived: false));
+
+        vm.SortCommand.Execute("Archived");
+
+        Assert.Equal(["b", "a"], vm.Repos.Select(r => r.Name));
+    }
+
+    [Fact]
+    public async Task Sync_EngineThrowsOperationCanceled_SetsCanceledResult()
+    {
+        // The engine swallows cancellation into a summary; the view model's own OCE
+        // handling is only reachable when the sync runner throws (injected here).
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        vm.SyncRunner = (_, _, _, ct) => throw new OperationCanceledException(ct);
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.Equal(RunResultKind.Canceled, vm.ResultKind);
+        Assert.Equal("Canceled", vm.ResultMessage);
+        Assert.Equal("Canceled", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task ResolvePaths_NoInteractionSubscriber_IsANoOp()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        vm.RecoveryInteraction = null; // no subscriber
+
+        await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+
+        Assert.Equal(SyncStatus.Failed, vm.Repos[0].Status); // unchanged
+        Assert.False(vm.IsResolvingPaths);
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    [Fact]
+    public async Task HandleProgress_UnknownRepoName_IsIgnored()
+    {
+        // The view model builds the progress handler when a sync starts; capture it,
+        // let the sync finish, then feed the handler a name that is not in the table.
+        // The guard must ignore it without throwing or adding a row.
+        Action<RepoProgress>? handler = null;
+        _lister.Repositories = [Repo("alpha")];
+        var vm = new WorkspaceViewModel(
+            _lister, _git, _orgs,
+            h => { handler = h; return new SyncProgress(h); },
+            TimeSpan.FromMilliseconds(1), new NullActivityLog());
+        vm.Organization = "acme";
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+        vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+        await vm.LoadReposCommand.ExecuteAsync(null);
+        await vm.SyncCommand.ExecuteAsync(null); // captures the handler
+
+        Assert.NotNull(handler);
+        handler!(new RepoProgress("ghost-repo", SyncStatus.Cloning, Percent: 0.5));
+
+        Assert.DoesNotContain(vm.Repos, r => r.Name == "ghost-repo");
+
+        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
 }

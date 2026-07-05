@@ -14,4 +14,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The test suite exercises internal seams (vault error arms). -->
+    <InternalsVisibleTo Include="gclo.Engine.Tests" />
+  </ItemGroup>
+
 </Project>

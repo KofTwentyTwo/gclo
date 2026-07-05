@@ -5,6 +5,22 @@ namespace gclo.Engine;
 /// <summary>Lists org repositories through the GitHub REST API via Octokit.</summary>
 public sealed class GitHubRepositoryLister : IRepositoryLister
 {
+    private readonly Func<string, IGitHubGateway> _gatewayFactory;
+
+    /// <summary>Production wiring: a fresh Octokit-backed gateway per call's token.</summary>
+    public GitHubRepositoryLister()
+        : this(CreateOctokitGateway)
+    {
+    }
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+        Justification = "Production wiring to the live GitHub API; the offline suite injects a fake gateway.")]
+    private static IGitHubGateway CreateOctokitGateway(string token) => new OctokitGateway(token);
+
+    /// <summary>Test seam: substitute the GitHub API with a fake gateway.</summary>
+    internal GitHubRepositoryLister(Func<string, IGitHubGateway> gatewayFactory)
+        => _gatewayFactory = gatewayFactory ?? throw new ArgumentNullException(nameof(gatewayFactory));
+
     /// <inheritdoc/>
     public async Task<IReadOnlyList<RepoDescriptor>> ListOrganizationRepositoriesAsync(
         string organization, string token, CancellationToken cancellationToken = default)
@@ -13,23 +29,19 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var client = new GitHubClient(new ProductHeaderValue("gclo"))
-        {
-            Credentials = new Credentials(token),
-        };
+        IGitHubGateway gateway = _gatewayFactory(token);
 
         // Pages manually (instead of one GetAll* call) so cancellation is honored
         // between round trips on owners with hundreds of repositories.
-        async Task<List<Repository>> PageAsync(Func<ApiOptions, Task<IReadOnlyList<Repository>>> fetchPage)
+        async Task<List<GitHubRepo>> PageAsync(Func<int, Task<IReadOnlyList<GitHubRepo>>> fetchPage)
         {
-            var all = new List<Repository>();
+            var all = new List<GitHubRepo>();
             for (int page = 1; ; page++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var batch = await fetchPage(new ApiOptions { PageSize = 100, PageCount = 1, StartPage = page })
-                    .ConfigureAwait(false);
+                var batch = await fetchPage(page).ConfigureAwait(false);
                 all.AddRange(batch);
-                if (batch.Count < 100)
+                if (batch.Count < IGitHubGateway.PageSize)
                 {
                     break;
                 }
@@ -37,12 +49,13 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
             return all;
         }
 
-        List<Repository> repositories;
+        List<GitHubRepo> repositories;
         try
         {
             try
             {
-                repositories = await PageAsync(o => client.Repository.GetAllForOrg(organization, o))
+                repositories = await PageAsync(
+                    page => gateway.GetOrganizationRepositoriesPageAsync(organization, page))
                     .ConfigureAwait(false);
             }
             catch (NotFoundException)
@@ -50,18 +63,18 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
                 // /orgs/{name}/repos 404s for user accounts: the token's own account
                 // gets its owned repos (including private); any other user account
                 // yields the repos the token can see there (public).
-                var currentUser = await client.User.Current().ConfigureAwait(false);
-                if (string.Equals(currentUser.Login, organization, StringComparison.OrdinalIgnoreCase))
+                string currentUser = await gateway.GetCurrentUserLoginAsync().ConfigureAwait(false);
+                if (string.Equals(currentUser, organization, StringComparison.OrdinalIgnoreCase))
                 {
-                    var owned = new RepositoryRequest { Affiliation = RepositoryAffiliation.Owner };
-                    repositories = await PageAsync(o => client.Repository.GetAllForCurrent(owned, o))
+                    repositories = await PageAsync(gateway.GetOwnRepositoriesPageAsync)
                         .ConfigureAwait(false);
                 }
                 else
                 {
                     try
                     {
-                        repositories = await PageAsync(o => client.Repository.GetAllForUser(organization, o))
+                        repositories = await PageAsync(
+                            page => gateway.GetUserRepositoriesPageAsync(organization, page))
                             .ConfigureAwait(false);
                     }
                     catch (NotFoundException ex)
@@ -90,7 +103,7 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
             // repeat a boundary item; duplicates would race two clones into one folder.
             .DistinctBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(r => new RepoDescriptor(r.Name, r.CloneUrl, r.DefaultBranch, r.Archived))
+            .Select(r => new RepoDescriptor(r.Name, r.CloneUrl, r.DefaultBranch, r.IsArchived))
             .ToList();
     }
 }

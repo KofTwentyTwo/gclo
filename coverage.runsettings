@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Coverage contract for the 100% gate: every hand-written line in the three
+     library assemblies counts. Excluded, with intent:
+       - GeneratedCodeAttribute: System.Text.Json source-generated serializer
+         contexts (AccountsJsonContext, AppSettingsJsonContext) — generated code,
+         regenerated on every build, not ours to test line-by-line.
+       - ExcludeFromCodeCoverageAttribute: thin, hand-audited adapters over
+         external systems that cannot run offline (each carries a justification
+         comment at its declaration).
+     The WinUI view project (gclo) is not measured here at all: XAML-generated
+     plumbing needs a live compositor and is exercised by the FlaUI e2e suite. -->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <Include>[gclo.Engine]*,[gclo.ViewModels]*,[gclo.Cli]*</Include>
+          <ExcludeByAttribute>GeneratedCodeAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
