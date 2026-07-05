@@ -15,6 +15,39 @@ public sealed class AppSettingsTests
     }
 
     [Fact]
+    public void Load_SettingsFileFromOlderVersion_MigratesSplashToDefault()
+    {
+        // A pre-splash settings.json has no SplashMilliseconds field; it must load
+        // as the 5s default, not as 0 clamped to the minimum.
+        string dir = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+        Environment.SetEnvironmentVariable("GCLO_DATA_DIR", dir);
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                Path.Combine(dir, "settings.json"),
+                """{ "DefaultTargetFolder": "C:\\src", "DefaultMaxConcurrency": 8, "Theme": "Dark" }""");
+
+            var loaded = AppSettings.Load();
+
+            Assert.Equal(AppSettings.DefaultSplashMilliseconds, loaded.SplashMilliseconds);
+            Assert.True(loaded.ShowSplashScreen);
+            Assert.Equal("Dark", loaded.Theme); // existing values still honored
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GCLO_DATA_DIR", null);
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    [Fact]
     public void Save_ClampsSplashDuration()
     {
         string dir = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
