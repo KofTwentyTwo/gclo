@@ -38,12 +38,17 @@
         <StackPanel
             HorizontalAlignment="Center"
             VerticalAlignment="Center">
-            <FontIcon
-                Glyph="&#xE895;"
-                FontSize="56"
-                Foreground="White"
+            <!-- True-vector mark (SvgImageSource): crisp at any scale, transparent
+                 background so the gradient shows through the rounded corners. -->
+            <Image
+                Width="96"
+                Height="96"
                 HorizontalAlignment="Center"
-                Margin="0,0,0,16" />
+                Margin="0,0,0,16">
+                <Image.Source>
+                    <SvgImageSource UriSource="ms-appx:///Assets/Brand/gclo-icon.svg" />
+                </Image.Source>
+            </Image>
             <TextBlock
                 Text="gclo"
                 FontFamily="Segoe UI Variable Display"

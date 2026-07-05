@@ -13,7 +13,7 @@
     <ScrollViewer MaxHeight="460" VerticalScrollBarVisibility="Auto">
         <StackPanel Spacing="12" Padding="0,0,12,0">
 
-            <!-- Brand header: the splash's look in miniature (same gradient, glyph,
+            <!-- Brand header: the splash's look in miniature (same gradient, icon,
                  wordmark, and white type — deliberately single-theme, like the splash). -->
             <Border CornerRadius="8" RequestedTheme="Dark">
                 <Border.Background>
@@ -24,11 +24,14 @@
                 </Border.Background>
                 <StackPanel Padding="20,16" Spacing="4">
                     <StackPanel Orientation="Horizontal" Spacing="12">
-                        <FontIcon
-                            Glyph="&#xE895;"
-                            FontSize="28"
-                            Foreground="White"
-                            VerticalAlignment="Center" />
+                        <Image
+                            Width="40"
+                            Height="40"
+                            VerticalAlignment="Center">
+                            <Image.Source>
+                                <SvgImageSource UriSource="ms-appx:///Assets/Brand/gclo-icon.svg" />
+                            </Image.Source>
+                        </Image>
                         <TextBlock
                             Text="gclo"
                             FontFamily="Segoe UI Variable Display"

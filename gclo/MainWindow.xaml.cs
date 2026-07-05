@@ -99,6 +99,9 @@ namespace gclo
             double scale = GetDpiForWindow(hwnd) / 96.0;
             AppWindow.Resize(new Windows.Graphics.SizeInt32((int)(1000 * scale), (int)(750 * scale)));
 
+            // The brand icon in the title bar (and alt-tab / taskbar for unpackaged runs).
+            AppWindow.SetIcon(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "Brand", "gclo.ico"));
+
             // Keep the window from shrinking below a usable workspace layout.
             // PreferredMinimum* takes physical pixels like Resize (WinAppSDK 1.7+,
             // present in the installed SDK). If a future SDK removes these

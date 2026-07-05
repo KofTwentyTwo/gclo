@@ -102,7 +102,7 @@ jobs:
           vpk download github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ steps.version.outputs.channel }} @preFlag
 
       - name: Velopack pack
-        run: vpk pack --packId gclo --packVersion ${{ steps.version.outputs.version }} --packDir publish/app --mainExe gclo.exe --channel ${{ steps.version.outputs.channel }}
+        run: vpk pack --packId gclo --packVersion ${{ steps.version.outputs.version }} --packDir publish/app --mainExe gclo.exe --channel ${{ steps.version.outputs.channel }} --icon gclo/Assets/Brand/gclo.ico
 
       # This repo has immutable releases: assets freeze the moment a release is
       # PUBLISHED. So vpk creates a DRAFT (no --publish), every asset and the
