@@ -66,7 +66,7 @@
                 <TextBlock TextWrapping="Wrap">
                     gclo is open source, released under the MIT License.
                 </TextBlock>
-                <TextBlock Text="Copyright (c) 2026 James Maes" />
+                <TextBlock Text="Copyright (c) 2026 James Maes &lt;james@kof22.com&gt;" />
                 <TextBlock
                     TextWrapping="Wrap"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"

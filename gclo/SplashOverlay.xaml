@@ -67,6 +67,28 @@
                 Margin="0,8,0,0" />
         </StackPanel>
 
+        <!-- Author credit, anchored above the activity strip: name on its own line,
+             then the contact links on one dot-separated line. -->
+        <StackPanel
+            HorizontalAlignment="Center"
+            VerticalAlignment="Bottom"
+            Margin="0,0,0,44"
+            Spacing="3">
+            <TextBlock
+                Text="Created by James Maes"
+                FontSize="13"
+                FontWeight="SemiBold"
+                Foreground="White"
+                Opacity="0.85"
+                HorizontalAlignment="Center" />
+            <TextBlock
+                Text="james@kof22.com&#x2002;·&#x2002;github.com/KofTwentyTwo&#x2002;·&#x2002;kof22.com"
+                FontSize="12"
+                Foreground="White"
+                Opacity="0.6"
+                HorizontalAlignment="Center" />
+        </StackPanel>
+
         <!-- Thin activity strip: white bar over a 20% white track; the track-height
              resource is overridden so the track matches the 3px bar. -->
         <ProgressBar
