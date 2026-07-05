@@ -37,6 +37,26 @@ dotnet test gclo.Engine.Tests
 dotnet format gclo.slnx --verify-no-changes --severity error
 ```
 
+## Debugging in Visual Studio: expect (and silence) exception breaks
+
+Per-repo failure isolation is exception-based by design: a repository that
+cannot be cloned or pulled throws (`LibGit2SharpException`,
+`InvalidRepositoryPathsException`, ...) and the sync engine catches it, marks
+that row Failed, and keeps going. Many of these exceptions surface from inside
+native libgit2 frames, so with **Just My Code** enabled Visual Studio breaks on
+them as "user-unhandled" even though they are always caught — during a sync
+with failing repositories the debugger pauses every thread on each one, which
+looks like the whole UI is frozen until you press Continue.
+
+None of this happens outside the debugger. Options, in order of preference:
+
+1. Run without the debugger (**Ctrl+F5**) unless you are actively debugging.
+2. In **Debug → Windows → Exception Settings**, uncheck *Break when this
+   exception type is user-unhandled* for `LibGit2Sharp.LibGit2SharpException`
+   (and `gclo.Engine.InvalidRepositoryPathsException`) after the first break.
+3. Disable **Tools → Options → Debugging → Enable Just My Code** — the
+   debugger then only breaks on genuinely unhandled exceptions.
+
 ## What CI enforces
 
 Every pull request must pass:

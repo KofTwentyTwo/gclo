@@ -1,6 +1,8 @@
 using System;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using gclo.Engine;
 using Velopack;
 using Velopack.Sources;
 
@@ -122,7 +124,21 @@ public sealed class UpdateService
     /// <summary>
     /// Created lazily so merely constructing the service can never fail; callers wrap this
     /// in try/catch and treat a throwing manager as "updates not supported".
+    /// A prerelease install (semver has a '-suffix') runs on the dev channel, whose
+    /// packages are attached to GitHub *prerelease* releases — GithubSource must be
+    /// told to look at prereleases or dev installs can never find any update at all.
+    /// Stable installs keep prereleases out of consideration; Velopack's channel
+    /// filtering then matches packages to the installed channel either way.
     /// </summary>
-    private UpdateManager GetManager() =>
-        _manager ??= new UpdateManager(new GithubSource(RepoUrl, null, false));
+    private UpdateManager GetManager()
+    {
+        if (_manager is null)
+        {
+            bool prerelease = BuildVersion
+                .Describe(Assembly.GetExecutingAssembly())
+                .Contains('-');
+            _manager = new UpdateManager(new GithubSource(RepoUrl, null, prerelease));
+        }
+        return _manager;
+    }
 }

@@ -911,6 +911,75 @@ public sealed class WorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task NameFilter_CaseInsensitiveSubstring_ComposesWithStatusFilter()
+    {
+        var vm = await CreateLoadedViewModelAsync(
+            Repo("platform-api"), Repo("platform-web"), Repo("tools"));
+        vm.Repos.First(r => r.Name == "platform-api").Status = SyncStatus.Failed;
+
+        vm.NameFilter = "PLATFORM";
+        Assert.Equal(["platform-api", "platform-web"], vm.FilteredRepos.Select(r => r.Name));
+
+        vm.Filter = RepoFilter.Failed; // AND-composes with the name filter
+        Assert.Equal(["platform-api"], vm.FilteredRepos.Select(r => r.Name));
+
+        vm.NameFilter = "";
+        vm.Filter = RepoFilter.All;
+        Assert.Equal(3, vm.FilteredRepos.Count);
+    }
+
+    [Fact]
+    public async Task NameFilter_TrimsBeforeMatching()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+
+        vm.NameFilter = "  alpha  ";
+
+        Assert.Equal(["alpha"], vm.FilteredRepos.Select(r => r.Name));
+    }
+
+    [Fact]
+    public async Task BranchFilter_MatchesTheDisplayedBranchText()
+    {
+        var vm = await CreateLoadedViewModelAsync(
+            Repo("alpha", branch: "main"),
+            Repo("bravo", branch: "develop"),
+            Repo("empty", branch: null)); // empty repository: BranchText is ""
+
+        vm.BranchFilter = "dev";
+
+        Assert.Equal(["bravo"], vm.FilteredRepos.Select(r => r.Name));
+    }
+
+    [Fact]
+    public async Task ArchivedFilter_TriState_AllArchivedUnarchived()
+    {
+        var vm = await CreateLoadedViewModelAsync(
+            Repo("alpha", archived: true), Repo("bravo"));
+
+        vm.ArchivedFilter = true;
+        Assert.Equal(["alpha"], vm.FilteredRepos.Select(r => r.Name));
+
+        vm.ArchivedFilter = false;
+        Assert.Equal(["bravo"], vm.FilteredRepos.Select(r => r.Name));
+
+        vm.ArchivedFilter = null;
+        Assert.Equal(2, vm.FilteredRepos.Count);
+    }
+
+    [Fact]
+    public async Task ColumnFilters_NeverTouchSelection_HiddenRowsStillSync()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+        Assert.True(vm.Repos.All(r => r.IsSelected)); // load selects everything
+
+        vm.NameFilter = "alpha"; // bravo is hidden but stays selected
+
+        Assert.Equal(2, vm.SelectedCount);
+        Assert.Contains("2", vm.SyncButtonLabel);
+    }
+
+    [Fact]
     public async Task FilteredRepos_FollowsTerminalTransitions_AcrossARun()
     {
         _git.CloneHandler = (url, path, token, onProgress, ct) =>

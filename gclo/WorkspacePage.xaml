@@ -9,11 +9,53 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
+    <UserControl.Resources>
+        <!-- Sortable column header: quiet button, muted semibold label; left padding
+             stays 0 so header text aligns exactly with the row cells below. -->
+        <Style x:Key="ColumnHeaderButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0,4,4,4" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        </Style>
+        <!-- The per-column funnel that opens that column's filter flyout. -->
+        <Style x:Key="ColumnFilterButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="4" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+    </UserControl.Resources>
+
     <Grid Padding="20" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
+
+        <VisualStateManager.VisualStateGroups>
+            <!-- Driven by UpdateToolbarLayout (measured widths, not window width, so
+                 text scaling and localization count too). The markup default is the
+                 narrow two-row toolbar; this state lifts the action buttons back
+                 beside the filter bar when everything fits on one row. -->
+            <VisualStateGroup x:Name="ToolbarLayoutStates">
+                <VisualState x:Name="ToolbarTwoRow" />
+                <VisualState x:Name="ToolbarSingleRow">
+                    <VisualState.Setters>
+                        <Setter Target="IdleActions.(Grid.Row)" Value="0" />
+                        <Setter Target="IdleActions.(Grid.Column)" Value="2" />
+                        <Setter Target="IdleActions.(Grid.ColumnSpan)" Value="1" />
+                        <Setter Target="IdleActions.Margin" Value="0" />
+                        <Setter Target="RunningActions.(Grid.Row)" Value="0" />
+                        <Setter Target="RunningActions.(Grid.Column)" Value="2" />
+                        <Setter Target="RunningActions.(Grid.ColumnSpan)" Value="1" />
+                        <Setter Target="RunningActions.Margin" Value="0" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
 
         <!-- ============================================================ State 1
              Connect card, shown until the first successful load in this workspace. -->
@@ -281,11 +323,22 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <!-- Toolbar: filter | selection summary | spacer | options / refresh / sync,
-                     with the right side swapping to live progress + Cancel while running. -->
-                <Grid Grid.Row="0" ColumnSpacing="12">
+                <!-- Toolbar: filter | selection summary (trims) | options / refresh / sync,
+                     with the right side swapping to live progress + Cancel while running.
+                     The XAML default is the narrow layout (actions on their own row); the
+                     ToolbarSingleRow visual state lifts them beside the filter when the
+                     measured widths fit — see UpdateToolbarLayout, which responds to any
+                     width pressure (window size, text scaling, localization). -->
+                <Grid
+                    x:Name="ToolbarGrid"
+                    Grid.Row="0"
+                    ColumnSpacing="12"
+                    SizeChanged="Toolbar_SizeChanged">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -305,11 +358,18 @@
                         x:Name="SelectionSummaryText"
                         Grid.Column="1"
                         VerticalAlignment="Center"
+                        TextTrimming="CharacterEllipsis"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <StackPanel
-                        Grid.Column="3"
+                        x:Name="IdleActions"
+                        Grid.Row="1"
+                        Grid.Column="0"
+                        Grid.ColumnSpan="3"
+                        Margin="0,8,0,0"
+                        HorizontalAlignment="Right"
                         Orientation="Horizontal"
                         Spacing="8"
+                        SizeChanged="Toolbar_SizeChanged"
                         Visibility="{x:Bind local:StatusFormat.VisibleIfNot(ViewModel.IsRunning), Mode=OneWay}">
                         <Button
                             x:Name="OptionsButton"
@@ -367,12 +427,18 @@
                         </Button>
                     </StackPanel>
                     <StackPanel
-                        Grid.Column="3"
+                        x:Name="RunningActions"
+                        Grid.Row="1"
+                        Grid.Column="0"
+                        Grid.ColumnSpan="3"
+                        Margin="0,8,0,0"
+                        HorizontalAlignment="Right"
                         Orientation="Horizontal"
                         Spacing="8"
+                        SizeChanged="Toolbar_SizeChanged"
                         Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.IsRunning), Mode=OneWay}">
                         <ProgressBar
-                            Width="160"
+                            Width="120"
                             VerticalAlignment="Center"
                             AutomationProperties.Name="Overall sync progress"
                             Maximum="{x:Bind ViewModel.TotalCount, Mode=OneWay}"
@@ -462,105 +528,225 @@
                 </InfoBar>
 
                 <!-- Table header: fixed column widths mirrored by the row template below.
-                     Sort arrows are visual-only; each button carries a composed
-                     automation name ("Name, sorted ascending"). -->
-                <Grid Grid.Row="3" Margin="0,8,0,0" Padding="12,0,12,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="40" />
-                        <ColumnDefinition Width="2*" />
-                        <ColumnDefinition Width="160" />
-                        <ColumnDefinition Width="120" />
-                        <ColumnDefinition Width="80" />
-                    </Grid.ColumnDefinitions>
-                    <CheckBox
-                        Grid.Column="0"
-                        MinWidth="0"
-                        Padding="0"
-                        VerticalAlignment="Center"
-                        ToolTipService.ToolTip="Select all"
-                        AutomationProperties.Name="Select all repositories"
-                        IsChecked="{x:Bind ViewModel.AllSelected, Mode=TwoWay}" />
-                    <Button
-                        Grid.Column="1"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Left"
-                        Background="Transparent"
-                        BorderThickness="0"
-                        Padding="0,4,0,4"
-                        AutomationProperties.Name="{x:Bind SortAutomationName('Name', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
-                        Command="{x:Bind ViewModel.SortCommand, Mode=OneTime}"
-                        CommandParameter="Name">
-                        <StackPanel Orientation="Horizontal" Spacing="4">
-                            <TextBlock FontWeight="SemiBold" Text="Name" />
-                            <FontIcon
-                                FontSize="10"
-                                VerticalAlignment="Center"
-                                AutomationProperties.AccessibilityView="Raw"
-                                Glyph="{x:Bind SortGlyph('Name', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
-                                Visibility="{x:Bind SortGlyphVisibility('Name', ViewModel.SortColumn), Mode=OneWay}" />
-                        </StackPanel>
-                    </Button>
-                    <Button
-                        Grid.Column="2"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Left"
-                        Background="Transparent"
-                        BorderThickness="0"
-                        Padding="0,4,0,4"
-                        AutomationProperties.Name="{x:Bind SortAutomationName('Status', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
-                        Command="{x:Bind ViewModel.SortCommand, Mode=OneTime}"
-                        CommandParameter="Status">
-                        <StackPanel Orientation="Horizontal" Spacing="4">
-                            <TextBlock FontWeight="SemiBold" Text="Status" />
-                            <FontIcon
-                                FontSize="10"
-                                VerticalAlignment="Center"
-                                AutomationProperties.AccessibilityView="Raw"
-                                Glyph="{x:Bind SortGlyph('Status', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
-                                Visibility="{x:Bind SortGlyphVisibility('Status', ViewModel.SortColumn), Mode=OneWay}" />
-                        </StackPanel>
-                    </Button>
-                    <Button
-                        Grid.Column="3"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Left"
-                        Background="Transparent"
-                        BorderThickness="0"
-                        Padding="0,4,0,4"
-                        AutomationProperties.Name="{x:Bind SortAutomationName('Branch', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
-                        Command="{x:Bind ViewModel.SortCommand, Mode=OneTime}"
-                        CommandParameter="Branch">
-                        <StackPanel Orientation="Horizontal" Spacing="4">
-                            <TextBlock FontWeight="SemiBold" Text="Branch" />
-                            <FontIcon
-                                FontSize="10"
-                                VerticalAlignment="Center"
-                                AutomationProperties.AccessibilityView="Raw"
-                                Glyph="{x:Bind SortGlyph('Branch', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
-                                Visibility="{x:Bind SortGlyphVisibility('Branch', ViewModel.SortColumn), Mode=OneWay}" />
-                        </StackPanel>
-                    </Button>
-                    <Button
-                        Grid.Column="4"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Left"
-                        Background="Transparent"
-                        BorderThickness="0"
-                        Padding="0,4,0,4"
-                        AutomationProperties.Name="{x:Bind SortAutomationName('Archived', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
-                        Command="{x:Bind ViewModel.SortCommand, Mode=OneTime}"
-                        CommandParameter="Archived">
-                        <StackPanel Orientation="Horizontal" Spacing="4">
-                            <TextBlock FontWeight="SemiBold" Text="Archived" />
-                            <FontIcon
-                                FontSize="10"
-                                VerticalAlignment="Center"
-                                AutomationProperties.AccessibilityView="Raw"
-                                Glyph="{x:Bind SortGlyph('Archived', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
-                                Visibility="{x:Bind SortGlyphVisibility('Archived', ViewModel.SortColumn), Mode=OneWay}" />
-                        </StackPanel>
-                    </Button>
-                </Grid>
+                     Every column sorts (button, composed automation name like
+                     "Name, sorted ascending") and filters (funnel flyout; the funnel
+                     turns accent-colored while its filter is active). The header row
+                     itself gets subtle chrome to read as a header, not a data row. -->
+                <Border
+                    Grid.Row="3"
+                    Margin="0,8,0,0"
+                    Padding="12,2,12,2"
+                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="0,0,0,1"
+                    CornerRadius="4,4,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="40" />
+                            <ColumnDefinition Width="2*" />
+                            <ColumnDefinition Width="160" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="80" />
+                        </Grid.ColumnDefinitions>
+                        <CheckBox
+                            Grid.Column="0"
+                            MinWidth="0"
+                            Padding="0"
+                            VerticalAlignment="Center"
+                            ToolTipService.ToolTip="Select all"
+                            AutomationProperties.Name="Select all repositories"
+                            IsChecked="{x:Bind ViewModel.AllSelected, Mode=TwoWay}" />
+
+                        <Grid Grid.Column="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button
+                                Style="{StaticResource ColumnHeaderButtonStyle}"
+                                AutomationProperties.Name="{x:Bind SortAutomationName('Name', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
+                                Command="{x:Bind ViewModel.SortCommand, Mode=OneTime}"
+                                CommandParameter="Name">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock FontWeight="SemiBold" Text="Name" />
+                                    <FontIcon
+                                        FontSize="10"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.AccessibilityView="Raw"
+                                        Glyph="{x:Bind SortGlyph('Name', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
+                                        Visibility="{x:Bind SortGlyphVisibility('Name', ViewModel.SortColumn), Mode=OneWay}" />
+                                </StackPanel>
+                            </Button>
+                            <Button
+                                Grid.Column="1"
+                                Style="{StaticResource ColumnFilterButtonStyle}"
+                                AutomationProperties.AutomationId="NameFilterButton"
+                                AutomationProperties.Name="{x:Bind TextFilterAutomationName('name', ViewModel.NameFilter), Mode=OneWay}"
+                                ToolTipService.ToolTip="Filter by name">
+                                <FontIcon
+                                    FontSize="12"
+                                    Glyph="&#xE71C;"
+                                    Foreground="{x:Bind TextFilterIndicatorBrush(ViewModel.NameFilter), Mode=OneWay}" />
+                                <Button.Flyout>
+                                    <Flyout Placement="Bottom">
+                                        <StackPanel Width="220" Spacing="8">
+                                            <TextBox
+                                                Header="Name contains"
+                                                AutomationProperties.AutomationId="NameFilterBox"
+                                                Text="{x:Bind ViewModel.NameFilter, Mode=OneWay}"
+                                                TextChanged="NameFilterBox_TextChanged" />
+                                            <Button
+                                                HorizontalAlignment="Right"
+                                                Content="Clear"
+                                                Click="ClearNameFilter_Click" />
+                                        </StackPanel>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
+                        </Grid>
+
+                        <Grid Grid.Column="2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button
+                                Style="{StaticResource ColumnHeaderButtonStyle}"
+                                AutomationProperties.Name="{x:Bind SortAutomationName('Status', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
+                                Command="{x:Bind ViewModel.SortCommand, Mode=OneTime}"
+                                CommandParameter="Status">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock FontWeight="SemiBold" Text="Status" />
+                                    <FontIcon
+                                        FontSize="10"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.AccessibilityView="Raw"
+                                        Glyph="{x:Bind SortGlyph('Status', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
+                                        Visibility="{x:Bind SortGlyphVisibility('Status', ViewModel.SortColumn), Mode=OneWay}" />
+                                </StackPanel>
+                            </Button>
+                            <Button
+                                Grid.Column="1"
+                                Style="{StaticResource ColumnFilterButtonStyle}"
+                                AutomationProperties.AutomationId="StatusFilterButton"
+                                AutomationProperties.Name="{x:Bind StatusFilterAutomationName(ViewModel.Filter), Mode=OneWay}"
+                                ToolTipService.ToolTip="Filter by status">
+                                <FontIcon
+                                    FontSize="12"
+                                    Glyph="&#xE71C;"
+                                    Foreground="{x:Bind StatusFilterIndicatorBrush(ViewModel.Filter), Mode=OneWay}" />
+                                <Button.Flyout>
+                                    <Flyout Placement="Bottom">
+                                        <RadioButtons
+                                            Header="Show"
+                                            AutomationProperties.AutomationId="StatusFilterChoices"
+                                            SelectedIndex="{x:Bind StatusFilterIndex(ViewModel.Filter), Mode=OneWay}"
+                                            SelectionChanged="StatusFilterChoices_SelectionChanged">
+                                            <x:String>All</x:String>
+                                            <x:String>Active</x:String>
+                                            <x:String>Failed</x:String>
+                                            <x:String>Pending</x:String>
+                                        </RadioButtons>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
+                        </Grid>
+
+                        <Grid Grid.Column="3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button
+                                Style="{StaticResource ColumnHeaderButtonStyle}"
+                                AutomationProperties.Name="{x:Bind SortAutomationName('Branch', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
+                                Command="{x:Bind ViewModel.SortCommand, Mode=OneTime}"
+                                CommandParameter="Branch">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock FontWeight="SemiBold" Text="Branch" />
+                                    <FontIcon
+                                        FontSize="10"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.AccessibilityView="Raw"
+                                        Glyph="{x:Bind SortGlyph('Branch', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
+                                        Visibility="{x:Bind SortGlyphVisibility('Branch', ViewModel.SortColumn), Mode=OneWay}" />
+                                </StackPanel>
+                            </Button>
+                            <Button
+                                Grid.Column="1"
+                                Style="{StaticResource ColumnFilterButtonStyle}"
+                                AutomationProperties.AutomationId="BranchFilterButton"
+                                AutomationProperties.Name="{x:Bind TextFilterAutomationName('branch', ViewModel.BranchFilter), Mode=OneWay}"
+                                ToolTipService.ToolTip="Filter by branch">
+                                <FontIcon
+                                    FontSize="12"
+                                    Glyph="&#xE71C;"
+                                    Foreground="{x:Bind TextFilterIndicatorBrush(ViewModel.BranchFilter), Mode=OneWay}" />
+                                <Button.Flyout>
+                                    <Flyout Placement="Bottom">
+                                        <StackPanel Width="220" Spacing="8">
+                                            <TextBox
+                                                Header="Branch contains"
+                                                AutomationProperties.AutomationId="BranchFilterBox"
+                                                Text="{x:Bind ViewModel.BranchFilter, Mode=OneWay}"
+                                                TextChanged="BranchFilterBox_TextChanged" />
+                                            <Button
+                                                HorizontalAlignment="Right"
+                                                Content="Clear"
+                                                Click="ClearBranchFilter_Click" />
+                                        </StackPanel>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
+                        </Grid>
+
+                        <Grid Grid.Column="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button
+                                Style="{StaticResource ColumnHeaderButtonStyle}"
+                                AutomationProperties.Name="{x:Bind SortAutomationName('Archived', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
+                                Command="{x:Bind ViewModel.SortCommand, Mode=OneTime}"
+                                CommandParameter="Archived">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock FontWeight="SemiBold" Text="Archived" />
+                                    <FontIcon
+                                        FontSize="10"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.AccessibilityView="Raw"
+                                        Glyph="{x:Bind SortGlyph('Archived', ViewModel.SortColumn, ViewModel.SortDescending), Mode=OneWay}"
+                                        Visibility="{x:Bind SortGlyphVisibility('Archived', ViewModel.SortColumn), Mode=OneWay}" />
+                                </StackPanel>
+                            </Button>
+                            <Button
+                                Grid.Column="1"
+                                Style="{StaticResource ColumnFilterButtonStyle}"
+                                AutomationProperties.AutomationId="ArchivedFilterButton"
+                                AutomationProperties.Name="{x:Bind ArchivedFilterAutomationName(ViewModel.ArchivedFilter), Mode=OneWay}"
+                                ToolTipService.ToolTip="Filter by archived">
+                                <FontIcon
+                                    FontSize="12"
+                                    Glyph="&#xE71C;"
+                                    Foreground="{x:Bind ArchivedFilterIndicatorBrush(ViewModel.ArchivedFilter), Mode=OneWay}" />
+                                <Button.Flyout>
+                                    <Flyout Placement="Bottom">
+                                        <RadioButtons
+                                            Header="Show"
+                                            AutomationProperties.AutomationId="ArchivedFilterChoices"
+                                            SelectedIndex="{x:Bind ArchivedFilterIndex(ViewModel.ArchivedFilter), Mode=OneWay}"
+                                            SelectionChanged="ArchivedFilterChoices_SelectionChanged">
+                                            <x:String>All</x:String>
+                                            <x:String>Archived only</x:String>
+                                            <x:String>Not archived</x:String>
+                                        </RadioButtons>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
+                        </Grid>
+                    </Grid>
+                </Border>
 
                 <!-- Per-repo table body. The ListView carries the view model as DataContext so
                      the row template's Resolve link can reach WorkspaceViewModel.ResolvePathsCommand
