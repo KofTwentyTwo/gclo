@@ -12,8 +12,9 @@
 
 **gclo** (**G**it **C**lone **L**arge **O**rganizations) mirrors every repository of a GitHub organization or user account into a local folder in one pass: it clones the repositories that are missing and fast-forwards the ones that already exist, with live per-repo progress and bounded parallelism. It ships as a Windows 11 desktop app (WinUI 3) and a scriptable CLI built on the same engine.
 
-<!-- SCREENSHOT (hero): main window mid-sync — token and org filled in, overall progress bar partway,
-     per-repo list showing a mix of Cloning (with %), Pulling, and Done. Tracked in issue #10. -->
+<p align="center">
+  <img src="docs/images/gclo-sync.png" width="860" alt="gclo mid-sync: overall progress bar, an active-repo strip, and per-repository status with a Cloning row at 15%" />
+</p>
 
 ## Download & install
 
@@ -40,34 +41,48 @@ The token is used in memory for the duration of a sync and is never stored on di
 
 ## Using the GUI
 
-<!-- SCREENSHOT: empty main window on first launch — token box, org dropdown, target folder
-     with subfolder checkbox and path preview, Parallel spinner, Load repos / Sync selected
-     buttons. Tracked in issue #10. -->
+On launch, gclo shows a brief branded splash, then the **Quick Sync** connect card:
+
+<p align="center">
+  <img src="docs/images/gclo-splash.png" width="380" alt="gclo startup splash" />
+  &nbsp;&nbsp;
+  <img src="docs/images/gclo-connect.png" width="440" alt="Quick Sync connect card: personal access token, organization dropdown, target folder with subfolder toggle and path preview, and Load repositories" />
+</p>
 
 1. **Paste your token first.** After a moment, the **Organization or account** dropdown fills with everything the token can sync — your personal account is listed first, then your organizations alphabetically. If the token cannot list organizations (a fine-grained PAT, or a classic PAT without `read:org`), the status line says so; the dropdown is editable, so just type the name.
 2. **Pick the organization or account** from the dropdown.
-
-   <!-- SCREENSHOT: org dropdown open, personal account at the top followed by orgs. Tracked in issue #10. -->
-
 3. **Choose a target folder** — type a path or click **Browse...**. Tick **Create a `<org>` subfolder** to keep several organizations under one root; the live preview line underneath always shows exactly where repositories will land (e.g. `C:\src\acme\my-repo`).
 4. **Set parallelism** if you like (1–64, default 8): how many git operations run at once.
-5. **Press Load repos.** The table fills with every repository of the organization — name, status, default branch, and an Archived marker — all selected. Click a column header to sort by it; click it again to flip the direction.
+5. **Press Load repos.** The table fills with every repository of the organization — name, status, default branch, and an Archived marker — all selected. Click a column header to sort by it (click again to flip); use the funnel on any column to filter by name, status, branch, or archived state.
+
+   <p align="center">
+     <img src="docs/images/gclo-repos.png" width="820" alt="Loaded repository table: 59 repositories all selected, with sortable, filterable Name / Status / Branch / Archived columns and a Sync 59 repos button" />
+   </p>
+
 6. **Uncheck anything you don't want.** The header checkbox selects or clears every row at once.
 7. **Press Sync selected.** Each row moves through its states live — Queued, Cloning (with a per-row progress bar and transfer percentage), Pulling, Done, Failed, or Canceled — while the overall progress bar and completed/total counter track the run, which ends in a summary (`Finished: 3 cloned, 41 updated, 1 failed, 0 canceled of 45.`).
 
-   <!-- SCREENSHOT: sync in progress — several rows Cloning with per-row progress bars, overall bar advancing. Tracked in issue #10. -->
+   <p align="center">
+     <img src="docs/images/gclo-results.png" width="820" alt="Finished sync: every row Done, with the summary 58 cloned, 0 updated, 1 failed, 0 canceled of 59" />
+   </p>
 
 8. **Cancel** at any time: in-flight repos stop cleanly, unstarted repos are marked Canceled, and the summary still appears. After a run, **Retry failed** re-runs exactly the failed rows, and **Open folder** opens the target folder in Explorer.
 
 **When something goes wrong:** failures are isolated per repository — one broken repo never stops the rest, and a failed row shows its error message inline. Most failed clones are cleaned up, so a partial checkout is never mistaken for a valid repo on the next run. Repositories with Windows-impossible paths are the deliberate exception: gclo checks every path in the incoming tree against Windows file-system rules *before* checkout — invalid characters, reserved device names like `CON`, trailing spaces or dots, names that differ only by case — and when it finds any, the repo is marked Failed with a per-path list of reasons, but the fully fetched `.git` is **kept** (nothing was ever checked out). Recovery happens in place, with no re-download: click the row's **Resolve…** link to rename each offending path (safe names are pre-suggested) or skip it, and gclo materializes the working tree right there; the CLI does the same automatically with [`--sanitize-paths`](docs/CLI.md#windows-invalid-paths-and---sanitize-paths). Long paths beyond the classic 260-character limit are handled automatically (`core.longpaths`).
 
-**Settings** (File > Settings…) let you set the default target folder, the default parallelism, and the theme (System, Light, or Dark).
-
-<!-- SCREENSHOT: Settings dialog — default target folder, default parallelism, theme. Tracked in issue #10. -->
+**Settings** (File > Settings…) let you set a default GitHub token (stored in the Windows Credential Manager), the default target folder (with a folder picker), the default parallelism, and the theme (System, Light, or Dark); an Advanced section toggles the startup splash and its duration.
 
 **Activity log:** View > Activity log… shows the tail of today's log and links to the logs folder. Logs live under `%LOCALAPPDATA%\gclo\logs`, one file per day; they record run parameters and per-repo failures and never contain your token (see [SECURITY.md](SECURITY.md)).
 
 **Updates:** Help > Check for updates… downloads and applies the latest release for your channel. Self-update is only available in installed builds (not the portable zip or a local debug build).
+
+### Saved accounts
+
+Quick Sync is ad-hoc — nothing is saved. For organizations you sync regularly, **Add account** stores a reusable profile: a name, the organization, target folder, and parallelism, with the token kept in the Windows Credential Manager (never in a file). Each account gets its own entry in the navigation pane and its own workspace; **Sync all** runs every saved account in turn, and the pane shows each account's live status.
+
+<p align="center">
+  <img src="docs/images/gclo-wizard.png" width="820" alt="Add account wizard, step 1 of 4: account name and optional description" />
+</p>
 
 ## Using the CLI
 
