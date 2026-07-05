@@ -2,8 +2,7 @@
 
 **Development is tracked in [GitHub Issues](https://github.com/KofTwentyTwo/gclo/issues).**
 
-- Roadmap / execution order: [#11 — Development roadmap](https://github.com/KofTwentyTwo/gclo/issues/11)
-- Current priority: [#2 — Windows-invalid path clone failures](https://github.com/KofTwentyTwo/gclo/issues/2)
+- Roadmap / current status: [#11 — Development roadmap](https://github.com/KofTwentyTwo/gclo/issues/11) (v1.0.0 shipped; post-1.0 backlog there)
 - Owner action items: [#7 — Owner setup checklist](https://github.com/KofTwentyTwo/gclo/issues/7)
 
 Labels: `priority` (work first), `needs-owner` (blocked on the owner), `deferred`

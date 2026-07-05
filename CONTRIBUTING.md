@@ -30,8 +30,17 @@ dotnet build gclo.slnx -p:Platform=x64
 # Verify this still works before opening a PR.
 dotnet build gclo.slnx -p:Platform=x64 -p:WindowsPackageType=None
 
-# Run the engine test suite
+# Run the unit/integration test suites (engine + view models, and the CLI)
 dotnet test gclo.Engine.Tests
+dotnet test gclo.Cli.Tests
+
+# Coverage as CI measures it (must be 100% for gclo.Engine, gclo.ViewModels, gclo)
+dotnet test gclo.Engine.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage"
+dotnet test gclo.Cli.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage"
+
+# UI end-to-end tests (build the app first, then drive the real exe)
+dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None
+dotnet test gclo.UiTests/gclo.UiTests.csproj
 
 # Formatting/style gate — must report no changes needed
 dotnet format gclo.slnx --verify-no-changes --severity error
@@ -63,7 +72,8 @@ Every pull request must pass:
 
 | Check | What it gates |
 | --- | --- |
-| **Build and test (x64)** | `dotnet build gclo.slnx -p:Platform=x64 -warnaserror` — zero warnings, including NuGetAudit vulnerability warnings; then `dotnet test gclo.Engine.Tests` with coverage, and `gclo.Engine` line coverage must stay **≥ 60%** |
+| **Build and test (x64)** | `dotnet build gclo.slnx -p:Platform=x64 -warnaserror` — zero warnings, including NuGetAudit vulnerability warnings; then the test suites with coverage. **Line coverage must be 100%** on each of `gclo.Engine`, `gclo.ViewModels`, and `gclo` (the CLI), measured via `coverage.runsettings` (source-generated code and the `[ExcludeFromCodeCoverage]` native/network adapters are excluded — see that file) |
+| **UI end-to-end tests (x64)** | FlaUI/UIA smoke tests drive the real `gclo.exe` (`gclo.UiTests`) |
 | **Format (style gate)** | `dotnet format gclo.slnx --verify-no-changes --severity error` |
 | **Dependency review** | New/changed dependencies must have no known vulnerabilities (any severity fails) and a license on the repo's allowlist |
 | **CodeQL** | Static security analysis (runs on PRs targeting `main` and weekly) |

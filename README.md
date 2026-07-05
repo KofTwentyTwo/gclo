@@ -26,7 +26,9 @@ All builds are published on the [**GitHub Releases** page](https://github.com/Ko
 
 Plain version tags (`v1.2.3`) are **stable** releases; pre-release tags (`v1.2.3-beta.1`) publish to the **dev** channel, and an installed app only ever updates within its own channel.
 
-Installation via `winget` is coming soon.
+> **Upgrading from a beta?** Channels don't cross: a dev/beta install never auto-updates to a stable release (its **Check for updates** only looks at the dev channel). To move to stable, install `gclo-stable-Setup.exe` once — it takes over the existing install and self-updates within the stable channel from then on.
+
+`winget` support is planned (tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7)); until then, install from the Releases page above.
 
 ## Getting a token
 
@@ -37,7 +39,7 @@ gclo authenticates to GitHub with a personal access token — it is used for bot
 | Classic PAT | `repo` scope (read access to the org's repositories); optionally `read:org` so the organization dropdown / `gclo orgs` can list your orgs |
 | Fine-grained PAT | Repository read access for the organization |
 
-The token is used in memory for the duration of a sync and is never stored on disk.
+**Token storage.** In **Quick Sync**, the token is held in memory for the session only and never written anywhere. A **saved account's** token and the optional **default token** (Settings) are kept in the **Windows Credential Manager** (per-user, DPAPI-protected) — never in `settings.json`, `accounts.json`, or any log. See [SECURITY.md](SECURITY.md).
 
 ## Using the GUI
 
@@ -168,6 +170,10 @@ To F5-debug the packaged app in Visual Studio, open `gclo.slnx`, set `gclo` as t
 | `gclo.Engine` | Core sync engine: `OrgSyncEngine`, Octokit-based listers, LibGit2Sharp git client, Windows path validation |
 | `gclo.ViewModels` | UI-framework-free view models and settings persistence, shared presentation logic |
 | `gclo.Engine.Tests` | xunit tests: engine (with fakes), real-git integration suite, and view-model tests |
+| `gclo.Cli.Tests` | xunit tests for the CLI, driving injectable command cores over fakes |
+| `gclo.UiTests` | FlaUI/UIA end-to-end tests that drive the real `gclo.exe` |
+
+Line coverage is held at **100%** for `gclo.Engine`, `gclo.ViewModels`, and `gclo` (the CLI), enforced in CI.
 
 ## Contributing
 
