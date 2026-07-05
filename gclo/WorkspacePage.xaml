@@ -104,6 +104,7 @@
                                 IsEditable="True"
                                 ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
                                 PlaceholderText="Paste a token first, or type an org"
+                                Loaded="OrgBox_Loaded"
                                 Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
                             <ProgressRing
                                 Grid.Column="1"
@@ -261,6 +262,7 @@
                                                 IsEditable="True"
                                                 ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
                                                 PlaceholderText="Paste a token first, or type an org"
+                                                Loaded="OrgBox_Loaded"
                                                 Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
                                             <ProgressRing
                                                 Grid.Column="1"

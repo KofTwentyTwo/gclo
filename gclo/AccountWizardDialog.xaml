@@ -102,6 +102,7 @@
                 IsEditable="True"
                 ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
                 PlaceholderText="Choose from the list, or type a name"
+                Loaded="OrgBox_Loaded"
                 Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
         </StackPanel>
 

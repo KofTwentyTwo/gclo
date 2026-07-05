@@ -352,11 +352,19 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             var orgs = await _orgLister.ListOrganizationsAsync(token, lookupToken);
             lookupToken.ThrowIfCancellationRequested();
 
+            // An editable ComboBox resets its Text when its ItemsSource is mutated,
+            // and the TwoWay binding would wipe a value that was already set — an
+            // account workspace seeds Organization in the constructor, and this
+            // refresh lands ~a second later. Capture, restore, and force a binding
+            // resync so the seeded (or typed) organization survives the refresh.
+            string organizationBeforeRefresh = Organization;
             Organizations.Clear();
             foreach (string org in orgs)
             {
                 Organizations.Add(org);
             }
+            Organization = organizationBeforeRefresh;
+            OnPropertyChanged(nameof(Organization));
             // The production lister always lists the token's own account first, so a
             // single entry means no organizations were visible.
             StatusText = orgs.Count <= 1

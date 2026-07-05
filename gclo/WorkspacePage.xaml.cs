@@ -242,6 +242,13 @@ namespace gclo
             null => "Filter by archived",
         };
 
+        // An editable ComboBox does not render Text that was set before its template
+        // loaded, so an account workspace's seeded org shows as blank even though
+        // the view model holds it — see EditableComboBox. Runs on every Loaded:
+        // the connect card's box on page creation, the chip flyout's on each open.
+        private void OrgBox_Loaded(object sender, RoutedEventArgs e)
+            => EditableComboBox.ReapplyText((ComboBox)sender, ViewModel.Organization);
+
         private void Toolbar_SizeChanged(object sender, SizeChangedEventArgs e)
             => UpdateToolbarLayout();
 

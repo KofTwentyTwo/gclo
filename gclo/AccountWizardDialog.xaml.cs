@@ -149,6 +149,12 @@ namespace gclo
         private void TokenBox_PasswordChanged(object sender, RoutedEventArgs e)
             => ViewModel.Token = ((PasswordBox)sender).Password;
 
+        // An editable ComboBox does not render Text set before its template loaded;
+        // when editing an account, step 3 would show blank despite the seeded
+        // organization — see EditableComboBox.
+        private void OrgBox_Loaded(object sender, RoutedEventArgs e)
+            => EditableComboBox.ReapplyText((ComboBox)sender, ViewModel.Organization);
+
         /// <summary>Mirrors the NumberBox's double into the view model's int.</summary>
         private void ConcurrencyBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
         {
