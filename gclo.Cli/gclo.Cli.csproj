@@ -8,6 +8,7 @@
     <AssemblyName>gclo</AssemblyName>
     <RootNamespace>gclo.Cli</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationIcon>..\gclo\Assets\Brand\gclo.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

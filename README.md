@@ -1,10 +1,14 @@
-# gclo — Git Clone Large Organizations
+<p align="center">
+  <img src="docs/images/gclo-lockup.png" width="440" alt="gclo — Git Clone Large Organizations" />
+</p>
 
-**Clone an entire GitHub organization. Keep it up to date. In parallel.**
+<p align="center"><b>Clone an entire GitHub organization. Keep it up to date. In parallel.</b></p>
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-blue)](https://github.com/KofTwentyTwo/gclo)
-[![.NET 10](https://img.shields.io/badge/.NET-10-blueviolet)](https://dotnet.microsoft.com/)
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" /></a>
+  <a href="https://github.com/KofTwentyTwo/gclo"><img src="https://img.shields.io/badge/platform-Windows%2011-blue" alt="Platform: Windows 11" /></a>
+  <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-10-blueviolet" alt=".NET 10" /></a>
+</p>
 
 **gclo** (**G**it **C**lone **L**arge **O**rganizations) mirrors every repository of a GitHub organization or user account into a local folder in one pass: it clones the repositories that are missing and fast-forwards the ones that already exist, with live per-repo progress and bounded parallelism. It ships as a Windows 11 desktop app (WinUI 3) and a scriptable CLI built on the same engine.
 
