@@ -33,7 +33,12 @@ internal static class AccountsCommand
           2  fatal: bad arguments, or not running on Windows
         """;
 
-    public static int Run(string[] args)
+    /// <summary>Composition root: wires the real Credential Manager store and file log.</summary>
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+        Justification = "Wires the real Credential Manager and file log; delegates to the covered core.")]
+    public static int Run(string[] args) => Run(args, Open, new FileActivityLog());
+
+    internal static int Run(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
     {
         bool json = false;
 
@@ -54,13 +59,11 @@ internal static class AccountsCommand
             }
         }
 
-        // One activity log per invocation; tokens are never read here, let alone logged.
-        var log = new FileActivityLog();
         log.Info($"accounts started: json={json}");
 
         try
         {
-            (AccountsStore store, _) = Open(log);
+            (AccountsStore store, _) = open(log);
             IReadOnlyList<Account> accounts = store.GetAll();
             log.Info($"accounts finished: {accounts.Count} account(s) listed.");
 
@@ -109,6 +112,8 @@ internal static class AccountsCommand
     /// 'gclo sync' and 'gclo orgs' never touch the credential store.
     /// </summary>
     /// <exception cref="CliErrorException">The current OS is not Windows.</exception>
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+        Justification = "Wires the real Credential Manager vault; its non-Windows guard mirrors the vault's own tested guard.")]
     internal static (AccountsStore Store, ITokenVault Vault) Open(IActivityLog log)
     {
         if (!OperatingSystem.IsWindows())

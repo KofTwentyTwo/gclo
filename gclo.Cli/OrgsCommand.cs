@@ -33,7 +33,14 @@ internal static class OrgsCommand
           argument would leak. Use --token-env, --token-file, or --token-stdin.
         """;
 
-    public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+    /// <summary>Composition root: wires the real GitHub lister and file log.</summary>
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+        Justification = "Wires the real network lister and file log; delegates to the covered core.")]
+    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+        => RunAsync(args, new GitHubOrganizationLister(), new FileActivityLog(), cancellationToken);
+
+    internal static async Task<int> RunAsync(
+        string[] args, IOrganizationLister lister, IActivityLog log, CancellationToken cancellationToken)
     {
         bool json = false;
         var tokenOptions = new TokenOptions();
@@ -59,8 +66,6 @@ internal static class OrgsCommand
             }
         }
 
-        // One activity log per invocation; the token itself is never written to it.
-        var log = new FileActivityLog();
         log.Info($"orgs started: json={json}");
 
         try
@@ -70,7 +75,7 @@ internal static class OrgsCommand
             IReadOnlyList<string> logins;
             try
             {
-                logins = await new GitHubOrganizationLister()
+                logins = await lister
                     .ListOrganizationsAsync(token, cancellationToken)
                     .ConfigureAwait(false);
             }

@@ -75,7 +75,22 @@ internal static class SyncCommand
           argument would leak. Use --token-env, --token-file, or --token-stdin.
         """;
 
-    public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+    /// <summary>Composition root: wires the real GitHub lister, LibGit2 client, and file log.</summary>
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+        Justification = "Wires the real network/native collaborators; delegates to the covered core.")]
+    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+        => RunAsync(
+            args,
+            new GitHubRepositoryLister(), new LibGit2GitClient(), AccountsCommand.Open, new FileActivityLog(),
+            cancellationToken);
+
+    internal static async Task<int> RunAsync(
+        string[] args,
+        IRepositoryLister lister,
+        IGitClient git,
+        Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> openAccounts,
+        IActivityLog log,
+        CancellationToken cancellationToken)
     {
         string? org = null;
         string? target = null;
@@ -134,10 +149,6 @@ internal static class SyncCommand
             }
         }
 
-        // One activity log per invocation. Only non-secret parameters are ever
-        // written to it; the token is not.
-        var log = new FileActivityLog();
-
         try
         {
             // --account: seed org/target/parallel from the saved account. Explicit
@@ -147,7 +158,7 @@ internal static class SyncCommand
             ITokenVault? vault = null;
             if (accountName is not null)
             {
-                (store, vault) = AccountsCommand.Open(log);
+                (store, vault) = openAccounts(log);
                 account = store.FindByName(accountName) ?? throw UnknownAccount(accountName, store);
                 org ??= account.Organization;
                 target ??= account.CreateOrgSubfolder ? Path.Combine(account.TargetRoot, org) : account.TargetRoot;
@@ -171,8 +182,7 @@ internal static class SyncCommand
             string token = ResolveToken(tokenOptions, account, vault);
 
             var printer = new ProgressPrinter(printProgress: !quiet && !json, printFailures: !json);
-            var git = new LibGit2GitClient();
-            var engine = new OrgSyncEngine(new GitHubRepositoryLister(), git);
+            var engine = new OrgSyncEngine(lister, git);
             var request = new SyncRequest(org.Trim(), token, target.Trim(), effectiveParallel);
             var progress = new SyncProgressHandler(printer, log, printDetails: !json, collectForSanitize: sanitizePaths);
 

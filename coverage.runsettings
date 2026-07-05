@@ -15,7 +15,9 @@
       <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
           <Format>cobertura</Format>
-          <Include>[gclo.Engine]*,[gclo.ViewModels]*,[gclo.Cli]*</Include>
+          <!-- The CLI project's assembly name is 'gclo' (it ships as gclo.exe), so it
+               appears as package 'gclo' — not 'gclo.Cli' — in the report. -->
+          <Include>[gclo.Engine]*,[gclo.ViewModels]*,[gclo]*</Include>
           <ExcludeByAttribute>GeneratedCodeAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
         </Configuration>
       </DataCollector>

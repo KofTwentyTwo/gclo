@@ -34,16 +34,18 @@ jobs:
       - name: Build solution (x64, warnings as errors)
         run: dotnet build gclo.slnx -p:Platform=x64 -warnaserror
 
-      - name: Run tests with coverage
-        # The solution build above ran with the x64 *solution* platform, but
-        # gclo.Engine.Tests is an AnyCPU-only test project, so exactly where its
-        # outputs land depends on how the .slnx maps solution platform -> project
-        # platform. Rather than couple `dotnet test --no-build` to that mapping,
-        # rebuild just the test project (plus gclo.Engine) with its default
-        # AnyCPU platform here - it is a small, deterministic incremental build.
-        run: dotnet test gclo.Engine.Tests --collect:"XPlat Code Coverage" --results-directory TestResults
+      # coverage.runsettings scopes collection to the three library assemblies and
+      # excludes source-generated code and the [ExcludeFromCodeCoverage] native/
+      # network adapters (LibGit2GitClient, OctokitGateway). gclo.Engine.Tests
+      # exercises gclo.Engine and gclo.ViewModels; gclo.Cli.Tests covers the CLI
+      # (its assembly is 'gclo'). Both write into TestResults; the gate reads all.
+      - name: Run engine and view-model tests with coverage
+        run: dotnet test gclo.Engine.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage" --results-directory TestResults
 
-      - name: Enforce gclo.Engine line coverage >= 60%
+      - name: Run CLI tests with coverage
+        run: dotnet test gclo.Cli.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage" --results-directory TestResults
+
+      - name: Enforce 100% line coverage (Engine, ViewModels, Cli)
         shell: pwsh
         run: |
           $files = Get-ChildItem -Path TestResults -Recurse -Filter coverage.cobertura.xml
@@ -51,24 +53,32 @@ jobs:
             Write-Error 'No coverage.cobertura.xml found under TestResults. Did the coverage collector run?'
             exit 1
           }
-          $file = $files | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          Write-Host "Parsing coverage report: $($file.FullName)"
-          [xml]$cobertura = Get-Content -LiteralPath $file.FullName
-          $packages = @($cobertura.coverage.packages.package)
-          $engine = $packages | Where-Object { $_.name -eq 'gclo.Engine' }
-          if (-not $engine) {
-            $names = ($packages | ForEach-Object { $_.name }) -join ', '
-            Write-Error "Package 'gclo.Engine' not found in the coverage report. Packages present: $names"
-            exit 1
+          # Merge every collected report: the two test projects each emit their own,
+          # and a package's covered lines can be split across them.
+          $required = @('gclo.Engine', 'gclo.ViewModels', 'gclo.Cli')
+          $failed = $false
+          foreach ($name in $required) {
+            $rates = foreach ($f in $files) {
+              [xml]$doc = Get-Content -LiteralPath $f.FullName
+              $pkg = @($doc.coverage.packages.package) | Where-Object { $_.name -eq $name }
+              if ($pkg) { [double]::Parse($pkg.'line-rate', [System.Globalization.CultureInfo]::InvariantCulture) }
+            }
+            if (-not $rates) {
+              Write-Error "Package '$name' not found in any coverage report."
+              $failed = $true
+              continue
+            }
+            # The report with the most coverage for this package is authoritative.
+            $best = ($rates | Measure-Object -Maximum).Maximum
+            $percent = [math]::Round($best * 100, 2)
+            Write-Host "$name line coverage: $percent% (required 100%)"
+            if ($best -lt 1.0) {
+              Write-Error "Coverage gate FAILED: $name line-rate $best is below the required 1.00."
+              $failed = $true
+            }
           }
-          $lineRate = [double]::Parse($engine.'line-rate', [System.Globalization.CultureInfo]::InvariantCulture)
-          $percent = [math]::Round($lineRate * 100, 2)
-          Write-Host "gclo.Engine line coverage: $percent% (line-rate $lineRate, required >= 0.60)"
-          if ($lineRate -lt 0.60) {
-            Write-Error "Coverage gate FAILED: gclo.Engine line-rate $lineRate is below the required 0.60."
-            exit 1
-          }
-          Write-Host 'Coverage gate passed.'
+          if ($failed) { exit 1 }
+          Write-Host 'Coverage gate passed: all measured assemblies at 100%.'
 
       - name: Upload coverage artifact
         if: always()

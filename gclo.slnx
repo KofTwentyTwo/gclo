@@ -5,6 +5,7 @@
     <Platform Name="x86" />
   </Configurations>
   <Project Path="gclo.Cli/gclo.Cli.csproj" />
+  <Project Path="gclo.Cli.Tests/gclo.Cli.Tests.csproj" />
   <Project Path="gclo.Engine.Tests/gclo.Engine.Tests.csproj" />
   <Project Path="gclo.Engine/gclo.Engine.csproj" />
   <Project Path="gclo.UiTests/gclo.UiTests.csproj" />
