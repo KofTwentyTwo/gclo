@@ -18,12 +18,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- MSIX tile assets: the full standard scale/targetsize set (transparent PNGs). -->
+    <!-- MSIX tile assets: the full standard scale/targetsize set (transparent PNGs).
+         Packaged via the manifest for MSIX builds. -->
     <Content Include="Assets\**\*.png" />
-    <!-- True-vector mark: the window title-bar icon (.ico) and the SVG the in-window
-         splash and About dialog render via SvgImageSource. -->
-    <Content Include="Assets\Brand\gclo-icon.svg" />
-    <Content Include="Assets\Brand\gclo.ico" />
+    <!-- True-vector mark: the window title-bar icon (.ico, loaded from the app
+         directory by AppWindow.SetIcon) and the SVG the splash and About render via
+         SvgImageSource (ms-appx:///). CopyToOutputDirectory is required so these reach
+         BOTH the build output AND `dotnet publish` output — the unpackaged Velopack
+         build has no MSIX packaging step to carry them otherwise. -->
+    <Content Include="Assets\Brand\gclo-icon.svg" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Brand\gclo.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
