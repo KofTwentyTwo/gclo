@@ -1151,6 +1151,42 @@ public sealed class WorkspaceViewModelTests
     };
 
     [Fact]
+    public async Task OrgRefresh_AccountSeededOrganization_SurvivesAndResyncsTheView()
+    {
+        // Regression: the view's editable ComboBox resets its Text when its
+        // ItemsSource is mutated, blanking the org an account workspace seeded in
+        // the constructor. The VM must keep the value across the refresh AND raise
+        // Organization again after the list mutation so the view resyncs its Text.
+        var account = new Account
+        {
+            Id = Guid.NewGuid(),
+            Name = "Kof",
+            Organization = "KofTwentyTwo",
+            TargetRoot = @"C:\repos\kof",
+        };
+        var vault = new InMemoryVault();
+        vault.Store(account.Id, "vault-token-1234567890");
+        _orgs.Handler = (_, _) =>
+            Task.FromResult<IReadOnlyList<string>>(["KofTwentyTwo", "acme", "other"]);
+
+        var vm = CreateViewModel(account: account, vault: vault);
+        bool resyncAfterListArrived = false;
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(WorkspaceViewModel.Organization)
+                && vm.Organizations.Count > 0)
+            {
+                resyncAfterListArrived = true;
+            }
+        };
+
+        await WaitUntilAsync(() => vm.Organizations.Count == 3, "org list refresh");
+
+        Assert.Equal("KofTwentyTwo", vm.Organization);
+        Assert.True(resyncAfterListArrived, "Organization must be re-raised after the list mutation");
+    }
+
+    [Fact]
     public async Task AccountConstruction_SeedsWorkspace_AndLooksUpOrgsWithVaultToken()
     {
         var account = new Account

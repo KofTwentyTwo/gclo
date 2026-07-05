@@ -109,19 +109,27 @@ namespace gclo
                 presenter.PreferredMinimumHeight = (int)(MinWindowHeight * scale);
             }
 
-            Closed += (_, _) => DisposeWorkspaces();
-
-            // Dismiss the startup splash overlay once it has been visible long enough
-            // to read as an intentional brand moment rather than a flicker.
-            DispatcherQueue.TryEnqueue(async () =>
+            Closed += (_, _) =>
             {
-                await Task.Delay(MinimumSplashMilliseconds);
-                await StartupSplash.DismissAsync();
-            });
-        }
+                _logWindow?.Close(); // a log-only process would linger otherwise
+                DisposeWorkspaces();
+            };
 
-        /// <summary>Minimum splash display, so a fast startup never shows a flicker.</summary>
-        private const int MinimumSplashMilliseconds = 800;
+            // The splash overlay honors Settings → Advanced: skipped entirely when
+            // disabled, otherwise dismissed after the configured display time.
+            if (_settings.ShowSplashScreen)
+            {
+                DispatcherQueue.TryEnqueue(async () =>
+                {
+                    await Task.Delay(_settings.SplashMilliseconds);
+                    await StartupSplash.DismissAsync();
+                });
+            }
+            else
+            {
+                StartupSplash.Visibility = Visibility.Collapsed;
+            }
+        }
 
         private void ApplySettings()
         {
@@ -253,8 +261,14 @@ namespace gclo
         {
             if (id == Guid.Empty)
             {
-                // Quick Sync: no account behind it — exactly the pre-accounts behavior.
-                return new WorkspaceViewModel(log: _log);
+                // Quick Sync: no account behind it. A saved default token (Settings)
+                // pre-fills the connect card; setting Token also starts the org lookup.
+                var quickSync = new WorkspaceViewModel(log: _log);
+                if (_tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId) is { Length: > 0 } defaultToken)
+                {
+                    quickSync.Token = defaultToken;
+                }
+                return quickSync;
             }
 
             Account? account = _accountsStore.GetAll().FirstOrDefault(a => a.Id == id);
@@ -662,7 +676,11 @@ namespace gclo
 
         private async void SettingsMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            var dialog = new SettingsDialog(_settings) { XamlRoot = Content.XamlRoot };
+            var dialog = new SettingsDialog(
+                _settings, _tokenVault, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
+            {
+                XamlRoot = Content.XamlRoot,
+            };
             if (await DialogGuard.ShowAsync(dialog) == ContentDialogResult.Primary)
             {
                 dialog.ApplyAndSave();
@@ -672,10 +690,19 @@ namespace gclo
 
         private void ExitMenuItem_Click(object sender, RoutedEventArgs e) => Close();
 
-        private async void ActivityLogMenuItem_Click(object sender, RoutedEventArgs e)
+        /// <summary>The one log window, re-activated while open; null when closed.</summary>
+        private LogWindow? _logWindow;
+
+        private void ActivityLogMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            var dialog = new LogViewerDialog(_log) { XamlRoot = Content.XamlRoot };
-            await DialogGuard.ShowAsync(dialog);
+            // Non-modal by design: the log stays open and live-updating beside the
+            // main window while syncs run.
+            if (_logWindow is null)
+            {
+                _logWindow = new LogWindow(_log);
+                _logWindow.Closed += (_, _) => _logWindow = null;
+            }
+            _logWindow.Activate();
         }
 
         private async void GitHubMenuItem_Click(object sender, RoutedEventArgs e)

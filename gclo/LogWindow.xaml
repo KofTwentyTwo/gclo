@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="gclo.LogWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="gclo — Activity log">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid Padding="16" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar: filter and actions. The window is non-modal by design — it can
+             stay open beside the main window while syncs run. -->
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ToggleButton
+                x:Name="ErrorsOnlyToggle"
+                Grid.Column="0"
+                Content="Errors only"
+                AutomationProperties.AutomationId="LogErrorsOnlyToggle"
+                ToolTipService.ToolTip="Show only [ERROR] entries (with their exception details)"
+                Click="ErrorsOnlyToggle_Click" />
+            <ToggleButton
+                x:Name="FollowToggle"
+                Grid.Column="1"
+                Content="Follow"
+                IsChecked="True"
+                AutomationProperties.AutomationId="LogFollowToggle"
+                ToolTipService.ToolTip="Refresh automatically and keep the newest entries in view" />
+            <TextBlock
+                x:Name="LogPathText"
+                Grid.Column="2"
+                VerticalAlignment="Center"
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                TextTrimming="CharacterEllipsis"
+                ToolTipService.ToolTip="The file new entries are appended to" />
+            <Button
+                Grid.Column="3"
+                Content="Copy"
+                AutomationProperties.AutomationId="LogCopyButton"
+                ToolTipService.ToolTip="Copy the visible log text to the clipboard"
+                Click="CopyButton_Click" />
+            <Button
+                Grid.Column="4"
+                Content="Open logs folder"
+                AutomationProperties.AutomationId="LogOpenFolderButton"
+                ToolTipService.ToolTip="Open the folder that holds all gclo log files"
+                Click="OpenLogsFolder_Click" />
+        </Grid>
+
+        <!-- The raw log tail: timestamps, levels, and full exception text, in a
+             monospace face for scanability. Selection enabled for copy/paste. -->
+        <Border
+            Grid.Row="1"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8">
+            <ScrollViewer
+                x:Name="LogScroll"
+                Padding="12"
+                HorizontalScrollBarVisibility="Auto"
+                VerticalScrollBarVisibility="Auto">
+                <TextBlock
+                    x:Name="LogText"
+                    AutomationProperties.AutomationId="LogWindowText"
+                    FontFamily="Cascadia Mono, Consolas"
+                    FontSize="12"
+                    IsTextSelectionEnabled="True"
+                    TextWrapping="NoWrap" />
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Window>

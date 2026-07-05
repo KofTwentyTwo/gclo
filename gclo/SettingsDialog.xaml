@@ -11,25 +11,80 @@
     CloseButtonText="Cancel"
     DefaultButton="Primary">
 
-    <StackPanel MinWidth="380" Spacing="12">
-        <TextBox
-            x:Name="TargetFolderBox"
-            Header="Default target folder"
-            PlaceholderText="C:\src\my-org" />
+    <StackPanel MinWidth="420" Spacing="12">
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox
+                x:Name="TargetFolderBox"
+                Header="Default target folder"
+                PlaceholderText="C:\src\my-org"
+                ToolTipService.ToolTip="Pre-filled as the sync target for new workspaces" />
+            <Button
+                Grid.Column="1"
+                VerticalAlignment="Bottom"
+                Content="Browse…"
+                AutomationProperties.AutomationId="SettingsBrowseButton"
+                ToolTipService.ToolTip="Choose the default target folder"
+                Click="BrowseButton_Click" />
+        </Grid>
+        <PasswordBox
+            x:Name="DefaultTokenBox"
+            Header="Default GitHub token"
+            AutomationProperties.AutomationId="SettingsDefaultTokenBox"
+            ToolTipService.ToolTip="Pre-fills Quick Sync so you do not paste the token every launch. Stored in Windows Credential Manager, never in a file." />
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock
+                x:Name="TokenStateText"
+                VerticalAlignment="Center"
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <HyperlinkButton
+                x:Name="RemoveTokenButton"
+                Padding="0"
+                Content="Remove saved token"
+                ToolTipService.ToolTip="Deletes the saved default token from Windows Credential Manager when you press Save"
+                Click="RemoveTokenButton_Click" />
+        </StackPanel>
         <NumberBox
             x:Name="ConcurrencyBox"
             Header="Default parallelism"
             Minimum="1"
             Maximum="64"
             SmallChange="1"
-            SpinButtonPlacementMode="Inline" />
+            SpinButtonPlacementMode="Inline"
+            ToolTipService.ToolTip="How many repositories new workspaces clone or pull at the same time" />
         <ComboBox
             x:Name="ThemeBox"
             HorizontalAlignment="Stretch"
-            Header="Theme">
+            Header="Theme"
+            ToolTipService.ToolTip="Light, dark, or follow the Windows setting">
             <ComboBoxItem Content="System" />
             <ComboBoxItem Content="Light" />
             <ComboBoxItem Content="Dark" />
         </ComboBox>
+        <Expander
+            HorizontalAlignment="Stretch"
+            HorizontalContentAlignment="Stretch"
+            Header="Advanced">
+            <StackPanel Spacing="12">
+                <ToggleSwitch
+                    x:Name="SplashToggle"
+                    Header="Show splash screen at startup"
+                    AutomationProperties.AutomationId="SettingsSplashToggle"
+                    ToolTipService.ToolTip="Turns the branded startup splash on or off" />
+                <NumberBox
+                    x:Name="SplashDurationBox"
+                    Header="Splash duration (milliseconds)"
+                    Minimum="500"
+                    Maximum="30000"
+                    SmallChange="250"
+                    SpinButtonPlacementMode="Inline"
+                    AutomationProperties.AutomationId="SettingsSplashDurationBox"
+                    ToolTipService.ToolTip="How long the splash stays on screen before fading (500–30000 ms)" />
+            </StackPanel>
+        </Expander>
     </StackPanel>
 </ContentDialog>

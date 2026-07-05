@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="gclo.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -56,7 +56,8 @@
                 <NavigationViewItem
                     x:Name="QuickSyncNavItem"
                     AutomationProperties.AutomationId="NavQuickSync"
-                    Content="Quick Sync">
+                    Content="Quick Sync"
+                    ToolTipService.ToolTip="Ad-hoc sync: paste a token and go, nothing is saved">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE945;" />
                     </NavigationViewItem.Icon>
@@ -68,6 +69,7 @@
                     x:Name="SyncAllNavItem"
                     AutomationProperties.AutomationId="NavSyncAll"
                     Content="Sync all"
+                    ToolTipService.ToolTip="Run every saved account in order, one after another"
                     Tag="syncall"
                     IsEnabled="False">
                     <NavigationViewItem.Icon>
@@ -77,6 +79,7 @@
                 <NavigationViewItem
                     AutomationProperties.AutomationId="NavAddAccount"
                     Content="Add account"
+                    ToolTipService.ToolTip="Save an organization, token, and target as a reusable account"
                     Tag="add">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE710;" />
