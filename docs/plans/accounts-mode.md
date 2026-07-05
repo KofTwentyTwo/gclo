@@ -1,5 +1,9 @@
 # Implementation plan: Accounts mode + workspace redesign
 
+> **Status: shipped.** Delivered across the v0.1.0 betas and released in
+> **v1.0.0** (issues #16 and #22 closed). This document is kept as the historical
+> execution plan; the tracker of record is GitHub Issues.
+
 Delivers issue #16 (Accounts mode) built directly into the layout redesign
 direction recorded on that issue, with issue #22's findings reconciled along the
 way. Tracker of record: GitHub Issues; this document is the executable plan.

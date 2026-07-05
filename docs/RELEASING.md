@@ -163,3 +163,7 @@ published release: its assets cannot be swapped in place.
 gh release delete v1.2.3 --yes
 git push origin :refs/tags/v1.2.3
 ```
+
+> The repository's **tag protection ruleset** blocks tag deletion by default. To
+> delete a bad tag, temporarily disable (or add a bypass to) the tag ruleset in
+> **Settings → Rules → Rulesets**, delete the tag, then re-enable it.

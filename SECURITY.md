@@ -35,7 +35,8 @@ gclo is maintained by a single person in their spare time, so response times are
 
 gclo works with GitHub Personal Access Tokens, so token safety is part of the design:
 
-- **The PAT is kept in memory only.** It is used for the GitHub API and as the git HTTPS credential for the duration of a run, and is never written to disk, settings, or logs. The app's persisted settings (`%LOCALAPPDATA%\gclo\settings.json`) contain only preferences such as the default folder, parallelism, and theme — never the token.
+- **Quick Sync tokens are kept in memory only.** A token pasted into Quick Sync is used for the GitHub API and as the git HTTPS credential for the duration of the session, and is never written to disk, settings, or logs.
+- **Saved-account tokens and the default token live in the Windows Credential Manager.** When you save an account, or set a default token in Settings, the token is stored in the per-user Windows Credential Manager (DPAPI-protected), under a `gclo:account:<id>` target, and removed when the account or token is deleted. It is **never** written to `settings.json`, `accounts.json`, or any log — those files hold only non-secret metadata (organization, target folder, parallelism, theme, last-sync summary). This is why accounts are Windows-only.
 - **The CLI refuses tokens on the command line.** There is deliberately no `--token <value>` option; tokens are accepted only via environment variable (`--token-env`, default `GITHUB_TOKEN`), a file (`--token-file`), or standard input (`--token-stdin`). See [docs/CLI.md](docs/CLI.md).
 - **Secret-scanning push protection is enabled** on this repository, so credentials cannot be accidentally committed and pushed.
 

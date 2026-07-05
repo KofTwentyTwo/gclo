@@ -319,5 +319,7 @@ done
 
 ```console
 $ gclo --version
-0.1.0-beta.6 (9ac6c2bde)
+1.0.0 (a893741d2)
 ```
+
+Released builds print the semantic version and the short commit hash; local builds print the next-release version with a `-dev` suffix (e.g. `1.0.1-dev (<hash>)`).
