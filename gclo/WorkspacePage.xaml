@@ -15,6 +15,28 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
+        <VisualStateManager.VisualStateGroups>
+            <!-- Driven by UpdateToolbarLayout (measured widths, not window width, so
+                 text scaling and localization count too). The markup default is the
+                 narrow two-row toolbar; this state lifts the action buttons back
+                 beside the filter bar when everything fits on one row. -->
+            <VisualStateGroup x:Name="ToolbarLayoutStates">
+                <VisualState x:Name="ToolbarTwoRow" />
+                <VisualState x:Name="ToolbarSingleRow">
+                    <VisualState.Setters>
+                        <Setter Target="IdleActions.(Grid.Row)" Value="0" />
+                        <Setter Target="IdleActions.(Grid.Column)" Value="2" />
+                        <Setter Target="IdleActions.(Grid.ColumnSpan)" Value="1" />
+                        <Setter Target="IdleActions.Margin" Value="0" />
+                        <Setter Target="RunningActions.(Grid.Row)" Value="0" />
+                        <Setter Target="RunningActions.(Grid.Column)" Value="2" />
+                        <Setter Target="RunningActions.(Grid.ColumnSpan)" Value="1" />
+                        <Setter Target="RunningActions.Margin" Value="0" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
         <!-- ============================================================ State 1
              Connect card, shown until the first successful load in this workspace. -->
         <ScrollViewer
@@ -281,11 +303,22 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <!-- Toolbar: filter | selection summary | spacer | options / refresh / sync,
-                     with the right side swapping to live progress + Cancel while running. -->
-                <Grid Grid.Row="0" ColumnSpacing="12">
+                <!-- Toolbar: filter | selection summary (trims) | options / refresh / sync,
+                     with the right side swapping to live progress + Cancel while running.
+                     The XAML default is the narrow layout (actions on their own row); the
+                     ToolbarSingleRow visual state lifts them beside the filter when the
+                     measured widths fit — see UpdateToolbarLayout, which responds to any
+                     width pressure (window size, text scaling, localization). -->
+                <Grid
+                    x:Name="ToolbarGrid"
+                    Grid.Row="0"
+                    ColumnSpacing="12"
+                    SizeChanged="Toolbar_SizeChanged">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -305,11 +338,18 @@
                         x:Name="SelectionSummaryText"
                         Grid.Column="1"
                         VerticalAlignment="Center"
+                        TextTrimming="CharacterEllipsis"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <StackPanel
-                        Grid.Column="3"
+                        x:Name="IdleActions"
+                        Grid.Row="1"
+                        Grid.Column="0"
+                        Grid.ColumnSpan="3"
+                        Margin="0,8,0,0"
+                        HorizontalAlignment="Right"
                         Orientation="Horizontal"
                         Spacing="8"
+                        SizeChanged="Toolbar_SizeChanged"
                         Visibility="{x:Bind local:StatusFormat.VisibleIfNot(ViewModel.IsRunning), Mode=OneWay}">
                         <Button
                             x:Name="OptionsButton"
@@ -367,12 +407,18 @@
                         </Button>
                     </StackPanel>
                     <StackPanel
-                        Grid.Column="3"
+                        x:Name="RunningActions"
+                        Grid.Row="1"
+                        Grid.Column="0"
+                        Grid.ColumnSpan="3"
+                        Margin="0,8,0,0"
+                        HorizontalAlignment="Right"
                         Orientation="Horizontal"
                         Spacing="8"
+                        SizeChanged="Toolbar_SizeChanged"
                         Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.IsRunning), Mode=OneWay}">
                         <ProgressBar
-                            Width="160"
+                            Width="120"
                             VerticalAlignment="Center"
                             AutomationProperties.Name="Overall sync progress"
                             Maximum="{x:Bind ViewModel.TotalCount, Mode=OneWay}"

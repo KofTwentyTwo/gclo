@@ -149,6 +149,30 @@ namespace gclo
             }
         }
 
+        private void Toolbar_SizeChanged(object sender, SizeChangedEventArgs e)
+            => UpdateToolbarLayout();
+
+        /// <summary>
+        /// Picks the toolbar layout from measured widths: the action buttons sit beside
+        /// the filter bar only when both fit on one row, otherwise they drop to their
+        /// own right-aligned row. Measuring (instead of a window-width trigger) makes
+        /// this respond to every source of width pressure — window size, Windows text
+        /// scaling, localization, and count-dependent label growth. The idle/running
+        /// action groups swap by visibility, so the wider of the two is what must fit;
+        /// a collapsed group keeps its last arranged width, which is exactly the width
+        /// it will need when it comes back.
+        /// </summary>
+        private void UpdateToolbarLayout()
+        {
+            // Two ColumnSpacing gaps (filter | summary | actions); the summary itself
+            // may trim to nothing, so it claims no reserved width here.
+            double gaps = ToolbarGrid.ColumnSpacing * 2;
+            double actions = Math.Max(IdleActions.ActualWidth, RunningActions.ActualWidth);
+            bool fits = FilterSelectorBar.ActualWidth + gaps + actions <= ToolbarGrid.ActualWidth;
+            VisualStateManager.GoToState(
+                this, fits ? "ToolbarSingleRow" : "ToolbarTwoRow", useTransitions: false);
+        }
+
         // The chip's Edit link opens its attached flyout (HyperlinkButton has no
         // Flyout property of its own).
         private void EditButton_Click(object sender, RoutedEventArgs e)
