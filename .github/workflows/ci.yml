@@ -55,7 +55,8 @@ jobs:
           }
           # Merge every collected report: the two test projects each emit their own,
           # and a package's covered lines can be split across them.
-          $required = @('gclo.Engine', 'gclo.ViewModels', 'gclo.Cli')
+          # The CLI's assembly (and thus its coverage package) is 'gclo' — it ships as gclo.exe.
+          $required = @('gclo.Engine', 'gclo.ViewModels', 'gclo')
           $failed = $false
           foreach ($name in $required) {
             $rates = foreach ($f in $files) {
