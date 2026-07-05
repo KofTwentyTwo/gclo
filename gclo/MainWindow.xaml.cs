@@ -111,17 +111,21 @@ namespace gclo
 
             Closed += (_, _) => DisposeWorkspaces();
 
-            // Dismiss the startup splash overlay once it has been visible long enough
-            // to read as an intentional brand moment rather than a flicker.
-            DispatcherQueue.TryEnqueue(async () =>
+            // The splash overlay honors Settings → Advanced: skipped entirely when
+            // disabled, otherwise dismissed after the configured display time.
+            if (_settings.ShowSplashScreen)
             {
-                await Task.Delay(MinimumSplashMilliseconds);
-                await StartupSplash.DismissAsync();
-            });
+                DispatcherQueue.TryEnqueue(async () =>
+                {
+                    await Task.Delay(_settings.SplashMilliseconds);
+                    await StartupSplash.DismissAsync();
+                });
+            }
+            else
+            {
+                StartupSplash.Visibility = Visibility.Collapsed;
+            }
         }
-
-        /// <summary>Minimum splash display, so a fast startup never shows a flicker.</summary>
-        private const int MinimumSplashMilliseconds = 800;
 
         private void ApplySettings()
         {
@@ -253,8 +257,14 @@ namespace gclo
         {
             if (id == Guid.Empty)
             {
-                // Quick Sync: no account behind it — exactly the pre-accounts behavior.
-                return new WorkspaceViewModel(log: _log);
+                // Quick Sync: no account behind it. A saved default token (Settings)
+                // pre-fills the connect card; setting Token also starts the org lookup.
+                var quickSync = new WorkspaceViewModel(log: _log);
+                if (_tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId) is { Length: > 0 } defaultToken)
+                {
+                    quickSync.Token = defaultToken;
+                }
+                return quickSync;
             }
 
             Account? account = _accountsStore.GetAll().FirstOrDefault(a => a.Id == id);
@@ -662,7 +672,11 @@ namespace gclo
 
         private async void SettingsMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            var dialog = new SettingsDialog(_settings) { XamlRoot = Content.XamlRoot };
+            var dialog = new SettingsDialog(
+                _settings, _tokenVault, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
+            {
+                XamlRoot = Content.XamlRoot,
+            };
             if (await DialogGuard.ShowAsync(dialog) == ContentDialogResult.Primary)
             {
                 dialog.ApplyAndSave();

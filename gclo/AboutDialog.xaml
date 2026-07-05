@@ -10,20 +10,50 @@
     CloseButtonText="Close"
     DefaultButton="Close">
 
-    <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto">
+    <ScrollViewer MaxHeight="460" VerticalScrollBarVisibility="Auto">
         <StackPanel Spacing="12" Padding="0,0,12,0">
 
-            <!-- App identity -->
-            <StackPanel Spacing="4">
-                <TextBlock Text="gclo — Git Clone Large Organizations" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                <TextBlock
-                    Text="Clone and update every repository in a GitHub organization."
-                    TextWrapping="Wrap" />
-                <TextBlock
-                    x:Name="VersionText"
-                    AutomationProperties.AutomationId="AboutVersionText"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            </StackPanel>
+            <!-- Brand header: the splash's look in miniature (same gradient, glyph,
+                 wordmark, and white type — deliberately single-theme, like the splash). -->
+            <Border CornerRadius="8" RequestedTheme="Dark">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Offset="0" Color="#3B4CCA" />
+                        <GradientStop Offset="1" Color="#2A2F8F" />
+                    </LinearGradientBrush>
+                </Border.Background>
+                <StackPanel Padding="20,16" Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <FontIcon
+                            Glyph="&#xE895;"
+                            FontSize="28"
+                            Foreground="White"
+                            VerticalAlignment="Center" />
+                        <TextBlock
+                            Text="gclo"
+                            FontFamily="Segoe UI Variable Display"
+                            FontWeight="SemiBold"
+                            FontSize="28"
+                            Foreground="White"
+                            VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock
+                        Text="Git Clone Large Organizations"
+                        FontSize="13"
+                        Foreground="White"
+                        Opacity="0.8" />
+                    <TextBlock
+                        x:Name="VersionText"
+                        AutomationProperties.AutomationId="AboutVersionText"
+                        FontSize="12"
+                        Foreground="White"
+                        Opacity="0.7" />
+                </StackPanel>
+            </Border>
+
+            <TextBlock
+                Text="Clone and update every repository in a GitHub organization."
+                TextWrapping="Wrap" />
 
             <HyperlinkButton
                 Padding="0"

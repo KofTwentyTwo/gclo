@@ -15,6 +15,17 @@ public sealed class AppSettings
     public const int MaxConcurrency = 64;
     public const int DefaultConcurrency = 8;
 
+    public const int MinSplashMilliseconds = 500;
+    public const int MaxSplashMilliseconds = 30_000;
+    public const int DefaultSplashMilliseconds = 5_000;
+
+    /// <summary>
+    /// Vault id under which the optional default GitHub token is stored. The token
+    /// itself lives only in the <see cref="ITokenVault"/> (Credential Manager) —
+    /// never in this settings file.
+    /// </summary>
+    public static readonly Guid DefaultTokenVaultId = new("d0f0e0c0-9c40-4a5e-8f3a-5b1e6f7a2c11");
+
     /// <summary>Folder pre-filled as the sync target. Empty means "no default".</summary>
     public string DefaultTargetFolder { get; set; } = "";
 
@@ -23,6 +34,12 @@ public sealed class AppSettings
 
     /// <summary>App theme: "System", "Light", or "Dark". Unknown values fall back to "System".</summary>
     public string Theme { get; set; } = "System";
+
+    /// <summary>Whether the branded splash overlay shows at startup.</summary>
+    public bool ShowSplashScreen { get; set; } = true;
+
+    /// <summary>How long the splash stays up before fading, clamped to 500..30000 ms.</summary>
+    public int SplashMilliseconds { get; set; } = DefaultSplashMilliseconds;
 
     private static string SettingsPath => Path.Combine(GcloPaths.DataRoot, "settings.json");
 
@@ -84,6 +101,7 @@ public sealed class AppSettings
         // The JSON deserializer can assign null despite the non-nullable annotation.
         DefaultTargetFolder ??= "";
         DefaultMaxConcurrency = Math.Clamp(DefaultMaxConcurrency, MinConcurrency, MaxConcurrency);
+        SplashMilliseconds = Math.Clamp(SplashMilliseconds, MinSplashMilliseconds, MaxSplashMilliseconds);
         if (Theme is not ("System" or "Light" or "Dark"))
         {
             Theme = "System";
