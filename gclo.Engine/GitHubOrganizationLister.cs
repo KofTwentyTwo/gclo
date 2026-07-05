@@ -5,31 +5,41 @@ namespace gclo.Engine;
 /// <summary>Lists the authenticated user's organizations through the GitHub REST API.</summary>
 public sealed class GitHubOrganizationLister : IOrganizationLister
 {
+    private readonly Func<string, IGitHubGateway> _gatewayFactory;
+
+    /// <summary>Production wiring: a fresh Octokit-backed gateway per call's token.</summary>
+    public GitHubOrganizationLister()
+        : this(CreateOctokitGateway)
+    {
+    }
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+        Justification = "Production wiring to the live GitHub API; the offline suite injects a fake gateway.")]
+    private static IGitHubGateway CreateOctokitGateway(string token) => new OctokitGateway(token);
+
+    /// <summary>Test seam: substitute the GitHub API with a fake gateway.</summary>
+    internal GitHubOrganizationLister(Func<string, IGitHubGateway> gatewayFactory)
+        => _gatewayFactory = gatewayFactory ?? throw new ArgumentNullException(nameof(gatewayFactory));
+
     /// <inheritdoc/>
     public async Task<IReadOnlyList<string>> ListOrganizationsAsync(string token, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var client = new GitHubClient(new ProductHeaderValue("gclo"))
-        {
-            Credentials = new Credentials(token),
-        };
+        IGitHubGateway gateway = _gatewayFactory(token);
 
         string userLogin;
-        IReadOnlyList<Organization> organizations;
+        IReadOnlyList<string> organizations;
         try
         {
             // The token's own account is a valid sync target too (personal repos
             // live under /users, not /orgs), so it heads the list.
-            var currentUser = await client.User.Current().ConfigureAwait(false);
-            userLogin = currentUser.Login;
+            userLogin = await gateway.GetCurrentUserLoginAsync().ConfigureAwait(false);
 
             try
             {
-                organizations = await client.Organization
-                    .GetAllForCurrent(new ApiOptions { PageSize = 100 })
-                    .ConfigureAwait(false);
+                organizations = await gateway.GetOrganizationLoginsAsync().ConfigureAwait(false);
             }
             catch (ForbiddenException ex) when (ex is not RateLimitExceededException)
             {
@@ -53,7 +63,6 @@ public sealed class GitHubOrganizationLister : IOrganizationLister
 
         var result = new List<string> { userLogin };
         result.AddRange(organizations
-            .Select(o => o.Login)
             .Where(login => !string.Equals(login, userLogin, StringComparison.OrdinalIgnoreCase))
             .OrderBy(login => login, StringComparer.OrdinalIgnoreCase));
         return result;

@@ -105,20 +105,9 @@ internal sealed class TokenOptions
 
     private static string FromStdin()
     {
-        string? line;
-        if (Console.IsInputRedirected)
-        {
-            line = Console.In.ReadLine()?.Trim();
-        }
-        else
-        {
-            // Interactive use: prompt on stderr (redirected stdout stays clean) and
-            // read WITHOUT echo, like git/gh credential prompts — an echoed token
-            // would sit on screen and in the terminal scrollback.
-            Console.Error.Write("Token: ");
-            line = ReadLineNoEcho().Trim();
-            Console.Error.WriteLine();
-        }
+        string? line = Console.IsInputRedirected
+            ? Console.In.ReadLine()?.Trim()
+            : ReadInteractiveToken();
 
         if (string.IsNullOrEmpty(line))
         {
@@ -127,6 +116,21 @@ internal sealed class TokenOptions
         return line;
     }
 
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+        Justification = "Interactive prompt + no-echo read; reachable only from a real terminal, not an offline test.")]
+    private static string ReadInteractiveToken()
+    {
+        // Interactive use: prompt on stderr (redirected stdout stays clean) and read
+        // WITHOUT echo, like git/gh credential prompts — an echoed token would sit on
+        // screen and in the terminal scrollback.
+        Console.Error.Write("Token: ");
+        string line = ReadLineNoEcho().Trim();
+        Console.Error.WriteLine();
+        return line;
+    }
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+        Justification = "Interactive no-echo console read; keystrokes cannot be simulated in an offline test.")]
     private static string ReadLineNoEcho()
     {
         var buffer = new System.Text.StringBuilder();

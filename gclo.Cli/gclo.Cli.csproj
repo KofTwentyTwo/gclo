@@ -15,4 +15,9 @@
     <ProjectReference Include="..\gclo.ViewModels\gclo.ViewModels.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The test suite drives internal command cores with injected collaborators. -->
+    <InternalsVisibleTo Include="gclo.Cli.Tests" />
+  </ItemGroup>
+
 </Project>

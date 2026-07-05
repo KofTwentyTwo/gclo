@@ -261,4 +261,91 @@ public sealed class SyncAllCoordinatorTests : IDisposable
         Assert.False(workspace.HasLoadedRepos);
         Assert.Empty(git.CloneCalls);
     }
+
+    // ---------------------------------------------------------------- queue states
+
+    private List<(Guid Id, SyncAllAccountState State)> RecordStates()
+    {
+        var states = new List<(Guid, SyncAllAccountState)>();
+        _coordinator.AccountStateChanged = (id, state) => states.Add((id, state));
+        return states;
+    }
+
+    [Fact]
+    public async Task RunAsync_AnnouncesQueuedForAll_ThenRunningAndTerminalPerAccount()
+    {
+        var alpha = CreateWorkspace("alpha");
+        var beta = CreateWorkspace("beta");
+        var states = RecordStates();
+
+        await _coordinator.RunAsync(new[] { alpha, beta }, CancellationToken.None);
+
+        Assert.Equal(
+            new[]
+            {
+                (alpha.AccountId!.Value, SyncAllAccountState.Queued),
+                (beta.AccountId!.Value, SyncAllAccountState.Queued),
+                (alpha.AccountId!.Value, SyncAllAccountState.Running),
+                (alpha.AccountId!.Value, SyncAllAccountState.Succeeded),
+                (beta.AccountId!.Value, SyncAllAccountState.Running),
+                (beta.AccountId!.Value, SyncAllAccountState.Succeeded),
+            },
+            states);
+    }
+
+    [Fact]
+    public async Task RunAsync_AccountWithFailedRepos_AnnouncesFailed()
+    {
+        var git = new FakeGitClient
+        {
+            CloneHandler = (_, _, _, _, _) =>
+                Task.FromException(new InvalidOperationException("boom")),
+        };
+        var workspace = CreateWorkspace("alpha", git);
+        var states = RecordStates();
+
+        await _coordinator.RunAsync(new[] { workspace }, CancellationToken.None);
+
+        Assert.Equal(SyncAllAccountState.Failed, states[^1].State);
+    }
+
+    [Fact]
+    public async Task RunAsync_BusyAccount_AnnouncesSkippedWithoutRunning()
+    {
+        var workspace = CreateWorkspace("alpha");
+        workspace.IsResolvingPaths = true; // busy: must be skipped
+        var states = RecordStates();
+
+        await _coordinator.RunAsync(new[] { workspace }, CancellationToken.None);
+
+        Assert.Equal(
+            new[]
+            {
+                (workspace.AccountId!.Value, SyncAllAccountState.Queued),
+                (workspace.AccountId!.Value, SyncAllAccountState.Skipped),
+            },
+            states);
+    }
+
+    [Fact]
+    public async Task RunAsync_CanceledQueue_AnnouncesSkippedForUnstartedAccounts()
+    {
+        var alpha = CreateWorkspace("alpha");
+        var beta = CreateWorkspace("beta");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var states = RecordStates();
+
+        await _coordinator.RunAsync(new[] { alpha, beta }, cts.Token);
+
+        Assert.Equal(
+            new[]
+            {
+                (alpha.AccountId!.Value, SyncAllAccountState.Queued),
+                (beta.AccountId!.Value, SyncAllAccountState.Queued),
+                (alpha.AccountId!.Value, SyncAllAccountState.Skipped),
+                (beta.AccountId!.Value, SyncAllAccountState.Skipped),
+            },
+            states);
+    }
 }

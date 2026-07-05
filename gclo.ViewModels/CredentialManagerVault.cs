@@ -21,8 +21,14 @@ public sealed class CredentialManagerVault : ITokenVault
 
     /// <summary>Fails fast on platforms without a Credential Manager.</summary>
     public CredentialManagerVault()
+        : this(OperatingSystem.IsWindows())
     {
-        if (!OperatingSystem.IsWindows())
+    }
+
+    /// <summary>Test seam: the platform check is a parameter so both arms are coverable.</summary>
+    internal CredentialManagerVault(bool isWindows)
+    {
+        if (!isWindows)
         {
             throw new PlatformNotSupportedException(
                 "Account token storage requires the Windows Credential Manager.");
@@ -66,9 +72,15 @@ public sealed class CredentialManagerVault : ITokenVault
     }
 
     /// <inheritdoc/>
-    public string? TryRetrieve(Guid accountId)
+    public string? TryRetrieve(Guid accountId) => TryRetrieve(TargetName(accountId), accountId);
+
+    /// <summary>Test seam: an invalid target name makes the non-not-found error arm coverable.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance", "CA1822:Mark members as static",
+        Justification = "Instance seam: tests call it on a constructed vault; static would be a CS0176.")]
+    internal string? TryRetrieve(string targetName, Guid accountId)
     {
-        if (!CredReadW(TargetName(accountId), CredTypeGeneric, 0, out IntPtr credentialPtr))
+        if (!CredReadW(targetName, CredTypeGeneric, 0, out IntPtr credentialPtr))
         {
             int error = Marshal.GetLastWin32Error();
             if (error == ErrorNotFound)
@@ -93,9 +105,15 @@ public sealed class CredentialManagerVault : ITokenVault
     }
 
     /// <inheritdoc/>
-    public void Delete(Guid accountId)
+    public void Delete(Guid accountId) => Delete(TargetName(accountId), accountId);
+
+    /// <summary>Test seam: an invalid target name makes the non-not-found error arm coverable.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance", "CA1822:Mark members as static",
+        Justification = "Instance seam: tests call it on a constructed vault; static would be a CS0176.")]
+    internal void Delete(string targetName, Guid accountId)
     {
-        if (!CredDeleteW(TargetName(accountId), CredTypeGeneric, 0))
+        if (!CredDeleteW(targetName, CredTypeGeneric, 0))
         {
             int error = Marshal.GetLastWin32Error();
             if (error != ErrorNotFound)

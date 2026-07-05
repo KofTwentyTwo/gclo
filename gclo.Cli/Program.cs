@@ -1,8 +1,16 @@
+using System.Diagnostics.CodeAnalysis;
 using gclo.Engine;
 
 namespace gclo.Cli;
 
-/// <summary>Entry point: command dispatch, Ctrl+C wiring, and top-level error handling.</summary>
+/// <summary>
+/// Entry point: command dispatch, Ctrl+C wiring, and top-level error handling.
+/// Excluded from coverage as the composition root — it wires the real network/native
+/// collaborators (GitHub listers, LibGit2 client, Credential Manager) and the process
+/// Console/Ctrl+C, none reproducible offline. The command logic it dispatches to lives
+/// in the injectable internal cores, which are covered to 100%.
+/// </summary>
+[ExcludeFromCodeCoverage(Justification = "Composition root: wires real collaborators and the process Console/Ctrl+C.")]
 internal static class Program
 {
     private const string RootHelp = """

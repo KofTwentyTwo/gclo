@@ -30,6 +30,18 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     /// <summary>Canceled on dispose so an in-flight path recovery dies with the workspace.</summary>
     private readonly CancellationTokenSource _lifetimeCts = new();
 
+    /// <summary>
+    /// Runs one sync pass; the real <see cref="OrgSyncEngine"/> by default. A test seam:
+    /// the engine swallows cancellation into a summary, so the only way to exercise the
+    /// view model's own <see cref="OperationCanceledException"/> handling is to inject a
+    /// runner that throws it.
+    /// </summary>
+    internal Func<SyncRequest, IReadOnlyList<RepoDescriptor>, IProgress<RepoProgress>, CancellationToken, Task<SyncSummary>>? SyncRunner
+    {
+        get;
+        set;
+    }
+
     /// <summary>Breaks the AllSelected &lt;-&gt; item.IsSelected feedback loop while one side updates the other.</summary>
     private bool _syncingSelection;
 
@@ -594,12 +606,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             // SynchronizationContext, so HandleProgress always runs on the UI thread.
             var progress = _progressFactory(HandleProgress);
 
-            var engine = new OrgSyncEngine(_lister, _git);
             var request = new SyncRequest(
                 Organization.Trim(), Token.Trim(), targetRoot, MaxConcurrency);
             IReadOnlyList<RepoDescriptor> descriptors = selected.Select(r => r.Descriptor).ToList();
 
-            SyncSummary summary = await engine.SyncAsync(request, descriptors, progress, cancellationToken);
+            Func<SyncRequest, IReadOnlyList<RepoDescriptor>, IProgress<RepoProgress>, CancellationToken, Task<SyncSummary>> run =
+                SyncRunner ?? ((req, descs, prog, ct) => new OrgSyncEngine(_lister, _git).SyncAsync(req, descs, prog, ct));
+            SyncSummary summary = await run(request, descriptors, progress, cancellationToken);
 
             string summaryText = (summary.WasCanceled ? "Canceled" : "Finished")
                 + $": {summary.Cloned} cloned, {summary.Updated} updated, "

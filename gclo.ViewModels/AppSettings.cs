@@ -101,7 +101,11 @@ public sealed class AppSettings
         // The JSON deserializer can assign null despite the non-nullable annotation.
         DefaultTargetFolder ??= "";
         DefaultMaxConcurrency = Math.Clamp(DefaultMaxConcurrency, MinConcurrency, MaxConcurrency);
-        SplashMilliseconds = Math.Clamp(SplashMilliseconds, MinSplashMilliseconds, MaxSplashMilliseconds);
+        // 0 means the field was absent (settings.json written by an older version):
+        // migrate to the default rather than clamping an unset value to the minimum.
+        SplashMilliseconds = SplashMilliseconds == 0
+            ? DefaultSplashMilliseconds
+            : Math.Clamp(SplashMilliseconds, MinSplashMilliseconds, MaxSplashMilliseconds);
         if (Theme is not ("System" or "Light" or "Dark"))
         {
             Theme = "System";
