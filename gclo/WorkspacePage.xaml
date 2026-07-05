@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <UserControl
     x:Class="gclo.WorkspacePage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -85,6 +85,7 @@
                             x:Name="TokenBox"
                             AutomationProperties.AutomationId="ConnectTokenBox"
                             Header="Personal access token"
+                            ToolTipService.ToolTip="Fine-grained or classic PAT with repository read access; used for the GitHub API and git over HTTPS. Never written to disk or logs."
                             PlaceholderText="ghp_…"
                             PasswordChanged="TokenBox_PasswordChanged" />
                         <HyperlinkButton
@@ -101,6 +102,7 @@
                                 AutomationProperties.AutomationId="ConnectOrgBox"
                                 HorizontalAlignment="Stretch"
                                 Header="Organization or account"
+                                ToolTipService.ToolTip="The GitHub organization or user account whose repositories are synced. Populated from the token; typing a name also works."
                                 IsEditable="True"
                                 ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
                                 PlaceholderText="Paste a token first, or type an org"
@@ -123,12 +125,14 @@
                             <TextBox
                                 Grid.Column="0"
                                 AutomationProperties.AutomationId="ConnectTargetBox"
+                                ToolTipService.ToolTip="Local folder each repository is cloned into (one subfolder per repository)"
                                 Header="Target folder"
                                 PlaceholderText="C:\src\my-org"
                                 Text="{x:Bind ViewModel.TargetFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <Button
                                 Grid.Column="1"
                                 AutomationProperties.AutomationId="ConnectBrowseButton"
+                                ToolTipService.ToolTip="Choose the target folder"
                                 VerticalAlignment="Bottom"
                                 Content="Browse…"
                                 Click="BrowseButton_Click" />
@@ -151,6 +155,7 @@
                         <Button
                             MinWidth="140"
                             AutomationProperties.AutomationId="LoadReposButton"
+                            ToolTipService.ToolTip="List every repository the token can see in this organization"
                             Style="{StaticResource AccentButtonStyle}"
                             Content="Load repositories"
                             Command="{x:Bind ViewModel.LoadReposCommand, Mode=OneTime}">
@@ -351,10 +356,10 @@
                         Grid.Column="0"
                         VerticalAlignment="Center"
                         SelectionChanged="FilterSelectorBar_SelectionChanged">
-                        <SelectorBarItem x:Name="FilterAllItem" Text="All" Tag="All" />
-                        <SelectorBarItem Text="Active" Tag="Active" />
-                        <SelectorBarItem Text="Failed" Tag="Failed" />
-                        <SelectorBarItem Text="Pending" Tag="Pending" />
+                        <SelectorBarItem x:Name="FilterAllItem" Text="All" Tag="All" ToolTipService.ToolTip="Show every loaded repository" />
+                        <SelectorBarItem Text="Active" Tag="Active" ToolTipService.ToolTip="Show repositories cloning or pulling right now" />
+                        <SelectorBarItem Text="Failed" Tag="Failed" ToolTipService.ToolTip="Show repositories whose last run failed" />
+                        <SelectorBarItem Text="Pending" Tag="Pending" ToolTipService.ToolTip="Show repositories still waiting to run" />
                     </SelectorBar>
                     <TextBlock
                         x:Name="SelectionSummaryText"
@@ -412,6 +417,7 @@
                         <Button
                             AutomationProperties.AutomationId="RefreshButton"
                             Content="Refresh"
+                            ToolTipService.ToolTip="Reload the repository list from GitHub (Ctrl+R)"
                             Command="{x:Bind ViewModel.LoadReposCommand, Mode=OneTime}">
                             <Button.KeyboardAccelerators>
                                 <KeyboardAccelerator Key="R" Modifiers="Control" />
@@ -421,6 +427,7 @@
                             MinWidth="120"
                             AutomationProperties.AutomationId="SyncButton"
                             Style="{StaticResource AccentButtonStyle}"
+                            ToolTipService.ToolTip="Clone new repositories and update existing ones, for the selected rows (Ctrl+Enter)"
                             Content="{x:Bind ViewModel.SyncButtonLabel, Mode=OneWay}"
                             Command="{x:Bind ViewModel.SyncCommand, Mode=OneTime}">
                             <Button.KeyboardAccelerators>
@@ -451,6 +458,7 @@
                         <Button
                             AutomationProperties.AutomationId="CancelSyncButton"
                             Content="Cancel"
+                            ToolTipService.ToolTip="Stop scheduling new repositories; operations already running finish cleanly (Esc)"
                             Command="{x:Bind ViewModel.SyncCancelCommand, Mode=OneTime}">
                             <Button.KeyboardAccelerators>
                                 <KeyboardAccelerator Key="Escape" />

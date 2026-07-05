@@ -109,7 +109,11 @@ namespace gclo
                 presenter.PreferredMinimumHeight = (int)(MinWindowHeight * scale);
             }
 
-            Closed += (_, _) => DisposeWorkspaces();
+            Closed += (_, _) =>
+            {
+                _logWindow?.Close(); // a log-only process would linger otherwise
+                DisposeWorkspaces();
+            };
 
             // The splash overlay honors Settings → Advanced: skipped entirely when
             // disabled, otherwise dismissed after the configured display time.
@@ -686,10 +690,19 @@ namespace gclo
 
         private void ExitMenuItem_Click(object sender, RoutedEventArgs e) => Close();
 
-        private async void ActivityLogMenuItem_Click(object sender, RoutedEventArgs e)
+        /// <summary>The one log window, re-activated while open; null when closed.</summary>
+        private LogWindow? _logWindow;
+
+        private void ActivityLogMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            var dialog = new LogViewerDialog(_log) { XamlRoot = Content.XamlRoot };
-            await DialogGuard.ShowAsync(dialog);
+            // Non-modal by design: the log stays open and live-updating beside the
+            // main window while syncs run.
+            if (_logWindow is null)
+            {
+                _logWindow = new LogWindow(_log);
+                _logWindow.Closed += (_, _) => _logWindow = null;
+            }
+            _logWindow.Activate();
         }
 
         private async void GitHubMenuItem_Click(object sender, RoutedEventArgs e)

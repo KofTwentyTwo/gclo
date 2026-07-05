@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <ContentDialog
     x:Class="gclo.AccountWizardDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -30,6 +30,7 @@
             <TextBox
                 AutomationProperties.AutomationId="WizardNameBox"
                 Header="Account name"
+                ToolTipService.ToolTip="Shown in the navigation pane; must be unique"
                 PlaceholderText="e.g. Work – Acme"
                 Text="{x:Bind ViewModel.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
             <TextBlock
@@ -41,6 +42,7 @@
                 Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.NameError), Mode=OneWay}" />
             <TextBox
                 Header="Description (optional)"
+                ToolTipService.ToolTip="A note to future you about what this account is for"
                 PlaceholderText="What this account is for"
                 Text="{x:Bind ViewModel.Description, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
         </StackPanel>
@@ -56,6 +58,7 @@
                 x:Name="TokenBox"
                 AutomationProperties.AutomationId="WizardTokenBox"
                 Header="Personal access token"
+                ToolTipService.ToolTip="Stored in Windows Credential Manager, never in a file; needs repository read access"
                 PlaceholderText="ghp_…"
                 PasswordChanged="TokenBox_PasswordChanged" />
             <HyperlinkButton
@@ -99,6 +102,7 @@
                 AutomationProperties.AutomationId="WizardOrgBox"
                 HorizontalAlignment="Stretch"
                 Header="Organization or account"
+                ToolTipService.ToolTip="The GitHub organization or user account this saved account syncs"
                 IsEditable="True"
                 ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
                 PlaceholderText="Choose from the list, or type a name"
@@ -122,6 +126,7 @@
                     Grid.Column="0"
                     AutomationProperties.AutomationId="WizardTargetBox"
                     Header="Target folder"
+                ToolTipService.ToolTip="Local folder each repository is cloned into"
                     PlaceholderText="C:\src\my-org"
                     Text="{x:Bind ViewModel.TargetRoot, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                 <Button
@@ -137,6 +142,7 @@
             <NumberBox
                 x:Name="ConcurrencyBox"
                 Header="Parallel clones and pulls"
+                ToolTipService.ToolTip="How many repositories run at the same time (1-64)"
                 Minimum="1"
                 Maximum="64"
                 SmallChange="1"
