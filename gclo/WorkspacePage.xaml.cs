@@ -123,6 +123,20 @@ namespace gclo
             {
                 UpdateDerivedTexts();
             }
+            else if (e.PropertyName == nameof(WorkspaceViewModel.Filter))
+            {
+                // The status filter can now change from the header flyout too; keep
+                // the toolbar chips in agreement. Selecting the already-selected item
+                // (or the echo from the chips' own handler) is a no-op.
+                foreach (SelectorBarItem item in FilterSelectorBar.Items)
+                {
+                    if (item.Tag is string tag && tag == ViewModel.Filter.ToString())
+                    {
+                        FilterSelectorBar.SelectedItem = item;
+                        break;
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -148,6 +162,85 @@ namespace gclo
                 ViewModel.Filter = filter;
             }
         }
+
+        // -------------------------------------------------------- column filters
+        //
+        // The flyout inputs bind OneWay from the view model and write back through
+        // these handlers; the view model setters no-op on equal values, so the echo
+        // from a programmatic Text/SelectedIndex update never loops.
+
+        private void NameFilterBox_TextChanged(object sender, TextChangedEventArgs e)
+            => ViewModel.NameFilter = ((TextBox)sender).Text;
+
+        private void ClearNameFilter_Click(object sender, RoutedEventArgs e)
+            => ViewModel.NameFilter = "";
+
+        private void BranchFilterBox_TextChanged(object sender, TextChangedEventArgs e)
+            => ViewModel.BranchFilter = ((TextBox)sender).Text;
+
+        private void ClearBranchFilter_Click(object sender, RoutedEventArgs e)
+            => ViewModel.BranchFilter = "";
+
+        private void StatusFilterChoices_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (((RadioButtons)sender).SelectedIndex is >= 0 and int index)
+            {
+                ViewModel.Filter = (RepoFilter)index; // list order mirrors the enum
+            }
+        }
+
+        private void ArchivedFilterChoices_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            ViewModel.ArchivedFilter = ((RadioButtons)sender).SelectedIndex switch
+            {
+                1 => true,
+                2 => false,
+                _ => null,
+            };
+        }
+
+        /// <summary>Flyout radio index for the status filter; list order mirrors the enum.</summary>
+        public int StatusFilterIndex(RepoFilter filter) => (int)filter;
+
+        /// <summary>Flyout radio index for the archived filter: All / Archived only / Not archived.</summary>
+        public int ArchivedFilterIndex(bool? filter) => filter switch
+        {
+            true => 1,
+            false => 2,
+            null => 0,
+        };
+
+        /// <summary>Funnel tint: accent while that column's filter is active.</summary>
+        public Microsoft.UI.Xaml.Media.Brush TextFilterIndicatorBrush(string filter)
+            => FilterIndicatorBrush(filter.Length > 0);
+
+        public Microsoft.UI.Xaml.Media.Brush StatusFilterIndicatorBrush(RepoFilter filter)
+            => FilterIndicatorBrush(filter != RepoFilter.All);
+
+        public Microsoft.UI.Xaml.Media.Brush ArchivedFilterIndicatorBrush(bool? filter)
+            => FilterIndicatorBrush(filter is not null);
+
+        private static Microsoft.UI.Xaml.Media.Brush FilterIndicatorBrush(bool active)
+            => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                active ? "AccentTextFillColorPrimaryBrush" : "TextFillColorSecondaryBrush"];
+
+        /// <summary>Composed automation name for a text-filter funnel, carrying its state.</summary>
+        public string TextFilterAutomationName(string column, string filter)
+            => filter.Length == 0
+                ? $"Filter by {column}"
+                : $"Filter by {column}, filtering on '{filter}'";
+
+        public string StatusFilterAutomationName(RepoFilter filter)
+            => filter == RepoFilter.All
+                ? "Filter by status"
+                : $"Filter by status, showing {filter}";
+
+        public string ArchivedFilterAutomationName(bool? filter) => filter switch
+        {
+            true => "Filter by archived, showing archived only",
+            false => "Filter by archived, showing not archived",
+            null => "Filter by archived",
+        };
 
         private void Toolbar_SizeChanged(object sender, SizeChangedEventArgs e)
             => UpdateToolbarLayout();

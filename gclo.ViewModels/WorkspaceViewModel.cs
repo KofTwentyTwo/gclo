@@ -74,6 +74,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         Organization = "";
         Token = "";
         TargetFolder = "";
+        NameFilter = "";
+        BranchFilter = "";
         MaxConcurrency = AppSettings.DefaultConcurrency;
         StatusText = "";
         ResultMessage = "";
@@ -196,6 +198,23 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     public partial RepoFilter Filter { get; set; }
 
+    /// <summary>
+    /// Column filter: case-insensitive substring the repository name must contain.
+    /// Empty (the default) matches everything. Composes with <see cref="Filter"/>
+    /// and the other column filters; selection state is unaffected — hidden rows
+    /// stay selected and still sync.
+    /// </summary>
+    [ObservableProperty]
+    public partial string NameFilter { get; set; }
+
+    /// <summary>Column filter: case-insensitive substring the branch name must contain.</summary>
+    [ObservableProperty]
+    public partial string BranchFilter { get; set; }
+
+    /// <summary>Column filter: null shows all, true only archived, false only unarchived.</summary>
+    [ObservableProperty]
+    public partial bool? ArchivedFilter { get; set; }
+
     /// <summary>Number of rows currently selected for the next sync.</summary>
     [ObservableProperty]
     public partial int SelectedCount { get; set; }
@@ -230,6 +249,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     public partial bool ResultOpen { get; set; }
 
     partial void OnFilterChanged(RepoFilter value) => RebuildFilteredRepos();
+
+    partial void OnNameFilterChanged(string value) => RebuildFilteredRepos();
+
+    partial void OnBranchFilterChanged(string value) => RebuildFilteredRepos();
+
+    partial void OnArchivedFilterChanged(bool? value) => RebuildFilteredRepos();
 
     partial void OnSelectedCountChanged(int value) => OnPropertyChanged(nameof(SyncButtonLabel));
 
@@ -861,7 +886,15 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool MatchesFilter(RepoItemViewModel repo) => Filter switch
+    private bool MatchesFilter(RepoItemViewModel repo)
+        => MatchesStatusFilter(repo)
+            && (NameFilter.Length == 0
+                || repo.Name.Contains(NameFilter.Trim(), StringComparison.OrdinalIgnoreCase))
+            && (BranchFilter.Length == 0
+                || repo.BranchText.Contains(BranchFilter.Trim(), StringComparison.OrdinalIgnoreCase))
+            && (ArchivedFilter is not { } archived || repo.IsArchived == archived);
+
+    private bool MatchesStatusFilter(RepoItemViewModel repo) => Filter switch
     {
         RepoFilter.Active => repo.Status is SyncStatus.Cloning or SyncStatus.Pulling,
         RepoFilter.Failed => repo.Status == SyncStatus.Failed,
