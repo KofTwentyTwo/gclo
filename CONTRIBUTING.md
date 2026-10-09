@@ -101,7 +101,7 @@ pre-commit install --hook-type pre-commit --hook-type commit-msg
 | `codeql / analyze (csharp)`, `codeql / analyze (actions)` | No high-severity static analysis findings |
 | `build-test` | Zero-warning x64 build, both unit suites, 100% coverage gate |
 | `format` | `dotnet format --verify-no-changes --severity warn` and PSScriptAnalyzer |
-| `ui-tests` | FlaUI end-to-end tests against the real `gclo.exe` (advisory until it is made required, #54) |
+| `ui-tests` | FlaUI end-to-end tests against the real `gclo.exe`, required since 2026-10-09 (#54) |
 
 ## Sign-off (Developer Certificate of Origin)
 

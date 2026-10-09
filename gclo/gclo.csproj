@@ -29,6 +29,8 @@
          build has no MSIX packaging step to carry them otherwise. -->
     <Content Include="Assets\Brand\gclo-icon.svg" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\Brand\gclo.ico" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Released artifacts carry the license (K22-REPO-01). -->
+    <Content Include="..\LICENSE" Link="LICENSE" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

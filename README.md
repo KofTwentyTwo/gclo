@@ -29,7 +29,7 @@ All builds are published on the [**GitHub Releases** page](https://github.com/Ko
 
 **Desktop app (GUI)** — download and run `gclo-stable-Setup.exe`. It installs per-user (no admin rights needed) and updates itself in-app via **Help > Check for updates**. A portable build (`gclo-stable-Portable.zip`) is also attached to each release; portable builds do not self-update.
 
-**CLI** — download `gclo-cli-win-x64.zip` and unzip it anywhere. It is a self-contained single `gclo.exe` — no .NET runtime required.
+**CLI** — download `gclo-cli-win-x64-<version>.zip` and unzip it anywhere. It is a self-contained single `gclo.exe` — no .NET runtime required.
 
 Plain version tags (`v1.2.3`) are **stable** releases; pre-release tags (`v1.2.3-beta.1`) publish to the **dev** channel, and an installed app only ever updates within its own channel.
 
@@ -50,18 +50,18 @@ choco install gclo
 
 ## Verifying a release
 
-Every release asset is listed in `SHA256SUMS`, carries a build-provenance attestation, and ships with a CycloneDX SBOM (`gclo-cli-win-x64-<version>.cdx.json`, `gclo-app-<version>.cdx.json`):
+Every release asset is listed in `SHA256SUMS`, carries a build-provenance attestation, and ships with a CycloneDX SBOM (`gclo-<version>.cdx.json` for the app, `gclo-cli-<version>.cdx.json` for the CLI). Releases are built by the [KofTwentyTwo standards' shared release workflow](https://github.com/KofTwentyTwo/standards/blob/main/.github/workflows/release-velopack.yml), so the provenance names that workflow as the builder:
 
 ```powershell
 # 1. Integrity: the file matches the published checksum
 (Get-FileHash .\gclo-stable-Setup.exe -Algorithm SHA256).Hash   # compare with the line in SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS                   # Linux / macOS
 
-# 2. Origin: built by this repository's release workflow from the tagged commit
-gh attestation verify .\gclo-stable-Setup.exe --repo KofTwentyTwo/gclo
+# 2. Origin: built from this repository's tagged commit by the shared release workflow
+gh attestation verify .\gclo-stable-Setup.exe --repo KofTwentyTwo/gclo --signer-repo KofTwentyTwo/standards
 
 # 3. Dependencies: the SBOM is attested too
-gh attestation verify .\gclo-cli-win-x64.zip --repo KofTwentyTwo/gclo --predicate-type https://cyclonedx.org/bom
+gh attestation verify .\gclo-cli-win-x64-<version>.zip --repo KofTwentyTwo/gclo --signer-repo KofTwentyTwo/standards --predicate-type https://cyclonedx.org/bom
 ```
 
 The binaries are not yet Authenticode-signed (standards exception [EX-0002](https://github.com/KofTwentyTwo/standards/blob/main/exceptions/register.md#ex-0002), [#57](https://github.com/KofTwentyTwo/gclo/issues/57)), so step 2 is the origin check until `Get-AuthenticodeSignature` can be.

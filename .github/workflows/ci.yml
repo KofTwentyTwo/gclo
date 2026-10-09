@@ -10,18 +10,8 @@ on:
     branches: [main]
   pull_request:
   # The Release workflow calls this one so a tag is gated by exactly the checks
-  # a pull request is: build, coverage, and formatting, with the UI smoke suite
-  # advisory (see ui-tests-advisory) just as it is not a required check on main.
+  # a pull request is: build, coverage, formatting, and the UI end-to-end suite.
   workflow_call:
-    inputs:
-      ui-tests-advisory:
-        description: >-
-          When true, a failing UI end-to-end job does not fail this workflow. The
-          hosted-runner UIA suite is not yet a required check on main, so a release
-          must not be held to a stricter bar than a merge; a failure is still
-          visible in the job list for follow-up.
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -110,16 +100,11 @@ jobs:
           if-no-files-found: warn
 
   ui-tests:
-    # End-to-end FlaUI/UIA tests against the real gclo.exe. Not in the branch
-    # ruleset's required checks yet: hosted-runner UIA is new here, so this job
-    # earns required status by proving itself stable first. Until then a caller
-    # (the Release workflow) can make it advisory so a flaky UI run cannot block
-    # an immutable tag that main itself would have accepted. On push/PR events the
-    # input is unset, so the job fails the workflow exactly as before.
+    # End-to-end FlaUI/UIA tests against the real gclo.exe. A required check on
+    # main since 2026-10-09 (#54), and therefore a blocking gate for releases too.
     name: ui-tests
     runs-on: windows-latest
     timeout-minutes: 30
-    continue-on-error: ${{ inputs.ui-tests-advisory == true }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

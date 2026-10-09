@@ -5,7 +5,7 @@
    (packaging/chocolatey) at a stable release's CLI zip.
 
 .DESCRIPTION
-   Both package managers install the same asset, gclo-cli-win-x64.zip, by URL and
+   Both package managers install the same asset, gclo-cli-win-x64-<version>.zip, by URL and
    SHA-256. This script rewrites the version, URL, checksum, and release-notes link
    in all three files from one source of truth: the version and the zip's hash
    (computed from -CliZipPath, or taken from -Sha256). The release workflow runs it
@@ -16,7 +16,7 @@
    The stable semantic version, e.g. 1.2.3 (no leading 'v').
 
 .PARAMETER CliZipPath
-   Path to the built gclo-cli-win-x64.zip to hash. Either this or -Sha256.
+   Path to the built gclo-cli-win-x64-<version>.zip to hash. Either this or -Sha256.
 
 .PARAMETER Sha256
    The zip's SHA-256 (lowercase hex) when it is already known.
@@ -76,7 +76,7 @@ if($Sha256 -notmatch '^[0-9a-f]{64}$')
 }
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-$url = "https://github.com/KofTwentyTwo/gclo/releases/download/v$Version/gclo-cli-win-x64.zip"
+$url = "https://github.com/KofTwentyTwo/gclo/releases/download/v$Version/gclo-cli-win-x64-$Version.zip"
 
 ################################################################################
 ## Scoop: a real JSON edit, so the file stays valid whatever its layout.      ##

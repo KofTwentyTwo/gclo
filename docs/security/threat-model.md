@@ -93,7 +93,7 @@ flowchart LR
 | T8 | GitHub API / remotes | Spoofing | A MITM impersonates GitHub | Low | Critical | HTTPS with system trust store (Octokit, libgit2); no HTTP fallback | Mitigated |
 | T9 | WSL recovery | Elevation of privilege | Hostile org/repo names injected into the shell script | Low | High | Script fed on stdin with positional parameters; names validated as repository names first; no string interpolation into the script | Mitigated |
 | T10 | Logs and crash output | Information disclosure | Exception text carries a token or private path | Low | Medium | Crash net logs messages only; log review in incident handling; tokens never in exception messages (tests) | Mitigated |
-| T11 | Release pipeline | Tampering | Compromised action or cache poisons a release | Low | Critical | SHA-pinned actions, no caches in the release job, read-only tokens, OIDC attestations, `protect-release-tags`, required gates re-run on the tag | Mitigated |
+| T11 | Release pipeline | Tampering | Compromised action or cache poisons a release | Low | Critical | Build runs in the standards' shared release workflow (SLSA Build L3 provenance, `--signer-repo KofTwentyTwo/standards`), SHA-pinned actions, no caches, read-only tokens, publishing tokens only in the tag-restricted `release` environment, `protect-release-tags`, required gates re-run on the tag | Mitigated |
 | T12 | Repository | Repudiation | Unattributed change reaches `main` | Low | High | Signed, signed-off commits; squash-only through gated pull requests; no bypass actors | Mitigated |
 | T13 | CLI / data directory | Tampering | A malicious `accounts.json` or `settings.json` redirects targets | Low | Medium | Files live under the user profile; sanitized on load; target paths resolved and contained | Accepted (same-user boundary) |
 
@@ -110,3 +110,4 @@ flowchart LR
 | Date | Version | Reviewer | Changes |
 | --- | --- | --- | --- |
 | 2026-10-09 | v1.0.1 | James Maes (@KofTwentyTwo) | Initial model, covering the path-recovery, WSL clone, vault scoping, package-manager, and SBOM changes of 1.0.1 |
+| 2026-10-09 | v1.0.1 | James Maes (@KofTwentyTwo) | T11 updated: releases build in the shared standards workflow; publishing tokens moved to the `release` environment (#76) |

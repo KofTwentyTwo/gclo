@@ -9,7 +9,7 @@
 Users asked for package-manager installs of the CLI (#9). Scoop needs a bucket (a
 git repository with `bucket/<app>.json`) read from the default branch; Chocolatey
 needs a chocolatey.org account, an API key, and moderation of the first push. Both
-install the same release asset, `gclo-cli-win-x64.zip`, by URL and SHA-256, so their
+install the same release asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-256, so their
 manifests must be updated on every stable release without hand edits.
 
 ## Options considered
