@@ -1,4 +1,9 @@
-# Text files are stored LF and checked out CRLF on every machine, matching
-# .editorconfig (end_of_line = crlf) so the dotnet format gate behaves the same
-# at developers' desks and on CI runners regardless of their git config.
-* text=auto eol=crlf
+# Text is stored and checked out as LF everywhere (K22-CODE-07), matching
+# .editorconfig (end_of_line = lf) so the dotnet format gate behaves the same at
+# developers' desks and on CI runners regardless of their git config. Windows-only
+# script formats that require CRLF are the exception.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.ico binary

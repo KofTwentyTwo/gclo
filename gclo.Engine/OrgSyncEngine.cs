@@ -1,6 +1,13 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Collections.Concurrent;
 
+
 namespace gclo.Engine;
+
 
 /// <summary>
 /// Clones or updates every repository in a GitHub organization with bounded parallelism.
@@ -9,167 +16,174 @@ namespace gclo.Engine;
 /// </summary>
 public sealed class OrgSyncEngine
 {
-    private readonly IRepositoryLister _lister;
-    private readonly IGitClient _git;
+   private readonly IRepositoryLister _lister;
 
-    /// <summary>
-    /// Creates an engine that discovers repositories through <paramref name="lister"/>
-    /// and runs git operations through <paramref name="git"/>.
-    /// </summary>
-    public OrgSyncEngine(IRepositoryLister lister, IGitClient git)
-    {
-        _lister = lister ?? throw new ArgumentNullException(nameof(lister));
-        _git = git ?? throw new ArgumentNullException(nameof(git));
-    }
+   private readonly IGitClient _git;
 
-    /// <summary>Lists the organization's repositories, then syncs all of them.</summary>
-    public async Task<SyncSummary> SyncAsync(
-        SyncRequest request,
-        IProgress<RepoProgress>? progress = null,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.Organization);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.Token);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.TargetRoot);
 
-        var repositories = await _lister
-            .ListOrganizationRepositoriesAsync(request.Organization, request.Token, cancellationToken)
-            .ConfigureAwait(false);
 
-        return await SyncAsync(request, repositories, progress, cancellationToken).ConfigureAwait(false);
-    }
+   /// <summary>
+   /// Creates an engine that discovers repositories through <paramref name="lister"/>
+   /// and runs git operations through <paramref name="git"/>.
+   /// </summary>
+   public OrgSyncEngine(IRepositoryLister lister, IGitClient git)
+   {
+      _lister = lister ?? throw new ArgumentNullException(nameof(lister));
+      _git = git ?? throw new ArgumentNullException(nameof(git));
+   }
 
-    /// <summary>
-    /// Syncs a caller-supplied repository list without hitting the GitHub API.
-    /// Use this when the repositories were already listed (and possibly filtered
-    /// down to a selection) by the caller; semantics are otherwise identical to
-    /// <see cref="SyncAsync(SyncRequest, IProgress{RepoProgress}?, CancellationToken)"/>.
-    /// </summary>
-    public async Task<SyncSummary> SyncAsync(
-        SyncRequest request,
-        IReadOnlyList<RepoDescriptor> repositories,
-        IProgress<RepoProgress>? progress = null,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(repositories);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.Token);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.TargetRoot);
 
-        var repos = repositories
-            // Names key the pending dictionary and the target folders; a duplicate
-            // (possible from pagination shifts) must not crash the run or race two
-            // git operations into the same directory.
-            .DistinctBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
 
-        // Resolve every target folder before anything is created or reported: this
-        // overload accepts caller-supplied names, and a name that is not one safe
-        // segment under TargetRoot (rooted, traversal, separators) fails the whole
-        // call here rather than cloning somewhere the caller never asked for.
-        var targets = repos
-            .Select(r => (Repo: r, Path: RepositoryPathResolver.Resolve(request.TargetRoot, r.Name)))
-            .ToList();
+   /// <summary>Lists the organization's repositories, then syncs all of them.</summary>
+   public async Task<SyncSummary> SyncAsync(
+       SyncRequest request,
+       IProgress<RepoProgress>? progress = null,
+       CancellationToken cancellationToken = default)
+   {
+      ArgumentNullException.ThrowIfNull(request);
+      ArgumentException.ThrowIfNullOrWhiteSpace(request.Organization, nameof(request));
+      ArgumentException.ThrowIfNullOrWhiteSpace(request.Token, nameof(request));
+      ArgumentException.ThrowIfNullOrWhiteSpace(request.TargetRoot, nameof(request));
 
-        // Create the root before anything is reported as Queued: if the path is
-        // invalid, the caller gets one exception instead of repos stranded mid-state.
-        Directory.CreateDirectory(request.TargetRoot);
+      IReadOnlyList<RepoDescriptor> repositories = await _lister
+          .ListOrganizationRepositoriesAsync(request.Organization, request.Token, cancellationToken)
+          .ConfigureAwait(false);
 
-        foreach (var repo in repos)
-        {
-            progress?.Report(new RepoProgress(repo.Name, SyncStatus.Queued));
-        }
+      return await SyncAsync(request, repositories, progress, cancellationToken).ConfigureAwait(false);
+   }
 
-        if (repos.Count == 0)
-        {
-            return new SyncSummary(0, 0, 0, 0, 0, WasCanceled: false);
-        }
 
-        int cloned = 0, updated = 0, failed = 0, canceled = 0;
-        var pending = new ConcurrentDictionary<string, RepoDescriptor>(
-            repos.Select(r => new KeyValuePair<string, RepoDescriptor>(r.Name, r)));
 
-        var parallelOptions = new ParallelOptions
-        {
-            MaxDegreeOfParallelism = Math.Max(1, request.MaxConcurrency),
-            CancellationToken = cancellationToken,
-        };
+   /// <summary>
+   /// Syncs a caller-supplied repository list without hitting the GitHub API.
+   /// Use this when the repositories were already listed (and possibly filtered
+   /// down to a selection) by the caller; semantics are otherwise identical to
+   /// <see cref="SyncAsync(SyncRequest, IProgress{RepoProgress}?, CancellationToken)"/>.
+   /// </summary>
+   public async Task<SyncSummary> SyncAsync(
+       SyncRequest request,
+       IReadOnlyList<RepoDescriptor> repositories,
+       IProgress<RepoProgress>? progress = null,
+       CancellationToken cancellationToken = default)
+   {
+      ArgumentNullException.ThrowIfNull(request);
+      ArgumentNullException.ThrowIfNull(repositories);
+      ArgumentException.ThrowIfNullOrWhiteSpace(request.Token, nameof(request));
+      ArgumentException.ThrowIfNullOrWhiteSpace(request.TargetRoot, nameof(request));
 
-        try
-        {
-            // Parallel.ForEachAsync stops scheduling as soon as any body throws, so the
-            // body must swallow every per-repo failure; only cancellation may escape.
-            await Parallel.ForEachAsync(targets, parallelOptions, async (target, token) =>
+      var repos = repositories
+          // Names key the pending dictionary and the target folders; a duplicate
+          // (possible from pagination shifts) must not crash the run or race two
+          // git operations into the same directory.
+          .DistinctBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+          .ToList();
+
+      // Resolve every target folder before anything is created or reported: this
+      // overload accepts caller-supplied names, and a name that is not one safe
+      // segment under TargetRoot (rooted, traversal, separators) fails the whole
+      // call here rather than cloning somewhere the caller never asked for.
+      var targets = repos
+          .Select(r => (Repo: r, Path: RepositoryPathResolver.Resolve(request.TargetRoot, r.Name)))
+          .ToList();
+
+      // Create the root before anything is reported as Queued: if the path is
+      // invalid, the caller gets one exception instead of repos stranded mid-state.
+      Directory.CreateDirectory(request.TargetRoot);
+
+      foreach(RepoDescriptor? repo in repos)
+      {
+         progress?.Report(new RepoProgress(repo.Name, SyncStatus.Queued));
+      }
+
+      if(repos.Count == 0)
+      {
+         return new SyncSummary(0, 0, 0, 0, 0, WasCanceled: false);
+      }
+
+      int cloned = 0, updated = 0, failed = 0, canceled = 0;
+      var pending = new ConcurrentDictionary<string, RepoDescriptor>(
+          repos.Select(r => new KeyValuePair<string, RepoDescriptor>(r.Name, r)), StringComparer.Ordinal);
+
+      var parallelOptions = new ParallelOptions
+      {
+         MaxDegreeOfParallelism = Math.Max(1, request.MaxConcurrency),
+         CancellationToken = cancellationToken,
+      };
+
+      try
+      {
+         // Parallel.ForEachAsync stops scheduling as soon as any body throws, so the
+         // body must swallow every per-repo failure; only cancellation may escape.
+         await Parallel.ForEachAsync(targets, parallelOptions, async (target, token) =>
+         {
+            (RepoDescriptor? repo, string? path) = target;
+            try
             {
-                var (repo, path) = target;
-                try
-                {
-                    token.ThrowIfCancellationRequested();
+               token.ThrowIfCancellationRequested();
 
-                    // A name that is one safe segment (RepositoryPathResolver) can still be
-                    // impossible as a Windows folder: GitHub allows repositories called
-                    // 'aux' or 'con'. Fail the row with a plain reason instead of an opaque
-                    // OS error from the clone (#31).
-                    if (OperatingSystem.IsWindows()
-                        && WindowsPathValidator.ValidatePaths(new[] { repo.Name }) is { Count: > 0 } invalidName)
-                    {
-                        throw new InvalidOperationException(
-                            $"Repository name '{repo.Name}' cannot be a folder on Windows ({invalidName[0].Reason}). "
-                            + "Rename the repository on GitHub, or sync it on another platform.");
-                    }
+               // A name that is one safe segment (RepositoryPathResolver) can still be
+               // impossible as a Windows folder: GitHub allows repositories called
+               // 'aux' or 'con'. Fail the row with a plain reason instead of an opaque
+               // OS error from the clone (#31).
+               if(OperatingSystem.IsWindows()
+                      && WindowsPathValidator.ValidatePaths(new[] { repo.Name }) is { Count: > 0 } invalidName)
+               {
+                  throw new InvalidOperationException(
+                         $"Repository name '{repo.Name}' cannot be a folder on Windows ({invalidName[0].Reason}). "
+                         + "Rename the repository on GitHub, or sync it on another platform.");
+               }
 
-                    // WaitAsync: a git operation wedged in native transport code (DNS,
-                    // TLS, a black-holed connection) observes no callback and therefore
-                    // no cancellation. Abandoning the await keeps cancellation prompt;
-                    // the orphaned operation finishes (or times out) on its own thread
-                    // and its own cleanup still runs (#31).
-                    if (_git.IsValidRepository(path))
-                    {
-                        progress?.Report(new RepoProgress(repo.Name, SyncStatus.Pulling));
-                        await _git.FetchAndPullAsync(path, request.Token, token).WaitAsync(token).ConfigureAwait(false);
-                        Interlocked.Increment(ref updated);
-                    }
-                    else
-                    {
-                        progress?.Report(new RepoProgress(repo.Name, SyncStatus.Cloning));
-                        await _git.CloneAsync(
-                            repo.CloneUrl, path, request.Token,
-                            pct => progress?.Report(new RepoProgress(repo.Name, SyncStatus.Cloning, Percent: pct)),
-                            token).WaitAsync(token).ConfigureAwait(false);
-                        Interlocked.Increment(ref cloned);
-                    }
+               // WaitAsync: a git operation wedged in native transport code (DNS,
+               // TLS, a black-holed connection) observes no callback and therefore
+               // no cancellation. Abandoning the await keeps cancellation prompt;
+               // the orphaned operation finishes (or times out) on its own thread
+               // and its own cleanup still runs (#31).
+               if(_git.IsValidRepository(path))
+               {
+                  progress?.Report(new RepoProgress(repo.Name, SyncStatus.Pulling));
+                  await _git.FetchAndPullAsync(path, request.Token, token).WaitAsync(token).ConfigureAwait(false);
+                  Interlocked.Increment(ref updated);
+               }
+               else
+               {
+                  progress?.Report(new RepoProgress(repo.Name, SyncStatus.Cloning));
+                  await _git.CloneAsync(
+                         repo.CloneUrl, path, request.Token,
+                         pct => progress?.Report(new RepoProgress(repo.Name, SyncStatus.Cloning, Percent: pct)),
+                         token).WaitAsync(token).ConfigureAwait(false);
+                  Interlocked.Increment(ref cloned);
+               }
 
-                    pending.TryRemove(repo.Name, out _);
-                    progress?.Report(new RepoProgress(repo.Name, SyncStatus.Done));
-                }
-                catch (OperationCanceledException) when (token.IsCancellationRequested)
-                {
-                    Interlocked.Increment(ref canceled);
-                    pending.TryRemove(repo.Name, out _);
-                    progress?.Report(new RepoProgress(repo.Name, SyncStatus.Canceled));
-                    throw; // stop the loop; unstarted repos are marked Canceled below
-                }
-                catch (Exception ex)
-                {
-                    Interlocked.Increment(ref failed);
-                    pending.TryRemove(repo.Name, out _);
-                    // Windows-invalid path failures carry the offending paths so
-                    // consumers can offer recovery (rename/skip) without re-syncing.
-                    var invalidPaths = (ex as InvalidRepositoryPathsException)?.Paths;
-                    progress?.Report(new RepoProgress(repo.Name, SyncStatus.Failed, ex.Message, InvalidPaths: invalidPaths));
-                }
-            }).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            foreach (var repo in pending.Values)
-            {
-                canceled++;
-                progress?.Report(new RepoProgress(repo.Name, SyncStatus.Canceled));
+               pending.TryRemove(repo.Name, out _);
+               progress?.Report(new RepoProgress(repo.Name, SyncStatus.Done));
             }
-        }
+            catch(OperationCanceledException) when(token.IsCancellationRequested)
+            {
+               Interlocked.Increment(ref canceled);
+               pending.TryRemove(repo.Name, out _);
+               progress?.Report(new RepoProgress(repo.Name, SyncStatus.Canceled));
+               throw; // stop the loop; unstarted repos are marked Canceled below
+            }
+            catch(Exception ex)
+            {
+               Interlocked.Increment(ref failed);
+               pending.TryRemove(repo.Name, out _);
+               // Windows-invalid path failures carry the offending paths so
+               // consumers can offer recovery (rename/skip) without re-syncing.
+               IReadOnlyList<InvalidPathInfo>? invalidPaths = (ex as InvalidRepositoryPathsException)?.Paths;
+               progress?.Report(new RepoProgress(repo.Name, SyncStatus.Failed, ex.Message, InvalidPaths: invalidPaths));
+            }
+         }).ConfigureAwait(false);
+      }
+      catch(OperationCanceledException)
+      {
+         foreach(RepoDescriptor repo in pending.Values)
+         {
+            canceled++;
+            progress?.Report(new RepoProgress(repo.Name, SyncStatus.Canceled));
+         }
+      }
 
-        return new SyncSummary(repos.Count, cloned, updated, failed, canceled, cancellationToken.IsCancellationRequested);
-    }
+      return new SyncSummary(repos.Count, cloned, updated, failed, canceled, cancellationToken.IsCancellationRequested);
+   }
 }

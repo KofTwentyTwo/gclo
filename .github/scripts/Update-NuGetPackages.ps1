@@ -1,194 +1,298 @@
+#Requires -Version 7.4
 <#
 .SYNOPSIS
-    Bumps every top-level PackageReference in the solution to its latest stable
-    version and writes a Markdown report of what changed and what was held back.
+   Bumps every centrally managed NuGet package to its latest stable version and writes
+   a Markdown report of what changed and what was held back.
 
 .DESCRIPTION
-    Replaces Dependabot's NuGet ecosystem for this repository. Dependabot's NuGet
-    updater mis-evaluates Windows-versioned target frameworks such as
-    net10.0-windows10.0.19041.0 (dependabot/dependabot-core#13923): it declares every
-    newer package "not compatible" with the WinUI project and, because it updates a
-    package consistently across all projects, that blocks the test projects too.
-    `dotnet list package --outdated` uses the real NuGet/MSBuild evaluation and has no
-    such problem, so this script drives the weekly update PR from it instead.
+   Replaces Dependabot's NuGet ecosystem for this repository (docs/adr/0004).
+   Dependabot's NuGet updater mis-evaluates Windows-versioned target frameworks such
+   as net10.0-windows10.0.19041.0 (dependabot/dependabot-core#13923) and declares
+   every newer package "not compatible". `dotnet list package --outdated` uses the
+   real NuGet/MSBuild evaluation, so this script drives the weekly update PR from it.
 
-    Policy, mirroring the Dependabot config it replaces:
+   Policy, mirroring the Dependabot config it replaces (K22-DEP-20):
       - minor and patch bumps are applied;
-      - major bumps are reported but NOT applied unless -IncludeMajor is given, so
-        they get a deliberate review;
-      - prerelease versions are never applied to a package that is on a stable one;
-      - a version published fewer than -CooldownDays days ago is held back
-        (K22-DEP-20), so the ecosystem has time to catch a bad release first.
+      - major bumps are reported but NOT applied unless -IncludeMajor is given;
+      - prerelease versions are never applied to a package on a stable one;
+      - a version published fewer than -CooldownDays days ago is held back.
 
-    Versions are edited in place in each .csproj (the exact Include/Version pair),
-    preserving the file's encoding and line endings.
+   Versions live in Directory.Packages.props (central package management) and are
+   edited in place there, preserving the file's encoding and line endings.
 
 .PARAMETER Solution
-    Solution to evaluate. Default: gclo.slnx.
+   Solution to evaluate. Default: gclo.slnx.
+
+.PARAMETER PackagesProps
+   The central package file to edit. Default: Directory.Packages.props.
 
 .PARAMETER ReportPath
-    Where to write the Markdown report. Default: nuget-update-report.md.
+   Where to write the Markdown report. Default: nuget-update-report.md.
 
 .PARAMETER IncludeMajor
-    Also apply major-version bumps.
+   Also apply major-version bumps.
 
 .PARAMETER CooldownDays
-    Hold back versions published fewer than this many days ago. Default: 7.
-    When nuget.org cannot be asked for the publish date, the version is held.
+   Hold back versions published fewer than this many days ago. Default: 7. When
+   nuget.org cannot be asked for the publish date, the version is held.
 
 .OUTPUTS
-    Writes `changed=true|false` and `report=<path>` to $env:GITHUB_OUTPUT when set.
-    Exit code 0 on success (whether or not anything changed), non-zero on error.
+   Writes `changed=true|false` and `report=<path>` to $env:GITHUB_OUTPUT when set.
+   Exit code 0 on success (whether or not anything changed), non-zero on error.
 #>
 [CmdletBinding()]
 param(
-    [string]$Solution = 'gclo.slnx',
-    [string]$ReportPath = 'nuget-update-report.md',
-    [switch]$IncludeMajor,
-    [int]$CooldownDays = 7
+   [ValidateNotNullOrEmpty()]
+   [string] $Solution = 'gclo.slnx',
+
+   [ValidateNotNullOrEmpty()]
+   [string] $PackagesProps = 'Directory.Packages.props',
+
+   [ValidateNotNullOrEmpty()]
+   [string] $ReportPath = 'nuget-update-report.md',
+
+   [switch] $IncludeMajor,
+
+   [ValidateRange(0, 365)]
+   [int] $CooldownDays = 7
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# [System.IO.File] resolves relative paths against the process working directory,
-# which is not necessarily PowerShell's current location; anchor it explicitly.
-$ReportPath = [System.IO.Path]::GetFullPath($ReportPath, (Get-Location).Path)
+################################################################################
+## [System.IO.File] resolves relative paths against the process working      ##
+## directory, which is not necessarily PowerShell's location; anchor them.   ##
+################################################################################
+$ReportPath = [System.IO.Path]::GetFullPath($ReportPath, $PWD.Path)
+$PackagesProps = [System.IO.Path]::GetFullPath($PackagesProps, $PWD.Path)
 
-function Get-NumericVersion([string]$version) {
-    # NuGet versions may carry a prerelease suffix (1.2.3-beta.1) and may have four
-    # numeric parts (10.0.28000.2705); [version] handles the latter but not the former.
-    $core = ($version -split '[-+]', 2)[0]
-    return [version]$core
+<#
+.SYNOPSIS
+   Reads a property of a parsed JSON object, or $null when the object does not have
+   it; `dotnet list` omits members that would be empty.
+#>
+function Get-PropertyValue
+{
+   param(
+      [Parameter(Mandatory)] [object] $Object,
+      [Parameter(Mandatory)] [string] $Name
+   )
+
+   $property = $Object.PSObject.Properties[$Name]
+   if($null -eq $property)
+   {
+      return $null
+   }
+   return $property.Value
 }
 
-function Test-Prerelease([string]$version) {
-    return $version.Contains('-')
+<#
+.SYNOPSIS
+   The numeric core of a NuGet version. Versions may carry a prerelease suffix
+   (1.2.3-beta.1) and may have four numeric parts (10.0.28000.2705); [version]
+   handles the latter but not the former.
+#>
+function Get-NumericVersion
+{
+   param([Parameter(Mandatory)] [string] $Version)
+
+   $core = ($Version -split '[-+]', 2)[0]
+   return [version] $core
 }
 
-function Get-PublishedDate([string]$id, [string]$version) {
-    # nuget.org's registration leaf carries the publish timestamp of one version.
-    $url = "https://api.nuget.org/v3/registration5-gz-semver2/$($id.ToLowerInvariant())/$($version.ToLowerInvariant()).json"
-    try {
-        $leaf = Invoke-RestMethod -Uri $url -TimeoutSec 30
-        return [DateTimeOffset]::Parse($leaf.published, [System.Globalization.CultureInfo]::InvariantCulture)
-    }
-    catch {
-        return $null
-    }
+<#
+.SYNOPSIS
+   True when a NuGet version string carries a prerelease suffix.
+#>
+function Test-Prerelease
+{
+   param([Parameter(Mandatory)] [string] $Version)
+
+   return $Version.Contains('-')
 }
 
-Write-Host "Restoring $Solution"
+<#
+.SYNOPSIS
+   The publish timestamp of one package version from nuget.org's registration leaf,
+   or $null when it cannot be read (the caller then holds the version back).
+#>
+function Get-PublishedDate
+{
+   param(
+      [Parameter(Mandatory)] [string] $Id,
+      [Parameter(Mandatory)] [string] $Version
+   )
+
+   $url = "https://api.nuget.org/v3/registration5-gz-semver2/$($Id.ToLowerInvariant())/$($Version.ToLowerInvariant()).json"
+   try
+   {
+      $leaf = Invoke-RestMethod -Uri $url -TimeoutSec 30
+      return [DateTimeOffset]::Parse($leaf.published, [System.Globalization.CultureInfo]::InvariantCulture)
+   }
+   catch
+   {
+      return $null
+   }
+}
+
+<#
+.SYNOPSIS
+   Writes a progress line to the information stream (visible in the workflow log).
+#>
+function Write-Progress-Line
+{
+   param([Parameter(Mandatory)] [string] $Message)
+
+   Write-Information -MessageData $Message -InformationAction Continue
+}
+
+Write-Progress-Line "Restoring $Solution"
 dotnet restore $Solution | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXITCODE." }
+if($LASTEXITCODE -ne 0)
+{
+   throw "dotnet restore failed with exit code $LASTEXITCODE."
+}
 
-Write-Host "Querying outdated packages"
+Write-Progress-Line 'Querying outdated packages'
 $raw = dotnet list $Solution package --outdated --format json
-if ($LASTEXITCODE -ne 0) { throw "dotnet list package --outdated failed with exit code $LASTEXITCODE." }
+if($LASTEXITCODE -ne 0)
+{
+   throw "dotnet list package --outdated failed with exit code $LASTEXITCODE."
+}
 $listing = ($raw -join "`n") | ConvertFrom-Json
 
-# One row per (project, package): the same package can be listed under several
-# target frameworks of one project, and we edit the csproj once.
+################################################################################
+## One row per package: versions are central, so a package listed under      ##
+## several projects or frameworks is still one edit.                          ##
+################################################################################
 $rows = @{}
-# Projects with nothing outdated have no 'frameworks' member at all, and a framework
-# with nothing outdated has no 'topLevelPackages'; @($null) still yields one $null
-# iteration, hence the Where-Object filters.
-foreach ($project in @($listing.projects | Where-Object { $_ })) {
-    foreach ($framework in @($project.frameworks | Where-Object { $_ })) {
-        foreach ($package in @($framework.topLevelPackages | Where-Object { $_ })) {
-            $key = "$($project.path)|$($package.id)"
-            if (-not $rows.ContainsKey($key)) {
-                $rows[$key] = [pscustomobject]@{
-                    Project   = $project.path
-                    Id        = $package.id
-                    Requested = $package.requestedVersion
-                    Latest    = $package.latestVersion
-                }
-            }
-        }
-    }
+foreach($project in @((Get-PropertyValue $listing 'projects') | Where-Object { $_ }))
+{
+   foreach($framework in @((Get-PropertyValue $project 'frameworks') | Where-Object { $_ }))
+   {
+      foreach($package in @((Get-PropertyValue $framework 'topLevelPackages') | Where-Object { $_ }))
+      {
+         if(-not $rows.ContainsKey($package.id))
+         {
+            $rows[$package.id] = [pscustomobject]@{ Id = $package.id; Requested = $package.requestedVersion; Latest = $package.latestVersion }
+         }
+      }
+   }
 }
 
-$applied = New-Object System.Collections.Generic.List[object]
-$held = New-Object System.Collections.Generic.List[object]
+$applied = [System.Collections.Generic.List[object]]::new()
+$held = [System.Collections.Generic.List[object]]::new()
 
-foreach ($row in ($rows.Values | Sort-Object Project, Id)) {
-    $current = Get-NumericVersion $row.Requested
-    $latest = Get-NumericVersion $row.Latest
-    $projectName = [System.IO.Path]::GetFileName($row.Project)
+$bytes = [System.IO.File]::ReadAllBytes($PackagesProps)
+$hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+$text = [System.Text.Encoding]::UTF8.GetString($bytes)
+if($hasBom)
+{
+   $text = $text.Substring(1)
+}
+$original = $text
 
-    $reason = $null
-    if ((Test-Prerelease $row.Latest) -and -not (Test-Prerelease $row.Requested)) {
-        $reason = 'latest is a prerelease'
-    }
-    elseif ($latest.Major -ne $current.Major -and -not $IncludeMajor) {
-        $reason = 'major version bump: review manually (or run with -IncludeMajor)'
-    }
-    elseif ($latest -le $current) {
-        $reason = 'not newer than the requested version'
-    }
-    elseif ($CooldownDays -gt 0) {
-        $published = Get-PublishedDate $row.Id $row.Latest
-        if ($null -eq $published) {
-            $reason = "publish date unavailable from nuget.org; held for the $CooldownDays-day cooldown"
-        }
-        elseif ($published -gt [DateTimeOffset]::UtcNow.AddDays(-$CooldownDays)) {
-            $age = [int][math]::Floor(([DateTimeOffset]::UtcNow - $published).TotalDays)
-            $reason = "published $age day(s) ago; waits out the $CooldownDays-day cooldown"
-        }
-    }
+foreach($row in ($rows.Values | Sort-Object Id))
+{
+   $current = Get-NumericVersion -Version $row.Requested
+   $latest = Get-NumericVersion -Version $row.Latest
 
-    if ($reason) {
-        $held.Add([pscustomobject]@{ Project = $projectName; Id = $row.Id; From = $row.Requested; To = $row.Latest; Reason = $reason })
-        continue
-    }
+   $reason = $null
+   if((Test-Prerelease -Version $row.Latest) -and -not (Test-Prerelease -Version $row.Requested))
+   {
+      $reason = 'latest is a prerelease'
+   }
+   elseif($latest.Major -ne $current.Major -and -not $IncludeMajor)
+   {
+      $reason = 'major version bump: review manually (or run with -IncludeMajor)'
+   }
+   elseif($latest -le $current)
+   {
+      $reason = 'not newer than the requested version'
+   }
+   elseif($CooldownDays -gt 0)
+   {
+      $published = Get-PublishedDate -Id $row.Id -Version $row.Latest
+      if($null -eq $published)
+      {
+         $reason = "publish date unavailable from nuget.org; held for the $CooldownDays-day cooldown"
+      }
+      elseif($published -gt [DateTimeOffset]::UtcNow.AddDays(-$CooldownDays))
+      {
+         $age = [int] [math]::Floor(([DateTimeOffset]::UtcNow - $published).TotalDays)
+         $reason = "published $age day(s) ago; waits out the $CooldownDays-day cooldown"
+      }
+   }
 
-    # Exact textual edit of the one PackageReference, so nothing else in the file moves.
-    $bytes = [System.IO.File]::ReadAllBytes($row.Project)
-    $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
-    $text = [System.Text.Encoding]::UTF8.GetString($bytes)
-    if ($hasBom) { $text = $text.Substring(1) }
+   if($reason)
+   {
+      $held.Add([pscustomobject]@{ Id = $row.Id; From = $row.Requested; To = $row.Latest; Reason = $reason })
+      continue
+   }
 
-    $pattern = '(<PackageReference\s+Include="' + [regex]::Escape($row.Id) + '"\s+Version=")' + [regex]::Escape($row.Requested) + '(")'
-    $updated = [regex]::Replace($text, $pattern, ('${1}' + $row.Latest + '${2}'), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-    if ($updated -eq $text) {
-        $held.Add([pscustomobject]@{ Project = $projectName; Id = $row.Id; From = $row.Requested; To = $row.Latest; Reason = 'PackageReference not found in the project file (central/variable version?)' })
-        continue
-    }
+   ################################################################################
+   ## Exact textual edit of the one PackageVersion, so nothing else moves.       ##
+   ################################################################################
+   $pattern = '(<PackageVersion\s+Include="' + [regex]::Escape($row.Id) + '"\s+Version=")' + [regex]::Escape($row.Requested) + '(")'
+   $updated = [regex]::Replace($text, $pattern, ('${1}' + $row.Latest + '${2}'), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+   if($updated -eq $text)
+   {
+      $held.Add([pscustomobject]@{ Id = $row.Id; From = $row.Requested; To = $row.Latest; Reason = "PackageVersion not found in $([System.IO.Path]::GetFileName($PackagesProps))" })
+      continue
+   }
 
-    [System.IO.File]::WriteAllText($row.Project, $updated, (New-Object System.Text.UTF8Encoding($hasBom)))
-    $applied.Add([pscustomobject]@{ Project = $projectName; Id = $row.Id; From = $row.Requested; To = $row.Latest })
-    Write-Host "  $projectName : $($row.Id) $($row.Requested) -> $($row.Latest)"
+   $text = $updated
+   $applied.Add([pscustomobject]@{ Id = $row.Id; From = $row.Requested; To = $row.Latest })
+   Write-Progress-Line "  $($row.Id) $($row.Requested) -> $($row.Latest)"
 }
 
-# ---------------------------------------------------------------- report
-$lines = New-Object System.Collections.Generic.List[string]
+if($text -ne $original)
+{
+   [System.IO.File]::WriteAllText($PackagesProps, $text, [System.Text.UTF8Encoding]::new($hasBom))
+}
+
+################################################################################
+## Report                                                                     ##
+################################################################################
+$lines = [System.Collections.Generic.List[string]]::new()
 $lines.Add('## NuGet package updates')
 $lines.Add('')
-if ($applied.Count -eq 0) {
-    $lines.Add('No minor or patch updates were available.')
+if($applied.Count -eq 0)
+{
+   $lines.Add('No minor or patch updates were available.')
 }
-else {
-    $lines.Add('| Project | Package | From | To |')
-    $lines.Add('| --- | --- | --- | --- |')
-    foreach ($a in $applied) { $lines.Add("| $($a.Project) | $($a.Id) | $($a.From) | $($a.To) |") }
+else
+{
+   $lines.Add('| Package | From | To |')
+   $lines.Add('| --- | --- | --- |')
+   foreach($a in $applied)
+   {
+      $lines.Add("| $($a.Id) | $($a.From) | $($a.To) |")
+   }
 }
-if ($held.Count -gt 0) {
-    $lines.Add('')
-    $lines.Add('### Held back (not applied)')
-    $lines.Add('')
-    $lines.Add('| Project | Package | Current | Latest | Why |')
-    $lines.Add('| --- | --- | --- | --- | --- |')
-    foreach ($h in $held) { $lines.Add("| $($h.Project) | $($h.Id) | $($h.From) | $($h.To) | $($h.Reason) |") }
+if($held.Count -gt 0)
+{
+   $lines.Add('')
+   $lines.Add('### Held back (not applied)')
+   $lines.Add('')
+   $lines.Add('| Package | Current | Latest | Why |')
+   $lines.Add('| --- | --- | --- | --- |')
+   foreach($h in $held)
+   {
+      $lines.Add("| $($h.Id) | $($h.From) | $($h.To) | $($h.Reason) |")
+   }
 }
 $lines.Add('')
 $lines.Add("_Generated by ``.github/scripts/Update-NuGetPackages.ps1`` from ``dotnet list package --outdated`` on $(Get-Date -Format 'yyyy-MM-dd')._")
-[System.IO.File]::WriteAllText($ReportPath, ($lines -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($ReportPath, ($lines -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
 
-Write-Host ''
-Write-Host (Get-Content $ReportPath -Raw)
+Write-Progress-Line ''
+Write-Progress-Line (Get-Content $ReportPath -Raw)
 
 $changed = $applied.Count -gt 0
-if ($env:GITHUB_OUTPUT) {
-    Add-Content -Path $env:GITHUB_OUTPUT -Value "changed=$($changed.ToString().ToLowerInvariant())"
-    Add-Content -Path $env:GITHUB_OUTPUT -Value "report=$ReportPath"
+if($env:GITHUB_OUTPUT)
+{
+   Add-Content -Path $env:GITHUB_OUTPUT -Value "changed=$($changed.ToString().ToLowerInvariant())"
+   Add-Content -Path $env:GITHUB_OUTPUT -Value "report=$ReportPath"
 }

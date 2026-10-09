@@ -1,6 +1,13 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using gclo.Engine;
 
+
 namespace gclo.ViewModels;
+
 
 /// <summary>
 /// What the user chose in the path-recovery UI for a repository whose tree has
@@ -8,14 +15,18 @@ namespace gclo.ViewModels;
 /// </summary>
 public abstract record PathRecoveryDecision
 {
-    private PathRecoveryDecision() { }
+   private PathRecoveryDecision() { }
 
-    /// <summary>Rename/skip the offending paths and check the repository out on Windows.</summary>
-    public sealed record Apply(PathRecovery Recovery) : PathRecoveryDecision;
 
-    /// <summary>
-    /// Leave the Windows copy alone and clone the repository inside WSL instead, where
-    /// the paths are legal (#8). Only offered when <see cref="WorkspaceViewModel.IsWslCloneAvailable"/>.
-    /// </summary>
-    public sealed record CloneInWsl : PathRecoveryDecision;
+
+   /// <summary>Rename/skip the offending paths and check the repository out on Windows.</summary>
+   public sealed record Apply(PathRecovery Recovery) : PathRecoveryDecision;
+
+
+
+   /// <summary>
+   /// Leave the Windows copy alone and clone the repository inside WSL instead, where
+   /// the paths are legal (#8). Only offered when <see cref="WorkspaceViewModel.IsWslCloneAvailable"/>.
+   /// </summary>
+   public sealed record CloneInWsl : PathRecoveryDecision;
 }

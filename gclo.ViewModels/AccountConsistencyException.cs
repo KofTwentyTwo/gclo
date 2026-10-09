@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.ViewModels;
+
 
 /// <summary>
 /// Thrown by <see cref="AccountsStore"/> when an operation failed AND the
@@ -10,13 +16,15 @@ namespace gclo.ViewModels;
 /// </summary>
 public sealed class AccountConsistencyException : Exception
 {
-    /// <summary>The failure that occurred while undoing the partial operation.</summary>
-    public Exception CompensationException { get; }
+   /// <summary>The failure that occurred while undoing the partial operation.</summary>
+   public Exception CompensationException { get; }
 
-    /// <summary>Creates the exception from the original and compensating failures.</summary>
-    public AccountConsistencyException(string message, Exception original, Exception compensation)
-        : base(message, original)
-    {
-        CompensationException = compensation;
-    }
+
+
+   /// <summary>Creates the exception from the original and compensating failures.</summary>
+   public AccountConsistencyException(string message, Exception original, Exception compensation)
+       : base(message, original)
+   {
+      CompensationException = compensation;
+   }
 }

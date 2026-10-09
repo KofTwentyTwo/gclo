@@ -1,19 +1,52 @@
 <Project>
 
-  <!-- Local quality gate: every project builds with warnings as errors and the
-       recommended analyzers + .editorconfig code style enforced, so problems fail
-       at the desk exactly like they fail in CI. -->
+  <!-- KofTwentyTwo .NET quality gate (standards: K22-CODE-CS), from
+       KofTwentyTwo/standards configs/dotnet/Directory.Build.props. Every rule fails
+       `dotnet build` locally exactly as it fails in CI. -->
   <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Warnings are errors; analyzers and .editorconfig style run in every build. -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <MSBuildTreatWarningsAsErrors>true</MSBuildTreatWarningsAsErrors>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!-- Required for IDE0005 (unused usings) to run during build. CS1591 (missing XML
+         doc) stays on for packable projects and is silenced for everything else below. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Reproducible builds with source-linked symbols. -->
     <Deterministic>true</Deterministic>
-    <!-- packages.lock.json per project: pins the restore graph (NuGetAudit sees
-         exactly what ships) and keys the CI restore cache. CI restores in locked
-         mode; after changing a PackageReference run
-         dotnet restore gclo.slnx with the force-evaluate switch and commit the lock files. -->
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!-- Supply chain: audit direct AND transitive packages; pin the whole graph. -->
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
+
+  <!-- CI: normalized paths, and restore must match the committed lock files exactly. -->
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true' or '$(CI)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <RestoreLockedMode>true</RestoreLockedMode>
+  </PropertyGroup>
+
+  <!-- Only shipped libraries must document their public API. -->
+  <PropertyGroup Condition="'$(IsPackable)' != 'true'">
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Repository-wide analyzers; versions live in Directory.Packages.props. -->
+    <PackageReference Include="Meziantou.Analyzer" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
+  </ItemGroup>
 
   <!-- Single version source. Local builds are <prefix>-dev; release builds pass an
        explicit -p:Version=<tag-version>, which overrides both parts. The SDK's

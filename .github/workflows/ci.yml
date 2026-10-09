@@ -174,7 +174,18 @@ jobs:
       - name: Restore
         run: dotnet restore gclo.slnx --locked-mode
 
-      # Kept at --severity error so this gates real issues (analyzer errors and
-      # error-severity style rules), not whitespace preferences.
+      # The Kingsrook layout and every warning-severity style rule (K22-CODE-CS-02):
+      # the same command CONTRIBUTING.md documents for the desk.
       - name: Verify formatting
-        run: dotnet format gclo.slnx --verify-no-changes --severity error
+        run: dotnet format gclo.slnx --verify-no-changes --severity warn --no-restore
+
+      # PowerShell scripts follow the same layout (K22-CODE-SH-05).
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+          $findings = @(Invoke-ScriptAnalyzer -Path .github/scripts -Recurse -Settings ./PSScriptAnalyzerSettings.psd1)
+          $findings += @(Invoke-ScriptAnalyzer -Path packaging/chocolatey/tools -Recurse -Settings ./PSScriptAnalyzerSettings.psd1)
+          foreach ($f in $findings) { Write-Output "::error file=$($f.ScriptPath),line=$($f.Line)::$($f.RuleName): $($f.Message)" }
+          if ($findings.Count -gt 0) { exit 1 }
+          Write-Output 'PSScriptAnalyzer: no findings.'

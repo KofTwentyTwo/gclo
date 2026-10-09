@@ -1,12 +1,19 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Text.Json;
 using gclo.Engine;
 
+
 namespace gclo.Cli;
+
 
 /// <summary>'gclo repos': list the repositories a sync would see, with the same filters.</summary>
 internal static class ReposCommand
 {
-    private const string HelpText = """
+   private const string HelpText = """
         Usage: gclo repos --org <name> [options]
 
         Lists the repositories of <name> that 'gclo sync' would process — one per
@@ -38,120 +45,124 @@ internal static class ReposCommand
           4  rate limited; retry later
         """;
 
-    /// <summary>Composition root: wires the real GitHub lister and file log.</summary>
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
-        Justification = "Wires the real network lister and file log; delegates to the covered core.")]
-    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
-        => RunAsync(args, new GitHubRepositoryLister(), new FileActivityLog(), cancellationToken);
 
-    internal static async Task<int> RunAsync(
-        string[] args, IRepositoryLister lister, IActivityLog log, CancellationToken cancellationToken)
-    {
-        string? org = null;
-        bool json = false;
-        var filter = new RepoFilterSpec();
-        var tokenOptions = new TokenOptions();
 
-        var reader = new OptionReader(args);
-        while (reader.MoveNext())
-        {
-            if (tokenOptions.TryConsume(reader))
-            {
-                continue;
-            }
-            switch (reader.Current)
-            {
-                case "--help" or "-h":
-                    Console.Out.WriteLine(HelpText);
-                    return ExitCodes.Success;
-                case "--org":
-                    org = reader.RequireValue();
-                    break;
-                case "--include":
-                    filter.Include(reader.RequireValue());
-                    break;
-                case "--exclude":
-                    filter.Exclude(reader.RequireValue());
-                    break;
-                case "--skip-archived":
-                    reader.RejectValue();
-                    filter.SkipArchived = true;
-                    break;
-                case "--json":
-                    reader.RejectValue();
-                    json = true;
-                    break;
-                default:
-                    throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo repos'.");
-            }
-        }
+   /// <summary>Composition root: wires the real GitHub lister and file log.</summary>
+   [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+       Justification = "Wires the real network lister and file log; delegates to the covered core.")]
+   public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+       => RunAsync(args, new GitHubRepositoryLister(), new FileActivityLog(), cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(org))
-        {
-            throw new CliUsageException("--org is required.");
-        }
 
-        log.Info($"repos started: org='{org}', filters={filter}, json={json}");
 
-        try
-        {
-            string token = tokenOptions.Resolve();
+   internal static async Task<int> RunAsync(
+       string[] args, IRepositoryLister lister, IActivityLog log, CancellationToken cancellationToken)
+   {
+      string? org = null;
+      bool json = false;
+      var filter = new RepoFilterSpec();
+      var tokenOptions = new TokenOptions();
 
-            IReadOnlyList<RepoDescriptor> repositories;
-            try
-            {
-                repositories = await lister
-                    .ListOrganizationRepositoriesAsync(org.Trim(), token, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (InvalidOperationException ex)
-            {
-                throw CliErrorException.FromEngine(ex);
-            }
+      var reader = new OptionReader(args);
+      while(reader.MoveNext())
+      {
+         if(tokenOptions.TryConsume(reader))
+         {
+            continue;
+         }
+         switch(reader.Current)
+         {
+            case "--help" or "-h":
+               Console.Out.WriteLine(HelpText);
+               return ExitCodes.Success;
+            case "--org":
+               org = reader.RequireValue();
+               break;
+            case "--include":
+               filter.Include(reader.RequireValue());
+               break;
+            case "--exclude":
+               filter.Exclude(reader.RequireValue());
+               break;
+            case "--skip-archived":
+               reader.RejectValue();
+               filter.SkipArchived = true;
+               break;
+            case "--json":
+               reader.RejectValue();
+               json = true;
+               break;
+            default:
+               throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo repos'.");
+         }
+      }
 
-            int listed = repositories.Count;
-            if (!filter.IsEmpty)
-            {
-                repositories = repositories.Where(filter.Matches).ToList();
-            }
-            log.Info($"repos finished: {listed} listed, {repositories.Count} selected.");
+      if(string.IsNullOrWhiteSpace(org))
+      {
+         throw new CliUsageException("--org is required.");
+      }
 
-            if (json)
-            {
-                IReadOnlyList<RepoSummary> summaries = repositories
-                    .Select(r => new RepoSummary(r.Name, r.DefaultBranch, r.IsArchived, r.CloneUrl))
-                    .ToList();
-                Console.Out.WriteLine(JsonSerializer.Serialize(summaries, CliJsonContext.Default.IReadOnlyListRepoSummary));
-                return ExitCodes.Success;
-            }
+      log.Info($"repos started: org='{org}', filters={filter}, json={json}");
 
-            if (repositories.Count == 0)
-            {
-                Console.Error.WriteLine(listed == 0
-                    ? $"No repositories visible in '{org}'."
-                    : $"No repositories of '{org}' match the filters ({listed} listed).");
-                return ExitCodes.Success;
-            }
+      try
+      {
+         string token = tokenOptions.Resolve();
 
-            int nameWidth = repositories.Max(r => r.Name.Length);
-            int branchWidth = repositories.Max(r => (r.DefaultBranch ?? "-").Length);
-            foreach (RepoDescriptor repo in repositories)
-            {
-                string branch = (repo.DefaultBranch ?? "-").PadRight(branchWidth);
-                Console.Out.WriteLine(
-                    $"{repo.Name.PadRight(nameWidth)}  {branch}" + (repo.IsArchived ? "  archived" : ""));
-            }
+         IReadOnlyList<RepoDescriptor> repositories;
+         try
+         {
+            repositories = await lister
+                .ListOrganizationRepositoriesAsync(org.Trim(), token, cancellationToken)
+                .ConfigureAwait(false);
+         }
+         catch(InvalidOperationException ex)
+         {
+            throw CliErrorException.FromEngine(ex);
+         }
+
+         int listed = repositories.Count;
+         if(!filter.IsEmpty)
+         {
+            repositories = repositories.Where(filter.Matches).ToList();
+         }
+         log.Info($"repos finished: {listed} listed, {repositories.Count} selected.");
+
+         if(json)
+         {
+            IReadOnlyList<RepoSummary> summaries = repositories
+                .Select(r => new RepoSummary(r.Name, r.DefaultBranch, r.IsArchived, r.CloneUrl))
+                .ToList();
+            Console.Out.WriteLine(JsonSerializer.Serialize(summaries, CliJsonContext.Default.IReadOnlyListRepoSummary));
             return ExitCodes.Success;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            log.Info("repos canceled.");
-            throw;
-        }
-        catch (Exception ex)
-        {
-            log.Error($"repos failed: {ex.Message}", ex);
-            throw;
-        }
-    }
+         }
+
+         if(repositories.Count == 0)
+         {
+            Console.Error.WriteLine(listed == 0
+                ? $"No repositories visible in '{org}'."
+                : $"No repositories of '{org}' match the filters ({listed} listed).");
+            return ExitCodes.Success;
+         }
+
+         int nameWidth = repositories.Max(r => r.Name.Length);
+         int branchWidth = repositories.Max(r => (r.DefaultBranch ?? "-").Length);
+         foreach(RepoDescriptor repo in repositories)
+         {
+            string branch = (repo.DefaultBranch ?? "-").PadRight(branchWidth);
+            Console.Out.WriteLine(
+                $"{repo.Name.PadRight(nameWidth)}  {branch}" + (repo.IsArchived ? "  archived" : ""));
+         }
+         return ExitCodes.Success;
+      }
+      catch(OperationCanceledException) when(cancellationToken.IsCancellationRequested)
+      {
+         log.Info("repos canceled.");
+         throw;
+      }
+      catch(Exception ex)
+      {
+         log.Error($"repos failed: {ex.Message}", ex);
+         throw;
+      }
+   }
 }

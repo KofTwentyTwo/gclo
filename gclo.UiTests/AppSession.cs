@@ -1,13 +1,22 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Diagnostics;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Capturing;
 using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
+using FlaUI.Core.Patterns;
 using FlaUI.Core.Tools;
 using FlaUI.UIA3;
 
+
 namespace gclo.UiTests;
+
 
 /// <summary>
 /// One launched gclo.exe plus the UIA3 automation that drives it, shared by every
@@ -24,518 +33,566 @@ namespace gclo.UiTests;
 /// </summary>
 public sealed class AppSession : IDisposable
 {
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan LaunchTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
+   private static readonly TimeSpan s_defaultTimeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>Launches gclo against a fresh temp GCLO_DATA_DIR and waits for its main window.</summary>
-    public AppSession()
-    {
-        ExePath = ResolveExePath();
-        DataDirectory = Path.Combine(Path.GetTempPath(), "gclo-uitests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(DataDirectory);
+   private static readonly TimeSpan s_launchTimeout = TimeSpan.FromSeconds(30);
 
-        var startInfo = new ProcessStartInfo(ExePath)
-        {
-            WorkingDirectory = Path.GetDirectoryName(ExePath) ?? "",
-        };
-        startInfo.Environment["GCLO_DATA_DIR"] = DataDirectory;
-        // Enables the offline fixture for the one magic token only (see UiTestFixture).
-        startInfo.Environment["GCLO_UITEST_FIXTURE"] = "1";
+   private static readonly TimeSpan s_pollInterval = TimeSpan.FromMilliseconds(250);
 
-        Automation = new UIA3Automation();
-        try
-        {
-            App = Application.Launch(startInfo);
-            MainWindow = WaitForMainWindow();
-            // Snapshot the launch state before any test types: the Quick Sync page is
-            // up once its connect card is, and a pre-fill logs synchronously on the way.
-            WaitForElement("ConnectTokenBox", TimeSpan.FromSeconds(30));
-            TokenPrefilledAtLaunch = LogContains("Token entered in workspace");
-        }
-        catch
-        {
-            // A half-launched session must not leak the process, the automation,
-            // or the temp directory; xunit will surface the original exception.
-            Dispose();
-            throw;
-        }
-    }
 
-    /// <summary>The gclo.exe under test.</summary>
-    public string ExePath { get; }
 
-    /// <summary>The temp directory the app sees as its data root (via GCLO_DATA_DIR).</summary>
-    public string DataDirectory { get; }
+   /// <summary>Launches gclo against a fresh temp GCLO_DATA_DIR and waits for its main window.</summary>
+   public AppSession()
+   {
+      ExePath = ResolveExePath();
+      DataDirectory = Path.Combine(Path.GetTempPath(), "gclo-uitests", Guid.NewGuid().ToString("N"));
+      Directory.CreateDirectory(DataDirectory);
 
-    /// <summary>
-    /// True when the app had logged a token being entered by the time its Quick Sync
-    /// page was up, before any test typed one: the workspace was pre-filled from a
-    /// default token the developer saved in their real profile. The vault is scoped
-    /// per data directory precisely so this never happens (#60); the fresh-data-dir
-    /// smoke test asserts it.
-    /// </summary>
-    public bool TokenPrefilledAtLaunch { get; }
+      var startInfo = new ProcessStartInfo(ExePath)
+      {
+         WorkingDirectory = Path.GetDirectoryName(ExePath) ?? "",
+      };
+      startInfo.Environment["GCLO_DATA_DIR"] = DataDirectory;
+      // Enables the offline fixture for the one magic token only (see UiTestFixture).
+      startInfo.Environment["GCLO_UITEST_FIXTURE"] = "1";
 
-    private bool LogContains(string fragment)
-    {
-        string logs = Path.Combine(DataDirectory, "logs");
-        if (!Directory.Exists(logs))
-        {
-            return false;
-        }
-        foreach (string file in Directory.EnumerateFiles(logs, "*.log"))
-        {
-            try
+      Automation = new UIA3Automation();
+      try
+      {
+         App = Application.Launch(startInfo);
+         MainWindow = WaitForMainWindow();
+         // Snapshot the launch state before any test types: the Quick Sync page is
+         // up once its connect card is, and a pre-fill logs synchronously on the way.
+         WaitForElement("ConnectTokenBox", TimeSpan.FromSeconds(30));
+         TokenPrefilledAtLaunch = LogContains("Token entered in workspace");
+      }
+      catch
+      {
+         // A half-launched session must not leak the process, the automation,
+         // or the temp directory; xunit will surface the original exception.
+         Dispose();
+         throw;
+      }
+   }
+
+
+
+   /// <summary>The gclo.exe under test.</summary>
+   public string ExePath { get; }
+
+   /// <summary>The temp directory the app sees as its data root (via GCLO_DATA_DIR).</summary>
+   public string DataDirectory { get; }
+
+   /// <summary>
+   /// True when the app had logged a token being entered by the time its Quick Sync
+   /// page was up, before any test typed one: the workspace was pre-filled from a
+   /// default token the developer saved in their real profile. The vault is scoped
+   /// per data directory precisely so this never happens (#60); the fresh-data-dir
+   /// smoke test asserts it.
+   /// </summary>
+   public bool TokenPrefilledAtLaunch { get; }
+
+
+
+   private bool LogContains(string fragment)
+   {
+      string logs = Path.Combine(DataDirectory, "logs");
+      if(!Directory.Exists(logs))
+      {
+         return false;
+      }
+      foreach(string file in Directory.EnumerateFiles(logs, "*.log"))
+      {
+         try
+         {
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            if(reader.ReadToEnd().Contains(fragment, StringComparison.Ordinal))
             {
-                using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var reader = new StreamReader(stream);
-                if (reader.ReadToEnd().Contains(fragment, StringComparison.Ordinal))
-                {
-                    return true;
-                }
+               return true;
             }
-            catch (IOException)
-            {
-                // mid-write; treat as not found
-            }
-        }
-        return false;
-    }
+         }
+         catch(IOException)
+         {
+            // mid-write; treat as not found
+         }
+      }
+      return false;
+   }
 
-    /// <summary>The UIA3 automation used for every lookup and pattern call.</summary>
-    public UIA3Automation Automation { get; }
 
-    /// <summary>The launched application (never null after construction).</summary>
-    public Application App { get; }
 
-    /// <summary>The app's main window, resolved once at launch.</summary>
-    public Window MainWindow { get; }
+   /// <summary>The UIA3 automation used for every lookup and pattern call.</summary>
+   public UIA3Automation Automation { get; }
 
-    // ---------------------------------------------------------------- lookups
+   /// <summary>The launched application (never null after construction).</summary>
+   public Application App { get; }
 
-    /// <summary>
-    /// Finds the first element matching <paramref name="condition"/> in the main
-    /// window — or in any other top-level window of the app's process. The second
-    /// leg matters because WinAppSDK menu flyouts open in windowed popups (separate
-    /// top-level HWNDs), so their items are not descendants of the main window.
-    /// </summary>
-    public AutomationElement? FindInApp(Func<ConditionFactory, ConditionBase> condition)
-    {
-        AutomationElement? found = MainWindow.FindFirstDescendant(condition);
-        if (found is not null)
-        {
+   /// <summary>The app's main window, resolved once at launch.</summary>
+   public Window MainWindow { get; }
+
+
+
+   // ---------------------------------------------------------------- lookups
+
+   /// <summary>
+   /// Finds the first element matching <paramref name="condition"/> in the main
+   /// window — or in any other top-level window of the app's process. The second
+   /// leg matters because WinAppSDK menu flyouts open in windowed popups (separate
+   /// top-level HWNDs), so their items are not descendants of the main window.
+   /// </summary>
+   public AutomationElement? FindInApp(Func<ConditionFactory, ConditionBase> condition)
+   {
+      AutomationElement? found = MainWindow.FindFirstDescendant(condition);
+      if(found is not null)
+      {
+         return found;
+      }
+
+      foreach(AutomationElement topLevel in Automation.GetDesktop()
+          .FindAllChildren(cf => cf.ByProcessId(App.ProcessId)))
+      {
+         if(topLevel.Equals(MainWindow))
+         {
+            continue;
+         }
+         found = topLevel.FindFirstDescendant(condition);
+         if(found is not null)
+         {
             return found;
-        }
+         }
+      }
+      return null;
+   }
 
-        foreach (AutomationElement topLevel in Automation.GetDesktop()
-            .FindAllChildren(cf => cf.ByProcessId(App.ProcessId)))
-        {
-            if (topLevel.Equals(MainWindow))
-            {
-                continue;
-            }
-            found = topLevel.FindFirstDescendant(condition);
-            if (found is not null)
-            {
-                return found;
-            }
-        }
-        return null;
-    }
 
-    /// <summary>
-    /// Retries <paramref name="lookup"/> until it returns an element, throwing a
-    /// <see cref="TimeoutException"/> naming <paramref name="description"/> when the
-    /// timeout (default 10s) elapses first. Exceptions inside the lookup (stale
-    /// elements mid-transition) count as "not found yet" and are retried.
-    /// </summary>
-    public AutomationElement WaitFor(
-        Func<AutomationElement?> lookup, string description, TimeSpan? timeout = null)
-    {
-        ArgumentNullException.ThrowIfNull(lookup);
-        TimeSpan effective = timeout ?? DefaultTimeout;
-        RetryResult<AutomationElement?> result = Retry.WhileNull(
-            lookup, timeout: effective, interval: PollInterval, ignoreException: true);
-        if (result.Result is { } element)
-        {
-            return element;
-        }
-        throw new TimeoutException(
-            $"Timed out after {effective.TotalSeconds:0}s waiting for {description}. "
-            + $"(app exited: {App.HasExited})");
-    }
 
-    /// <summary>
-    /// Retries until <paramref name="lookup"/> returns null (the element left the
-    /// tree), throwing a <see cref="TimeoutException"/> naming
-    /// <paramref name="description"/> when it is still present at the timeout.
-    /// </summary>
-    public static void WaitUntilGone(
-        Func<AutomationElement?> lookup, string description, TimeSpan? timeout = null)
-    {
-        ArgumentNullException.ThrowIfNull(lookup);
-        TimeSpan effective = timeout ?? DefaultTimeout;
-        RetryResult<bool> result = Retry.WhileTrue(
-            () => lookup() is not null, timeout: effective, interval: PollInterval, ignoreException: true);
-        if (!result.Success)
-        {
-            throw new TimeoutException(
-                $"Timed out after {effective.TotalSeconds:0}s waiting for {description} to go away.");
-        }
-    }
+   /// <summary>
+   /// Retries <paramref name="lookup"/> until it returns an element, throwing a
+   /// <see cref="TimeoutException"/> naming <paramref name="description"/> when the
+   /// timeout (default 10s) elapses first. Exceptions inside the lookup (stale
+   /// elements mid-transition) count as "not found yet" and are retried.
+   /// </summary>
+   public AutomationElement WaitFor(
+       Func<AutomationElement?> lookup, string description, TimeSpan? timeout = null)
+   {
+      ArgumentNullException.ThrowIfNull(lookup);
+      TimeSpan effective = timeout ?? s_defaultTimeout;
+      RetryResult<AutomationElement?> result = Retry.WhileNull(
+          lookup, timeout: effective, interval: s_pollInterval, ignoreException: true);
+      if(result.Result is { } element)
+      {
+         return element;
+      }
+      throw new TimeoutException(
+          $"Timed out after {effective.TotalSeconds:0}s waiting for {description}. "
+          + $"(app exited: {App.HasExited})");
+   }
 
-    /// <summary>Waits for the element carrying <paramref name="automationId"/>.</summary>
-    public AutomationElement WaitForElement(string automationId, TimeSpan? timeout = null)
-        => WaitFor(
-            () => FindInApp(cf => cf.ByAutomationId(automationId)),
-            $"element '{automationId}'",
-            timeout);
 
-    /// <summary>Waits until no element carries <paramref name="automationId"/> anymore.</summary>
-    public void WaitForElementGone(string automationId, TimeSpan? timeout = null)
-        => WaitUntilGone(
-            () => FindInApp(cf => cf.ByAutomationId(automationId)),
-            $"element '{automationId}'",
-            timeout);
 
-    /// <summary>Waits for a text element whose name is exactly <paramref name="text"/>.</summary>
-    public AutomationElement WaitForText(string text, TimeSpan? timeout = null)
-        => WaitFor(
-            () => FindInApp(cf => cf.ByControlType(ControlType.Text).And(cf.ByName(text))),
-            $"text '{text}'",
-            timeout);
+   /// <summary>
+   /// Retries until <paramref name="lookup"/> returns null (the element left the
+   /// tree), throwing a <see cref="TimeoutException"/> naming
+   /// <paramref name="description"/> when it is still present at the timeout.
+   /// </summary>
+   public static void WaitUntilGone(
+       Func<AutomationElement?> lookup, string description, TimeSpan? timeout = null)
+   {
+      ArgumentNullException.ThrowIfNull(lookup);
+      TimeSpan effective = timeout ?? s_defaultTimeout;
+      RetryResult<bool> result = Retry.WhileTrue(
+          () => lookup() is not null, timeout: effective, interval: s_pollInterval, ignoreException: true);
+      if(!result.Success)
+      {
+         throw new TimeoutException(
+             $"Timed out after {effective.TotalSeconds:0}s waiting for {description} to go away.");
+      }
+   }
 
-    /// <summary>Waits until no text element named <paramref name="text"/> remains.</summary>
-    public void WaitForTextGone(string text, TimeSpan? timeout = null)
-        => WaitUntilGone(
-            () => FindInApp(cf => cf.ByControlType(ControlType.Text).And(cf.ByName(text))),
-            $"text '{text}'",
-            timeout);
 
-    // ---------------------------------------------------------------- actions
 
-    /// <summary>
-    /// Opens the menu bar item named <paramref name="menuBarItemName"/> (e.g. "File")
-    /// and invokes the flyout item carrying <paramref name="itemAutomationId"/>.
-    /// The bar item is opened via its ExpandCollapse pattern (WinUI's MenuBarItem
-    /// exposes it) with Invoke as fallback; the flyout item is then looked up across
-    /// the app's windows because menu popups are windowed in WinAppSDK.
-    /// </summary>
-    public void InvokeMenuItem(string menuBarItemName, string itemAutomationId)
-    {
-        AutomationElement barItem = WaitFor(
-            () => MainWindow.FindFirstDescendant(cf =>
-                    cf.ByControlType(ControlType.MenuItem).And(cf.ByName(menuBarItemName)))
-                ?? MainWindow.FindFirstDescendant(cf => cf.ByName(menuBarItemName)),
-            $"menu bar item '{menuBarItemName}'");
+   /// <summary>Waits for the element carrying <paramref name="automationId"/>.</summary>
+   public AutomationElement WaitForElement(string automationId, TimeSpan? timeout = null)
+       => WaitFor(
+           () => FindInApp(cf => cf.ByAutomationId(automationId)),
+           $"element '{automationId}'",
+           timeout);
 
-        if (barItem.Patterns.ExpandCollapse.TryGetPattern(out var expandCollapse))
-        {
-            expandCollapse.Expand();
-            Wait.UntilInputIsProcessed();
-        }
-        else
-        {
-            InvokeElement(barItem);
-        }
 
-        AutomationElement item = WaitFor(
-            () => FindInApp(cf => cf.ByAutomationId(itemAutomationId)),
-            $"menu item '{itemAutomationId}' under '{menuBarItemName}'");
-        InvokeElement(item);
-    }
 
-    /// <summary>
-    /// Activates a NavigationView item by AutomationId. NavigationViewItem exposes
-    /// Invoke (preferred, it routes through the pane's selection logic) and
-    /// SelectionItem; a raw click is the last resort.
-    /// </summary>
-    public void InvokeNavItem(string automationId)
-        => InvokeElement(WaitForElement(automationId));
+   /// <summary>Waits until no element carries <paramref name="automationId"/> anymore.</summary>
+   public void WaitForElementGone(string automationId, TimeSpan? timeout = null)
+       => WaitUntilGone(
+           () => FindInApp(cf => cf.ByAutomationId(automationId)),
+           $"element '{automationId}'",
+           timeout);
 
-    /// <summary>
-    /// Invokes the XAML button named <paramref name="name"/>. The ClassName filter
-    /// ("Button") keeps ContentDialog buttons (real XAML buttons named by their
-    /// *ButtonText) from colliding with the window's non-client caption buttons,
-    /// whose UIA names ("Close", ...) overlap dialog button captions.
-    /// </summary>
-    public void ClickButton(string name, TimeSpan? timeout = null)
-    {
-        AutomationElement button = WaitFor(
-            () => FindInApp(cf => cf.ByControlType(ControlType.Button)
-                .And(cf.ByName(name))
-                .And(cf.ByClassName("Button"))),
-            $"button '{name}'",
-            timeout);
-        InvokeElement(button);
-    }
 
-    /// <summary>
-    /// Best-effort variant of <see cref="ClickButton"/> for <c>finally</c> cleanup:
-    /// clicks the button when it is currently present and swallows every failure,
-    /// so closing a leftover dialog can never mask the test's own exception.
-    /// </summary>
-    public void TryClickButton(string name)
-    {
-        try
-        {
-            AutomationElement? button = FindInApp(cf => cf.ByControlType(ControlType.Button)
-                .And(cf.ByName(name))
-                .And(cf.ByClassName("Button")));
-            if (button is not null)
-            {
-                InvokeElement(button);
-            }
-        }
-        catch
-        {
-            // Cleanup only — the test outcome was decided in the try body.
-        }
-    }
 
-    /// <summary>
-    /// Writes <paramref name="text"/> into <paramref name="element"/>: the UIA Value
-    /// pattern when available and writable (works without window focus), otherwise
-    /// focus plus real keystrokes via <see cref="Keyboard"/>.
-    /// </summary>
-    public void EnterText(AutomationElement element, string text)
-    {
-        ArgumentNullException.ThrowIfNull(element);
-        try
-        {
-            if (element.Patterns.Value.TryGetPattern(out var value)
-                && !value.IsReadOnly.ValueOrDefault)
-            {
-                value.SetValue(text);
-                return;
-            }
-        }
-        catch
-        {
-            // Some boxes reject SetValue (or the element re-rendered); type instead.
-        }
+   /// <summary>Waits for a text element whose name is exactly <paramref name="text"/>.</summary>
+   public AutomationElement WaitForText(string text, TimeSpan? timeout = null)
+       => WaitFor(
+           () => FindInApp(cf => cf.ByControlType(ControlType.Text).And(cf.ByName(text))),
+           $"text '{text}'",
+           timeout);
 
-        MainWindow.Focus();
-        element.Focus();
-        Keyboard.Type(text);
-        Wait.UntilInputIsProcessed();
-    }
 
-    /// <summary>Invoke pattern first, SelectionItem second, mouse click as last resort.</summary>
-    private static void InvokeElement(AutomationElement element)
-    {
-        if (element.Patterns.Invoke.TryGetPattern(out var invoke))
-        {
-            invoke.Invoke();
-        }
-        else if (element.Patterns.SelectionItem.TryGetPattern(out var selectionItem))
-        {
-            selectionItem.Select();
-        }
-        else
-        {
-            element.Click();
-        }
-        Wait.UntilInputIsProcessed();
-    }
 
-    // ---------------------------------------------------------------- lifecycle
+   /// <summary>Waits until no text element named <paramref name="text"/> remains.</summary>
+   public void WaitForTextGone(string text, TimeSpan? timeout = null)
+       => WaitUntilGone(
+           () => FindInApp(cf => cf.ByControlType(ControlType.Text).And(cf.ByName(text))),
+           $"text '{text}'",
+           timeout);
 
-    private Window WaitForMainWindow()
-    {
-        RetryResult<Window?> result = Retry.WhileNull(
-            () =>
-            {
-                if (App.HasExited)
-                {
-                    throw new InvalidOperationException(
-                        $"gclo exited while waiting for its main window (exit code {App.ExitCode}). "
-                        + $"Exe: {ExePath}");
-                }
-                try
-                {
-                    return App.GetMainWindow(Automation, TimeSpan.FromMilliseconds(500));
-                }
-                catch
-                {
-                    return null; // not ready yet; retried until the outer timeout
-                }
-            },
-            timeout: LaunchTimeout,
-            interval: PollInterval);
 
-        if (result.Result is { } window)
-        {
-            return window;
-        }
-        throw new TimeoutException(
-            $"gclo's main window did not appear within {LaunchTimeout.TotalSeconds:0}s. Exe: {ExePath}");
-    }
 
-    /// <summary>
-    /// The exe to drive: GCLO_UITEST_EXE when set, else the repo's Debug/x64 output,
-    /// located by walking up from the test assembly to the folder holding gclo.slnx.
-    /// </summary>
-    private static string ResolveExePath()
-    {
-        string? fromEnv = Environment.GetEnvironmentVariable("GCLO_UITEST_EXE");
-        if (!string.IsNullOrWhiteSpace(fromEnv))
-        {
-            if (!File.Exists(fromEnv))
-            {
-                throw new FileNotFoundException(
-                    $"GCLO_UITEST_EXE points at '{fromEnv}', which does not exist.", fromEnv);
-            }
-            return fromEnv;
-        }
+   // ---------------------------------------------------------------- actions
 
-        for (DirectoryInfo? current = new(AppContext.BaseDirectory);
-            current is not null;
-            current = current.Parent)
-        {
-            if (!File.Exists(Path.Combine(current.FullName, "gclo.slnx")))
-            {
-                continue;
-            }
+   /// <summary>
+   /// Opens the menu bar item named <paramref name="menuBarItemName"/> (e.g. "File")
+   /// and invokes the flyout item carrying <paramref name="itemAutomationId"/>.
+   /// The bar item is opened via its ExpandCollapse pattern (WinUI's MenuBarItem
+   /// exposes it) with Invoke as fallback; the flyout item is then looked up across
+   /// the app's windows because menu popups are windowed in WinAppSDK.
+   /// </summary>
+   public void InvokeMenuItem(string menuBarItemName, string itemAutomationId)
+   {
+      AutomationElement barItem = WaitFor(
+          () => MainWindow.FindFirstDescendant(cf =>
+                  cf.ByControlType(ControlType.MenuItem).And(cf.ByName(menuBarItemName)))
+              ?? MainWindow.FindFirstDescendant(cf => cf.ByName(menuBarItemName)),
+          $"menu bar item '{menuBarItemName}'");
 
-            string exePath = Path.Combine(
-                current.FullName, "gclo", "bin", "x64", "Debug",
-                "net10.0-windows10.0.19041.0", "win-x64", "gclo.exe");
-            if (!File.Exists(exePath))
-            {
-                throw new FileNotFoundException(
-                    $"gclo.exe not found at '{exePath}'. Build the app first: "
-                    + "dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None "
-                    + "— or set GCLO_UITEST_EXE to the exe to test.",
-                    exePath);
-            }
-            return exePath;
-        }
+      if(barItem.Patterns.ExpandCollapse.TryGetPattern(out IExpandCollapsePattern? expandCollapse))
+      {
+         expandCollapse.Expand();
+         Wait.UntilInputIsProcessed();
+      }
+      else
+      {
+         InvokeElement(barItem);
+      }
 
-        throw new FileNotFoundException(
-            $"Could not find the repo root (no gclo.slnx above '{AppContext.BaseDirectory}'). "
-            + "Set GCLO_UITEST_EXE to the gclo.exe to test.");
-    }
+      AutomationElement item = WaitFor(
+          () => FindInApp(cf => cf.ByAutomationId(itemAutomationId)),
+          $"menu item '{itemAutomationId}' under '{menuBarItemName}'");
+      InvokeElement(item);
+   }
 
-    private static int _sessionCounter;
 
-    /// <summary>
-    /// Waits until the app's activity log (under the session's data directory)
-    /// contains <paramref name="fragment"/>. The log is the one deterministic signal
-    /// for "the app handled that command" when the UI shows no change by design.
-    /// </summary>
-    public void WaitForLogLine(string fragment, TimeSpan? timeout = null)
-    {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
-        string logs = Path.Combine(DataDirectory, "logs");
-        while (DateTime.UtcNow < deadline)
-        {
-            if (Directory.Exists(logs))
-            {
-                foreach (string file in Directory.EnumerateFiles(logs, "*.log"))
-                {
-                    try
-                    {
-                        using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                        using var reader = new StreamReader(stream);
-                        if (reader.ReadToEnd().Contains(fragment, StringComparison.Ordinal))
-                        {
-                            return;
-                        }
-                    }
-                    catch (IOException)
-                    {
-                        // Mid-write; try again.
-                    }
-                }
-            }
-            Thread.Sleep(50);
-        }
-        throw new TimeoutException($"Timed out waiting for the activity log to contain '{fragment}'.");
-    }
 
-    /// <summary>
-    /// When GCLO_UITEST_ARTIFACTS names a directory (CI does), saves a screenshot of
-    /// the screen as the session ends and copies the app's activity log beside it, so
-    /// a failure on a hosted runner has something to diagnose with. Best effort.
-    /// </summary>
-    private void TryCaptureArtifacts()
-    {
-        string? root = Environment.GetEnvironmentVariable("GCLO_UITEST_ARTIFACTS");
-        if (string.IsNullOrWhiteSpace(root))
-        {
+   /// <summary>
+   /// Activates a NavigationView item by AutomationId. NavigationViewItem exposes
+   /// Invoke (preferred, it routes through the pane's selection logic) and
+   /// SelectionItem; a raw click is the last resort.
+   /// </summary>
+   public void InvokeNavItem(string automationId)
+       => InvokeElement(WaitForElement(automationId));
+
+
+
+   /// <summary>
+   /// Invokes the XAML button named <paramref name="name"/>. The ClassName filter
+   /// ("Button") keeps ContentDialog buttons (real XAML buttons named by their
+   /// *ButtonText) from colliding with the window's non-client caption buttons,
+   /// whose UIA names ("Close", ...) overlap dialog button captions.
+   /// </summary>
+   public void ClickButton(string name, TimeSpan? timeout = null)
+   {
+      AutomationElement button = WaitFor(
+          () => FindInApp(cf => cf.ByControlType(ControlType.Button)
+              .And(cf.ByName(name))
+              .And(cf.ByClassName("Button"))),
+          $"button '{name}'",
+          timeout);
+      InvokeElement(button);
+   }
+
+
+
+   /// <summary>
+   /// Best-effort variant of <see cref="ClickButton"/> for <c>finally</c> cleanup:
+   /// clicks the button when it is currently present and swallows every failure,
+   /// so closing a leftover dialog can never mask the test's own exception.
+   /// </summary>
+   public void TryClickButton(string name)
+   {
+      try
+      {
+         AutomationElement? button = FindInApp(cf => cf.ByControlType(ControlType.Button)
+             .And(cf.ByName(name))
+             .And(cf.ByClassName("Button")));
+         if(button is not null)
+         {
+            InvokeElement(button);
+         }
+      }
+      catch
+      {
+         // Cleanup only — the test outcome was decided in the try body.
+      }
+   }
+
+
+
+   /// <summary>
+   /// Writes <paramref name="text"/> into <paramref name="element"/>: the UIA Value
+   /// pattern when available and writable (works without window focus), otherwise
+   /// focus plus real keystrokes via <see cref="Keyboard"/>.
+   /// </summary>
+   public void EnterText(AutomationElement element, string text)
+   {
+      ArgumentNullException.ThrowIfNull(element);
+      try
+      {
+         if(element.Patterns.Value.TryGetPattern(out IValuePattern? value)
+             && !value.IsReadOnly.ValueOrDefault)
+         {
+            value.SetValue(text);
             return;
-        }
+         }
+      }
+      catch
+      {
+         // Some boxes reject SetValue (or the element re-rendered); type instead.
+      }
 
-        int number = Interlocked.Increment(ref _sessionCounter);
-        string stamp = DateTime.Now.ToString("HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-        try
-        {
-            Directory.CreateDirectory(root);
-            using var image = FlaUI.Core.Capturing.Capture.Screen();
-            image.ToFile(Path.Combine(root, $"session-{number:D2}-{stamp}.png"));
-        }
-        catch
-        {
-            // A missing desktop session or a disposed automation must not fail the test.
-        }
+      MainWindow.Focus();
+      element.Focus();
+      Keyboard.Type(text);
+      Wait.UntilInputIsProcessed();
+   }
 
-        try
-        {
-            string logs = Path.Combine(DataDirectory, "logs");
-            if (Directory.Exists(logs))
+
+
+   /// <summary>Invoke pattern first, SelectionItem second, mouse click as last resort.</summary>
+   private static void InvokeElement(AutomationElement element)
+   {
+      if(element.Patterns.Invoke.TryGetPattern(out IInvokePattern? invoke))
+      {
+         invoke.Invoke();
+      }
+      else if(element.Patterns.SelectionItem.TryGetPattern(out ISelectionItemPattern? selectionItem))
+      {
+         selectionItem.Select();
+      }
+      else
+      {
+         element.Click();
+      }
+      Wait.UntilInputIsProcessed();
+   }
+
+
+
+   // ---------------------------------------------------------------- lifecycle
+
+   private Window WaitForMainWindow()
+   {
+      RetryResult<Window?> result = Retry.WhileNull(
+          () =>
+          {
+             if(App.HasExited)
+             {
+                throw new InvalidOperationException(
+                      $"gclo exited while waiting for its main window (exit code {App.ExitCode}). "
+                      + $"Exe: {ExePath}");
+             }
+             try
+             {
+                return App.GetMainWindow(Automation, TimeSpan.FromMilliseconds(500));
+             }
+             catch
+             {
+                return null; // not ready yet; retried until the outer timeout
+             }
+          },
+          timeout: s_launchTimeout,
+          interval: s_pollInterval);
+
+      if(result.Result is { } window)
+      {
+         return window;
+      }
+      throw new TimeoutException(
+          $"gclo's main window did not appear within {s_launchTimeout.TotalSeconds:0}s. Exe: {ExePath}");
+   }
+
+
+
+   /// <summary>
+   /// The exe to drive: GCLO_UITEST_EXE when set, else the repo's Debug/x64 output,
+   /// located by walking up from the test assembly to the folder holding gclo.slnx.
+   /// </summary>
+   private static string ResolveExePath()
+   {
+      string? fromEnv = Environment.GetEnvironmentVariable("GCLO_UITEST_EXE");
+      if(!string.IsNullOrWhiteSpace(fromEnv))
+      {
+         if(!File.Exists(fromEnv))
+         {
+            throw new FileNotFoundException(
+                $"GCLO_UITEST_EXE points at '{fromEnv}', which does not exist.", fromEnv);
+         }
+         return fromEnv;
+      }
+
+      for(DirectoryInfo? current = new(AppContext.BaseDirectory);
+          current is not null;
+          current = current.Parent)
+      {
+         if(!File.Exists(Path.Combine(current.FullName, "gclo.slnx")))
+         {
+            continue;
+         }
+
+         string exePath = Path.Combine(
+             current.FullName, "gclo", "bin", "x64", "Debug",
+             "net10.0-windows10.0.19041.0", "win-x64", "gclo.exe");
+         if(!File.Exists(exePath))
+         {
+            throw new FileNotFoundException(
+                $"gclo.exe not found at '{exePath}'. Build the app first: "
+                + "dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None "
+                + "— or set GCLO_UITEST_EXE to the exe to test.",
+                exePath);
+         }
+         return exePath;
+      }
+
+      throw new FileNotFoundException(
+          $"Could not find the repo root (no gclo.slnx above '{AppContext.BaseDirectory}'). "
+          + "Set GCLO_UITEST_EXE to the gclo.exe to test.");
+   }
+
+
+
+   private static int s_sessionCounter;
+
+
+
+   /// <summary>
+   /// Waits until the app's activity log (under the session's data directory)
+   /// contains <paramref name="fragment"/>. The log is the one deterministic signal
+   /// for "the app handled that command" when the UI shows no change by design.
+   /// </summary>
+   public void WaitForLogLine(string fragment, TimeSpan? timeout = null)
+   {
+      DateTime deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+      string logs = Path.Combine(DataDirectory, "logs");
+      while(DateTime.UtcNow < deadline)
+      {
+         if(Directory.Exists(logs))
+         {
+            foreach(string file in Directory.EnumerateFiles(logs, "*.log"))
             {
-                foreach (string file in Directory.EnumerateFiles(logs))
-                {
-                    File.Copy(file, Path.Combine(root, $"session-{number:D2}-{Path.GetFileName(file)}"), overwrite: true);
-                }
+               try
+               {
+                  using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                  using var reader = new StreamReader(stream);
+                  if(reader.ReadToEnd().Contains(fragment, StringComparison.Ordinal))
+                  {
+                     return;
+                  }
+               }
+               catch(IOException)
+               {
+                  // Mid-write; try again.
+               }
             }
-        }
-        catch
-        {
-            // Best effort only.
-        }
-    }
+         }
+         Thread.Sleep(50);
+      }
+      throw new TimeoutException($"Timed out waiting for the activity log to contain '{fragment}'.");
+   }
 
-    /// <inheritdoc/>
-    public void Dispose()
-    {
-        TryCaptureArtifacts();
 
-        // Order matters: take the app down first, dispose the automation only after
-        // the process is gone, then sweep the temp data directory. Every step is
-        // best-effort so one failure cannot mask the test outcome.
-        try
-        {
-            App?.Close(); // FlaUI kills the process itself if closing stalls
-        }
-        catch
-        {
-            // The process may already be gone; Kill below double-checks.
-        }
-        try
-        {
-            if (App is { HasExited: false })
+
+   /// <summary>
+   /// When GCLO_UITEST_ARTIFACTS names a directory (CI does), saves a screenshot of
+   /// the screen as the session ends and copies the app's activity log beside it, so
+   /// a failure on a hosted runner has something to diagnose with. Best effort.
+   /// </summary>
+   private void TryCaptureArtifacts()
+   {
+      string? root = Environment.GetEnvironmentVariable("GCLO_UITEST_ARTIFACTS");
+      if(string.IsNullOrWhiteSpace(root))
+      {
+         return;
+      }
+
+      int number = Interlocked.Increment(ref s_sessionCounter);
+      string stamp = DateTime.Now.ToString("HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+      try
+      {
+         Directory.CreateDirectory(root);
+         using CaptureImage image = FlaUI.Core.Capturing.Capture.Screen();
+         image.ToFile(Path.Combine(root, $"session-{number:D2}-{stamp}.png"));
+      }
+      catch
+      {
+         // A missing desktop session or a disposed automation must not fail the test.
+      }
+
+      try
+      {
+         string logs = Path.Combine(DataDirectory, "logs");
+         if(Directory.Exists(logs))
+         {
+            foreach(string file in Directory.EnumerateFiles(logs))
             {
-                App.Kill();
+               File.Copy(file, Path.Combine(root, $"session-{number:D2}-{Path.GetFileName(file)}"), overwrite: true);
             }
-        }
-        catch
-        {
-            // Best effort only.
-        }
-        App?.Dispose();
-        Automation?.Dispose();
+         }
+      }
+      catch
+      {
+         // Best effort only.
+      }
+   }
 
-        try
-        {
-            Directory.Delete(DataDirectory, recursive: true);
-        }
-        catch
-        {
-            // A straggling handle keeps the directory; it lives under %TEMP% anyway.
-        }
-        GC.SuppressFinalize(this);
-    }
+
+
+   /// <inheritdoc/>
+   public void Dispose()
+   {
+      TryCaptureArtifacts();
+
+      // Order matters: take the app down first, dispose the automation only after
+      // the process is gone, then sweep the temp data directory. Every step is
+      // best-effort so one failure cannot mask the test outcome.
+      try
+      {
+         App?.Close(); // FlaUI kills the process itself if closing stalls
+      }
+      catch
+      {
+         // The process may already be gone; Kill below double-checks.
+      }
+      try
+      {
+         if(App is { HasExited: false })
+         {
+            App.Kill();
+         }
+      }
+      catch
+      {
+         // Best effort only.
+      }
+      App?.Dispose();
+      Automation?.Dispose();
+
+      try
+      {
+         Directory.Delete(DataDirectory, recursive: true);
+      }
+      catch
+      {
+         // A straggling handle keeps the directory; it lives under %TEMP% anyway.
+      }
+      GC.SuppressFinalize(this);
+   }
 }

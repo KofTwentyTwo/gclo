@@ -1,40 +1,142 @@
-# gclo code style. Enforced in every build via Directory.Build.props
-# (EnforceCodeStyleInBuild + TreatWarningsAsErrors) and by the CI format gate
-# (dotnet format --verify-no-changes --severity error).
+# KofTwentyTwo .NET code style (standards: K22-CODE-CS): the Kingsrook code style
+# (https://github.com/QRun-IO/qqq/blob/develop/CODE_STYLE.md) applied to C#, from
+# KofTwentyTwo/standards configs/dotnet/.editorconfig. Severities of "warning" fail
+# the build because Directory.Build.props sets TreatWarningsAsErrors and
+# EnforceCodeStyleInBuild, so local `dotnet build` and CI enforce exactly the same
+# rules. The resharper_* keys apply the Kingsrook blank-line rules in Rider and
+# ReSharper, which .NET's own formatter cannot express. Repository-specific
+# adjustments are at the end, each with its reason.
 root = true
 
 [*]
 charset = utf-8
-end_of_line = crlf
+end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
 indent_style = space
-indent_size = 4
+# Kingsrook: always 3 spaces, never tabs.
+indent_size = 3
+tab_width = 3
 
-# MSBuild, config, and workflow files use 2-space indentation.
-[*.{csproj,props,targets,slnx,xml,json,yml,yaml}]
+# YAML stays at 2: the YAML ecosystem (GitHub Actions, Dependabot) assumes it.
+[*.{yml,yaml}]
 indent_size = 2
 
+[*.md]
+trim_trailing_whitespace = false
+
+# Windows-only script formats require CRLF.
+[*.{cmd,bat}]
+end_of_line = crlf
+
 [*.cs]
-# System usings first, as the codebase already does (used by IDE "Sort Usings").
+#### Formatting (IDE0055 makes every rule below a build error) ####
+dotnet_diagnostic.IDE0055.severity = warning
 dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_new_line_before_members_in_object_initializers = true
+csharp_new_line_before_members_in_anonymous_types = true
+csharp_new_line_between_query_expression_clauses = true
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+csharp_indent_labels = one_less_than_current
+csharp_indent_block_contents = true
+csharp_indent_braces = false
+csharp_space_after_cast = false
+# Kingsrook: no space between a control keyword and its parenthesis: if(x), for(...), catch(...).
+csharp_space_after_keywords_in_control_flow_statements = false
+csharp_space_between_method_declaration_parameter_list_parentheses = false
+csharp_space_between_method_call_parameter_list_parentheses = false
+csharp_space_between_parentheses = false
+csharp_space_before_colon_in_inheritance_clause = true
+csharp_space_after_colon_in_inheritance_clause = true
+csharp_space_around_binary_operators = before_and_after
+csharp_space_after_comma = true
+csharp_space_before_comma = false
+csharp_space_after_semicolon_in_for_statement = true
+csharp_preserve_single_line_statements = false
+csharp_preserve_single_line_blocks = true
 
-# Braces on every control-flow block; the codebase is already 100% compliant.
+#### Kingsrook blank lines and layout (Rider / ReSharper; .NET formatter cannot express) ####
+resharper_blank_lines_around_method = 3
+resharper_blank_lines_around_property = 3
+resharper_blank_lines_around_auto_property = 1
+resharper_blank_lines_around_type = 3
+resharper_blank_lines_after_using_list = 2
+resharper_keep_blank_lines_in_code = 1
+resharper_keep_blank_lines_in_declarations = 3
+resharper_brace_style = next_line
+resharper_indent_size = 3
+resharper_space_after_keywords_in_control_flow_statements = false
+resharper_max_line_length = 999
+resharper_wrap_before_first_method_call = true
+resharper_wrap_chained_method_calls = chop_if_long
+
+#### Usings and namespaces ####
+# IDE0005 needs GenerateDocumentationFile=true to run during build (set in Directory.Build.props).
+dotnet_diagnostic.IDE0005.severity = warning
+csharp_using_directive_placement = outside_namespace:warning
+csharp_style_namespace_declarations = file_scoped:warning
+dotnet_diagnostic.IDE0161.severity = warning
+
+#### var: only when the type is apparent from the right-hand side ####
+csharp_style_var_for_built_in_types = false:warning
+csharp_style_var_when_type_is_apparent = true:warning
+csharp_style_var_elsewhere = false:warning
+dotnet_diagnostic.IDE0007.severity = warning
+dotnet_diagnostic.IDE0008.severity = warning
+
+#### Braces, modifiers, readonly ####
 csharp_prefer_braces = true:warning
+dotnet_diagnostic.IDE0011.severity = warning
+dotnet_style_require_accessibility_modifiers = for_non_interface_members:warning
+dotnet_diagnostic.IDE0040.severity = warning
+dotnet_style_readonly_field = true:warning
+dotnet_diagnostic.IDE0044.severity = warning
+csharp_preferred_modifier_order = public,private,protected,internal,file,static,extern,new,virtual,abstract,sealed,override,readonly,unsafe,required,volatile,async:warning
+dotnet_diagnostic.IDE0036.severity = warning
 
-# Libraries use file-scoped namespaces; the WinUI shell keeps the template's
-# block namespaces, so this stays a suggestion rather than a build error.
-csharp_style_namespace_declarations = file_scoped:suggestion
+#### this. qualification: never ####
+dotnet_style_qualification_for_field = false:warning
+dotnet_style_qualification_for_property = false:warning
+dotnet_style_qualification_for_method = false:warning
+dotnet_style_qualification_for_event = false:warning
+dotnet_diagnostic.IDE0003.severity = warning
 
-# CA1716 warns that IActivityLog.Error collides with a VB keyword; this is a C#-only
-# codebase and Error is the natural name for a log level.
-dotnet_diagnostic.CA1716.severity = none
+#### Language keywords over framework type names ####
+dotnet_style_predefined_type_for_locals_parameters_members = true:warning
+dotnet_style_predefined_type_for_member_access = true:warning
+dotnet_diagnostic.IDE0049.severity = warning
 
-# CA1859 asks callers to replace IGitClient/IActivityLog parameters with concrete types
-# for micro-performance; those interfaces are the codebase's deliberate test seams.
-dotnet_diagnostic.CA1859.severity = none
+#### Dead code and redundancy ####
+dotnet_diagnostic.IDE0051.severity = warning   # unused private member
+dotnet_diagnostic.IDE0052.severity = warning   # unread private member
+dotnet_diagnostic.IDE0059.severity = warning   # unnecessary assignment
+dotnet_diagnostic.IDE0060.severity = warning   # unused parameter
+dotnet_diagnostic.IDE0035.severity = warning   # unreachable code
+dotnet_diagnostic.IDE0004.severity = warning   # unnecessary cast
+dotnet_diagnostic.IDE0100.severity = warning   # unnecessary equality operator
+dotnet_diagnostic.IDE0080.severity = warning   # unnecessary suppression operator
+dotnet_diagnostic.IDE0079.severity = warning   # unnecessary suppression
+dotnet_code_quality_unused_parameters = all
 
-# Naming: interfaces are I-prefixed; types and members are PascalCase.
+#### Modern language features (suggestions: shown in IDE, not enforced) ####
+csharp_style_pattern_matching_over_is_with_cast_check = true:suggestion
+csharp_style_pattern_matching_over_as_with_null_check = true:suggestion
+csharp_style_prefer_switch_expression = true:suggestion
+csharp_style_prefer_primary_constructors = true:suggestion
+csharp_style_implicit_object_creation_when_type_is_apparent = true:suggestion
+dotnet_style_coalesce_expression = true:suggestion
+dotnet_style_null_propagation = true:suggestion
+dotnet_style_prefer_collection_expression = when_types_loosely_match:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties = true:suggestion
+
+#### Naming ####
 dotnet_naming_rule.interfaces_begin_with_i.symbols = interfaces
 dotnet_naming_rule.interfaces_begin_with_i.style = i_prefix_pascal_case
 dotnet_naming_rule.interfaces_begin_with_i.severity = warning
@@ -42,20 +144,114 @@ dotnet_naming_symbols.interfaces.applicable_kinds = interface
 dotnet_naming_style.i_prefix_pascal_case.required_prefix = I
 dotnet_naming_style.i_prefix_pascal_case.capitalization = pascal_case
 
+dotnet_naming_rule.type_parameters_begin_with_t.symbols = type_parameters
+dotnet_naming_rule.type_parameters_begin_with_t.style = t_prefix_pascal_case
+dotnet_naming_rule.type_parameters_begin_with_t.severity = warning
+dotnet_naming_symbols.type_parameters.applicable_kinds = type_parameter
+dotnet_naming_style.t_prefix_pascal_case.required_prefix = T
+dotnet_naming_style.t_prefix_pascal_case.capitalization = pascal_case
+
 dotnet_naming_rule.types_and_members_are_pascal_case.symbols = types_and_members
 dotnet_naming_rule.types_and_members_are_pascal_case.style = pascal_case
 dotnet_naming_rule.types_and_members_are_pascal_case.severity = warning
-dotnet_naming_symbols.types_and_members.applicable_kinds = class, struct, enum, delegate, property, method, event
+dotnet_naming_symbols.types_and_members.applicable_kinds = namespace, class, struct, enum, delegate, property, method, event
 dotnet_naming_style.pascal_case.capitalization = pascal_case
 
+dotnet_naming_rule.private_fields_are_underscore_camel.symbols = private_fields
+dotnet_naming_rule.private_fields_are_underscore_camel.style = underscore_camel_case
+dotnet_naming_rule.private_fields_are_underscore_camel.severity = warning
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private, private_protected
+dotnet_naming_symbols.private_fields.required_modifiers =
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case
+
+dotnet_naming_rule.private_static_fields_are_s_camel.symbols = private_static_fields
+dotnet_naming_rule.private_static_fields_are_s_camel.style = s_camel_case
+dotnet_naming_rule.private_static_fields_are_s_camel.severity = warning
+dotnet_naming_symbols.private_static_fields.applicable_kinds = field
+dotnet_naming_symbols.private_static_fields.applicable_accessibilities = private, private_protected
+dotnet_naming_symbols.private_static_fields.required_modifiers = static
+dotnet_naming_style.s_camel_case.required_prefix = s_
+dotnet_naming_style.s_camel_case.capitalization = camel_case
+
+dotnet_naming_rule.constants_are_pascal_case.symbols = constants
+dotnet_naming_rule.constants_are_pascal_case.style = pascal_case
+dotnet_naming_rule.constants_are_pascal_case.severity = warning
+dotnet_naming_symbols.constants.applicable_kinds = field, local
+dotnet_naming_symbols.constants.required_modifiers = const
+
+#### Analyzer adjustments (each one justified) ####
+# CA1716: flags members named like VB keywords (e.g. ILog.Error). KofTwentyTwo is C#-only.
+dotnet_diagnostic.CA1716.severity = none
+# MA0004 (ConfigureAwait): app code runs on UI threads where ConfigureAwait(false) is
+# wrong by default; libraries opt back in with a [*.cs] override in their own folder.
+dotnet_diagnostic.MA0004.severity = none
+# MA0049 (type name matches namespace): conflicts with the AppName/AppName.Core layout.
+dotnet_diagnostic.MA0049.severity = none
+
+[**/{Generated,obj}/**.cs]
+generated_code = true
+
+[{tests,test}/**.cs]
+# xUnit's Method_Scenario_Expectation names use underscores by convention.
+dotnet_diagnostic.CA1707.severity = none
+# Inline arrays keep test data at the assertion; each test runs once.
+dotnet_diagnostic.CA1861.severity = none
+# Test projects are not documented API.
+dotnet_diagnostic.CS1591.severity = none
+# MA0048 (one type per file): a test file groups the test classes and fakes of one feature.
+dotnet_diagnostic.MA0048.severity = none
+
+#### gclo-specific adjustments (docs/adr/0005: flat layout, test projects beside the libraries) ####
+
+# MSBuild, solution, and JSON files keep the 2-space indentation their tooling writes.
+[*.{csproj,props,targets,slnx,xml,json,runsettings}]
+indent_size = 2
+
+# XAML is formatted by the Visual Studio XAML editor at 4 spaces; dotnet format does
+# not touch it, and reformatting the markup would churn every view for no reader benefit.
+[*.xaml]
+indent_size = 4
+
+[gclo.Engine/**.cs]
+# gclo.Engine is a published library: ConfigureAwait(false) is required there (K22-CODE-CS-13).
+dotnet_diagnostic.MA0004.severity = warning
+
 [gclo/**.cs]
-# CA1822: x:Bind function targets cannot be static — the XAML compiler generates
+# CA1822: x:Bind function targets cannot be static: the XAML compiler generates
 # instance calls (this.Fn(...)) for them, which fails with CS0176.
 dotnet_diagnostic.CA1822.severity = none
+# IDE0051/IDE0052: XAML event handlers and x:Bind targets are referenced only from
+# markup; the XAML compiler validates them, and the analyzer (which cannot see the
+# markup outside a full build) would otherwise report, and dotnet format would
+# DELETE, those handlers.
+dotnet_diagnostic.IDE0051.severity = none
+dotnet_diagnostic.IDE0052.severity = none
+# IDE0060: XAML event handlers must keep the framework's (sender, args) signature even
+# when a handler needs neither.
+dotnet_diagnostic.IDE0060.severity = none
 
-[gclo.Engine.Tests/**.cs]
-# CA1707: xunit's Method_Scenario_Expectation naming uses underscores by convention.
+[{gclo.Engine.Tests,gclo.Cli.Tests,gclo.UiTests}/**.cs]
+# The standard's test relaxations, keyed on this repository's test project folders
+# (there is no tests/ directory; see docs/adr/0005).
 dotnet_diagnostic.CA1707.severity = none
-# CA1861: inline array arguments keep test data at the assertion site; each test runs once,
-# so the "repeated allocation" concern does not apply.
 dotnet_diagnostic.CA1861.severity = none
+dotnet_diagnostic.CS1591.severity = none
+dotnet_diagnostic.MA0048.severity = none
+
+[*.cs]
+# Namespaces are the product name, `gclo` (and the published package namespace
+# `gclo.Engine`, which cannot be renamed in a patch release); the PascalCase rule
+# therefore covers types and members here, not namespaces.
+dotnet_naming_symbols.types_and_members.applicable_kinds = class, struct, enum, delegate, property, method, event
+# CA1859 asks callers to replace IGitClient/IActivityLog parameters with concrete types
+# for micro-performance; those interfaces are the codebase's deliberate test seams.
+dotnet_diagnostic.CA1859.severity = none
+# MA0051 (method length, K22-CODE-16 "flags extremes"): the sync loop, the clone-with-
+# recovery path, and the paginated listers are orchestration methods whose steps read
+# best in sequence; splitting them for the count alone would scatter the flow. The
+# threshold is raised to flag only genuine extremes; new code aims for ~50 lines.
+MA0051.maximum_lines_per_method = 160
+MA0051.maximum_statements_per_method = 100
+MA0051.skip_local_functions = true

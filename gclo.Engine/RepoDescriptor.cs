@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.Engine;
+
 
 /// <summary>A repository discovered in the GitHub organization.</summary>
 /// <param name="Name">Repository name (unique within the org; used as the local folder name).</param>

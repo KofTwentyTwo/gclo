@@ -1,120 +1,165 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using gclo.Engine;
 
+
 namespace gclo.ViewModels;
+
 
 /// <summary>One row in the repository table: the descriptor plus selection and live sync state.</summary>
 public sealed partial class RepoItemViewModel : ObservableObject
 {
-    public RepoItemViewModel(RepoDescriptor descriptor)
-    {
-        ArgumentNullException.ThrowIfNull(descriptor);
-        Descriptor = descriptor;
-        Status = SyncStatus.Queued;
-        IsSelected = true;
-    }
+   public RepoItemViewModel(RepoDescriptor descriptor)
+   {
+      ArgumentNullException.ThrowIfNull(descriptor);
+      Descriptor = descriptor;
+      Status = SyncStatus.Queued;
+      IsSelected = true;
+   }
 
-    /// <summary>The repository this row represents; never changes after construction.</summary>
-    public RepoDescriptor Descriptor { get; }
 
-    /// <summary>Repository name; used as the local folder name.</summary>
-    public string Name => Descriptor.Name;
 
-    /// <summary>Whether this repository participates in the next sync.</summary>
-    [ObservableProperty]
-    public partial bool IsSelected { get; set; }
+   /// <summary>The repository this row represents; never changes after construction.</summary>
+   public RepoDescriptor Descriptor { get; }
 
-    [ObservableProperty]
-    public partial SyncStatus Status { get; set; }
 
-    [ObservableProperty]
-    public partial string? Error { get; set; }
 
-    [ObservableProperty]
-    public partial double? Percent { get; set; }
+   /// <summary>Repository name; used as the local folder name.</summary>
+   public string Name => Descriptor.Name;
 
-    /// <summary>
-    /// The Windows-invalid paths that made the last sync fail, when that was the cause
-    /// (set from the engine's failure progress payload); null for any other failure.
-    /// </summary>
-    [ObservableProperty]
-    public partial IReadOnlyList<InvalidPathInfo>? InvalidPaths { get; set; }
 
-    /// <summary>True when the row failed because of Windows-invalid paths and can be resolved.</summary>
-    public bool HasPathIssue => InvalidPaths is { Count: > 0 };
 
-    /// <summary>Default branch name, or empty for an empty repository.</summary>
-    public string BranchText => Descriptor.DefaultBranch ?? "";
+   /// <summary>Whether this repository participates in the next sync.</summary>
+   [ObservableProperty]
+   public partial bool IsSelected { get; set; }
 
-    /// <summary>Whether the repository is archived (still cloneable, read-only).</summary>
-    public bool IsArchived => Descriptor.IsArchived;
+   [ObservableProperty]
+   public partial SyncStatus Status { get; set; }
 
-    /// <summary>True while a git operation is in flight and a progress bar should show.</summary>
-    public bool ShowProgress => Status is SyncStatus.Cloning or SyncStatus.Pulling;
+   [ObservableProperty]
+   public partial string? Error { get; set; }
 
-    /// <summary>True when progress has no percentage (pulls report none).</summary>
-    public bool IsIndeterminate => Status == SyncStatus.Pulling;
+   [ObservableProperty]
+   public partial double? Percent { get; set; }
 
-    /// <summary>Clone progress in [0, 1] for determinate progress bars.</summary>
-    public double ProgressValue => Percent ?? 0;
+   /// <summary>
+   /// The Windows-invalid paths that made the last sync fail, when that was the cause
+   /// (set from the engine's failure progress payload); null for any other failure.
+   /// </summary>
+   [ObservableProperty]
+   public partial IReadOnlyList<InvalidPathInfo>? InvalidPaths { get; set; }
 
-    /// <summary>Human-readable status, including clone percentage when known.</summary>
-    public string StatusText => Status switch
-    {
-        SyncStatus.Queued => "Queued",
-        SyncStatus.Cloning when Percent is double p => $"Cloning {p * 100:0}%",
-        SyncStatus.Cloning => "Cloning",
-        SyncStatus.Pulling => "Pulling",
-        SyncStatus.Done => "Done",
-        SyncStatus.Failed => "Failed",
-        SyncStatus.Canceled => "Canceled",
-        _ => Status.ToString(),
-    };
 
-    /// <summary>True when there is an error message to show inline.</summary>
-    public bool HasError => !string.IsNullOrEmpty(Error);
 
-    /// <summary>
-    /// A non-error remark shown under the row, e.g. where a repository was cloned when
-    /// it lives outside the target folder (in WSL, #8). Cleared by the next run.
-    /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasNote))]
-    [NotifyPropertyChangedFor(nameof(HasDetails))]
-    public partial string? Note { get; set; }
+   /// <summary>True when the row failed because of Windows-invalid paths and can be resolved.</summary>
+   public bool HasPathIssue => InvalidPaths is { Count: > 0 };
 
-    /// <summary>True when there is a remark to show inline.</summary>
-    public bool HasNote => !string.IsNullOrEmpty(Note);
 
-    /// <summary>True when the row has anything to show under its cells (error, note, or both).</summary>
-    public bool HasDetails => HasError || HasNote;
 
-    partial void OnStatusChanged(SyncStatus value)
-    {
-        OnPropertyChanged(nameof(StatusText));
-        OnPropertyChanged(nameof(ShowProgress));
-        OnPropertyChanged(nameof(IsIndeterminate));
-    }
+   /// <summary>Default branch name, or empty for an empty repository.</summary>
+   public string BranchText => Descriptor.DefaultBranch ?? "";
 
-    /// <summary>
-    /// Re-raises the status change notification without a status change, so views
-    /// that derive theme-dependent values from <see cref="Status"/> (the row's status
-    /// brush) re-evaluate — used when the application theme changes mid-session.
-    /// </summary>
-    public void RefreshPresentation() => OnPropertyChanged(nameof(Status));
 
-    partial void OnPercentChanged(double? value)
-    {
-        OnPropertyChanged(nameof(StatusText));
-        OnPropertyChanged(nameof(ProgressValue));
-    }
 
-    partial void OnErrorChanged(string? value)
-    {
-        OnPropertyChanged(nameof(HasError));
-        OnPropertyChanged(nameof(HasDetails));
-    }
+   /// <summary>Whether the repository is archived (still cloneable, read-only).</summary>
+   public bool IsArchived => Descriptor.IsArchived;
 
-    partial void OnInvalidPathsChanged(IReadOnlyList<InvalidPathInfo>? value)
-        => OnPropertyChanged(nameof(HasPathIssue));
+
+
+   /// <summary>True while a git operation is in flight and a progress bar should show.</summary>
+   public bool ShowProgress => Status is SyncStatus.Cloning or SyncStatus.Pulling;
+
+
+
+   /// <summary>True when progress has no percentage (pulls report none).</summary>
+   public bool IsIndeterminate => Status == SyncStatus.Pulling;
+
+
+
+   /// <summary>Clone progress in [0, 1] for determinate progress bars.</summary>
+   public double ProgressValue => Percent ?? 0;
+
+
+
+   /// <summary>Human-readable status, including clone percentage when known.</summary>
+   public string StatusText => Status switch
+   {
+      SyncStatus.Queued => "Queued",
+      SyncStatus.Cloning when Percent is double p => $"Cloning {p * 100:0}%",
+      SyncStatus.Cloning => "Cloning",
+      SyncStatus.Pulling => "Pulling",
+      SyncStatus.Done => "Done",
+      SyncStatus.Failed => "Failed",
+      SyncStatus.Canceled => "Canceled",
+      _ => Status.ToString(),
+   };
+
+
+
+   /// <summary>True when there is an error message to show inline.</summary>
+   public bool HasError => !string.IsNullOrEmpty(Error);
+
+
+
+   /// <summary>
+   /// A non-error remark shown under the row, e.g. where a repository was cloned when
+   /// it lives outside the target folder (in WSL, #8). Cleared by the next run.
+   /// </summary>
+   [ObservableProperty]
+   [NotifyPropertyChangedFor(nameof(HasNote))]
+   [NotifyPropertyChangedFor(nameof(HasDetails))]
+   public partial string? Note { get; set; }
+
+
+
+   /// <summary>True when there is a remark to show inline.</summary>
+   public bool HasNote => !string.IsNullOrEmpty(Note);
+
+
+
+   /// <summary>True when the row has anything to show under its cells (error, note, or both).</summary>
+   public bool HasDetails => HasError || HasNote;
+
+
+
+   partial void OnStatusChanged(SyncStatus value)
+   {
+      OnPropertyChanged(nameof(StatusText));
+      OnPropertyChanged(nameof(ShowProgress));
+      OnPropertyChanged(nameof(IsIndeterminate));
+   }
+
+
+
+   /// <summary>
+   /// Re-raises the status change notification without a status change, so views
+   /// that derive theme-dependent values from <see cref="Status"/> (the row's status
+   /// brush) re-evaluate — used when the application theme changes mid-session.
+   /// </summary>
+   public void RefreshPresentation() => OnPropertyChanged(nameof(Status));
+
+
+
+   partial void OnPercentChanged(double? value)
+   {
+      OnPropertyChanged(nameof(StatusText));
+      OnPropertyChanged(nameof(ProgressValue));
+   }
+
+
+
+   partial void OnErrorChanged(string? value)
+   {
+      OnPropertyChanged(nameof(HasError));
+      OnPropertyChanged(nameof(HasDetails));
+   }
+
+
+
+   partial void OnInvalidPathsChanged(IReadOnlyList<InvalidPathInfo>? value)
+       => OnPropertyChanged(nameof(HasPathIssue));
 }
