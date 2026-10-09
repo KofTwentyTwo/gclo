@@ -160,6 +160,16 @@ jobs:
       - name: Velopack pack
         run: vpk pack --packId gclo --packVersion ${{ needs.verify.outputs.version }} --packDir publish/app --mainExe gclo.exe --channel ${{ needs.verify.outputs.channel }} --icon gclo/Assets/Brand/gclo.ico
 
+      # SHA256SUMS.txt: one line per asset ('<sha256> *<name>'), so users and the
+      # Scoop autoupdate can verify downloads without computing hashes by hand.
+      - name: Write SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $files = @(Get-Item artifacts/gclo-cli-win-x64.zip) + @(Get-ChildItem Releases -File | Where-Object { $_.Extension -in '.exe', '.zip', '.nupkg' })
+          $lines = $files | ForEach-Object { "{0} *{1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name }
+          [System.IO.File]::WriteAllText("artifacts/SHA256SUMS.txt", ($lines -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+          Get-Content artifacts/SHA256SUMS.txt
+
       # Provenance: a signed statement that THIS workflow run built these exact
       # bytes, verifiable with `gh attestation verify <file> -R KofTwentyTwo/gclo`.
       # Not a code signature (see #57); it makes a release attributable to the
@@ -169,6 +179,7 @@ jobs:
         with:
           subject-path: |
             artifacts/gclo-cli-win-x64.zip
+            artifacts/SHA256SUMS.txt
             Releases/*.exe
             Releases/*.zip
             Releases/*.nupkg
@@ -185,10 +196,10 @@ jobs:
           if ('${{ needs.verify.outputs.prerelease }}' -eq 'true') { $preFlag = @('--pre') }
           vpk upload github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ needs.verify.outputs.channel }} --releaseName "gclo ${{ needs.verify.outputs.version }}" --tag $env:GITHUB_REF_NAME @preFlag
 
-      - name: Attach CLI zip to the draft release
+      - name: Attach CLI zip and checksums to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload $env:GITHUB_REF_NAME artifacts/gclo-cli-win-x64.zip --clobber
+        run: gh release upload $env:GITHUB_REF_NAME artifacts/gclo-cli-win-x64.zip artifacts/SHA256SUMS.txt --clobber
 
       # Auto-generated changelog (categorized by labels via .github/release.yml).
       - name: Generate release changelog
@@ -222,9 +233,11 @@ jobs:
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
         run: |
           Add-Content -Path $env:GITHUB_OUTPUT -Value ("nuget=" + (-not [string]::IsNullOrEmpty($env:NUGET_API_KEY)).ToString().ToLower())
           Add-Content -Path $env:GITHUB_OUTPUT -Value ("winget=" + (-not [string]::IsNullOrEmpty($env:WINGET_TOKEN)).ToString().ToLower())
+          Add-Content -Path $env:GITHUB_OUTPUT -Value ("choco=" + (-not [string]::IsNullOrEmpty($env:CHOCO_API_KEY)).ToString().ToLower())
 
       - name: Push gclo.Engine to nuget.org
         if: steps.secrets.outputs.nuget == 'true'
@@ -259,3 +272,59 @@ jobs:
           # Velopack names the installer '<packId>-<channel>-Setup.exe'.
           $setupUrl = "$env:REPO_URL/releases/download/$env:GITHUB_REF_NAME/gclo-stable-Setup.exe"
           .\wingetcreate.exe update KofTwentyTwo.gclo --urls $setupUrl --version ${{ needs.verify.outputs.version }} --submit --token $env:WINGET_TOKEN
+
+      # ----------------------------------------------------------------------
+      # (e) Scoop + Chocolatey (#9), STABLE releases only. The repository is its
+      # own Scoop bucket (bucket/gclo.json) and ships the Chocolatey package
+      # source (packaging/chocolatey). Both are pointed at this release's CLI
+      # zip; the Chocolatey package is pushed when CHOCO_API_KEY is configured,
+      # and the updated manifests go back to dev as a pull request so the
+      # committed files always describe the latest stable release.
+      # ----------------------------------------------------------------------
+      - name: Point the Scoop and Chocolatey manifests at this release
+        if: needs.verify.outputs.prerelease == 'false'
+        id: manifests
+        shell: pwsh
+        run: ./.github/scripts/Update-PackageManifests.ps1 -Version ${{ needs.verify.outputs.version }} -CliZipPath artifacts/gclo-cli-win-x64.zip
+
+      - name: Pack the Chocolatey package
+        if: needs.verify.outputs.prerelease == 'false'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/chocolatey | Out-Null
+          choco pack packaging/chocolatey/gclo.nuspec --outputdirectory artifacts/chocolatey
+          Get-ChildItem artifacts/chocolatey
+
+      - name: Push the Chocolatey package
+        if: needs.verify.outputs.prerelease == 'false' && steps.secrets.outputs.choco == 'true'
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: choco push (Get-ChildItem artifacts/chocolatey/*.nupkg | Select-Object -First 1).FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+
+      - name: Open a PR with the updated package manifests
+        if: needs.verify.outputs.prerelease == 'false'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.DEPS_PAT || github.token }}
+          base: dev
+          branch: packaging/v${{ needs.verify.outputs.version }}
+          delete-branch: true
+          commit-message: 'Packaging: point the Scoop and Chocolatey manifests at v${{ needs.verify.outputs.version }}'
+          title: 'Packaging: Scoop and Chocolatey manifests for v${{ needs.verify.outputs.version }}'
+          body: |
+            Generated by the Release workflow for tag `${{ github.ref_name }}`.
+
+            - `bucket/gclo.json` (Scoop) and `packaging/chocolatey` now point at
+              `gclo-cli-win-x64.zip` of v${{ needs.verify.outputs.version }}
+              (SHA-256 `${{ steps.manifests.outputs.sha256 }}`).
+            - `scoop update gclo` picks this up once merged; the Chocolatey package
+              was ${{ steps.secrets.outputs.choco == 'true' && 'pushed to chocolatey.org' || 'packed but not pushed (CHOCO_API_KEY not configured)' }}.
+
+            Relates to #9.
+          labels: |
+            release
+          add-paths: |
+            bucket/gclo.json
+            packaging/chocolatey/gclo.nuspec
+            packaging/chocolatey/tools/chocolateyinstall.ps1

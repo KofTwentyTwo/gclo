@@ -28,7 +28,18 @@ Plain version tags (`v1.2.3`) are **stable** releases; pre-release tags (`v1.2.3
 
 > **Upgrading from a beta?** Channels don't cross: a dev/beta install never auto-updates to a stable release (its **Check for updates** only looks at the dev channel). To move to stable, install `gclo-stable-Setup.exe` once — it takes over the existing install and self-updates within the stable channel from then on.
 
-`winget` support is planned (tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7)); until then, install from the Releases page above.
+**Package managers (CLI):**
+
+```powershell
+# Scoop: this repository is its own bucket
+scoop bucket add gclo https://github.com/KofTwentyTwo/gclo
+scoop install gclo
+
+# Chocolatey (once the package has cleared moderation; see #7)
+choco install gclo
+```
+
+Every release also attaches `SHA256SUMS.txt`, and every asset carries a build-provenance attestation you can check with `gh attestation verify <file> -R KofTwentyTwo/gclo`. `winget` support for the desktop app is tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7).
 
 ## Getting a token
 

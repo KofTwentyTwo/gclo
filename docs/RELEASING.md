@@ -53,6 +53,9 @@ get a release without a delta package, which is normal.
 | GitHub Release (Setup, portable, full/delta packages, CLI zip) | always | none — the built-in `GITHUB_TOKEN` is enough |
 | nuget.org (`gclo.Engine` package) | `NUGET_API_KEY` secret is set | `NUGET_API_KEY` — an API key from nuget.org with push rights for `gclo.Engine` |
 | winget (`KofTwentyTwo.gclo`) | stable releases only, and `WINGET_TOKEN` secret is set | `WINGET_TOKEN` — a GitHub personal access token (classic, `public_repo` scope) used by `wingetcreate` to fork/PR [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) |
+| `SHA256SUMS.txt` on the GitHub Release | always | none |
+| Scoop (`bucket/gclo.json` in this repository) | stable releases only | none — the workflow opens a PR against `dev` with the updated manifest; merge it and `scoop update gclo` sees the release |
+| Chocolatey (`gclo` on chocolatey.org) | stable releases only, and `CHOCO_API_KEY` secret is set | `CHOCO_API_KEY` — an API key from your chocolatey.org account; the first push creates the package (it then goes through Chocolatey moderation) |
 
 If a secret is not configured, the corresponding step is skipped cleanly — the
 release still succeeds. Configure secrets under
@@ -77,6 +80,24 @@ Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
 Once that first PR is merged and the package is live, set the `WINGET_TOKEN`
 secret and every subsequent stable release updates the manifest automatically
 via `wingetcreate update KofTwentyTwo.gclo ... --submit`.
+
+## Scoop and Chocolatey
+
+Both install the same asset, `gclo-cli-win-x64.zip`, by URL and SHA-256.
+
+- **Scoop** needs no account: this repository is its own bucket. Users run
+  `scoop bucket add gclo https://github.com/KofTwentyTwo/gclo` once, then
+  `scoop install gclo`. The manifest (`bucket/gclo.json`) carries `checkver` and
+  `autoupdate` entries keyed on `SHA256SUMS.txt`, so `scoop update` works as
+  soon as the manifest on `main` names the new version — which is what the
+  release workflow's "Packaging" pull request does after each stable release.
+- **Chocolatey** needs a one-time account on chocolatey.org and its API key as
+  the `CHOCO_API_KEY` secret. The workflow packs `packaging/chocolatey` on every
+  stable release and pushes it when the key exists; the first version goes
+  through Chocolatey's moderation queue (expect a few days), later versions are
+  usually auto-approved. Users then run `choco install gclo`.
+- To re-point the manifests by hand (for example after a missed release):
+  `./.github/scripts/Update-PackageManifests.ps1 -Version 1.2.3 -CliZipPath <zip>`.
 
 ## Cutting a release, start to finish
 
