@@ -278,8 +278,11 @@ jobs:
       # own Scoop bucket (bucket/gclo.json) and ships the Chocolatey package
       # source (packaging/chocolatey). Both are pointed at this release's CLI
       # zip; the Chocolatey package is pushed when CHOCO_API_KEY is configured,
-      # and the updated manifests go back to dev as a pull request so the
-      # committed files always describe the latest stable release.
+      # and the updated manifests are proposed as a pull request against MAIN:
+      # Scoop reads bucket/gclo.json from the default branch, so a PR against
+      # dev would leave `scoop install` on the previous version until the next
+      # dev->main merge. Merge the PR, then merge main back into dev. (With only
+      # GITHUB_TOKEN the PR triggers no checks; DEPS_PAT fixes that, see #7.)
       # ----------------------------------------------------------------------
       - name: Point the Scoop and Chocolatey manifests at this release
         if: needs.verify.outputs.prerelease == 'false'
@@ -307,7 +310,7 @@ jobs:
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.DEPS_PAT || github.token }}
-          base: dev
+          base: main
           branch: packaging/v${{ needs.verify.outputs.version }}
           delete-branch: true
           commit-message: 'Packaging: point the Scoop and Chocolatey manifests at v${{ needs.verify.outputs.version }}'
@@ -318,8 +321,10 @@ jobs:
             - `bucket/gclo.json` (Scoop) and `packaging/chocolatey` now point at
               `gclo-cli-win-x64.zip` of v${{ needs.verify.outputs.version }}
               (SHA-256 `${{ steps.manifests.outputs.sha256 }}`).
-            - `scoop update gclo` picks this up once merged; the Chocolatey package
+            - `scoop update gclo` picks this up as soon as this PR is merged (Scoop
+              reads the manifest from `main`); the Chocolatey package
               was ${{ steps.secrets.outputs.choco == 'true' && 'pushed to chocolatey.org' || 'packed but not pushed (CHOCO_API_KEY not configured)' }}.
+            - After merging, merge `main` back into `dev` so the branches agree.
 
             Relates to #9.
           labels: |
