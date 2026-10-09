@@ -6,6 +6,19 @@ namespace gclo.Engine;
 /// <summary>One repository as the GitHub API describes it, in the fields gclo uses.</summary>
 internal readonly record struct GitHubRepo(string Name, string CloneUrl, string? DefaultBranch, bool IsArchived);
 
+/// <summary>What a GitHub login names, as far as the token can tell.</summary>
+internal enum GitHubAccountKind
+{
+    /// <summary>A user account.</summary>
+    User,
+
+    /// <summary>An organization (whether or not the token can see its repositories).</summary>
+    Organization,
+
+    /// <summary>No account with that login is visible to the token.</summary>
+    NotFound,
+}
+
 /// <summary>
 /// The seam between the listers and the GitHub REST API: exactly the calls gclo
 /// makes, returning plain shapes. Implementations surface Octokit's exception
@@ -33,6 +46,9 @@ internal interface IGitHubGateway
 
     /// <summary>Logins of the organizations visible to the token.</summary>
     Task<IReadOnlyList<string>> GetOrganizationLoginsAsync();
+
+    /// <summary>Whether <paramref name="login"/> is a user, an organization, or unknown to the token.</summary>
+    Task<GitHubAccountKind> GetAccountKindAsync(string login);
 }
 
 /// <summary>
@@ -98,6 +114,19 @@ internal sealed class OctokitGateway : IGitHubGateway
             .GetAllForCurrent(new ApiOptions { PageSize = IGitHubGateway.PageSize })
             .ConfigureAwait(false);
         return organizations.Select(o => o.Login).ToList();
+    }
+
+    public async Task<GitHubAccountKind> GetAccountKindAsync(string login)
+    {
+        try
+        {
+            var account = await _client.User.Get(login).ConfigureAwait(false);
+            return account.Type == AccountType.Organization ? GitHubAccountKind.Organization : GitHubAccountKind.User;
+        }
+        catch (NotFoundException)
+        {
+            return GitHubAccountKind.NotFound;
+        }
     }
 
     private static ApiOptions Page(int page)

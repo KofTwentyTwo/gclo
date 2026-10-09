@@ -21,6 +21,8 @@ public sealed class GitHubListerTests
         public Func<Task<string>> CurrentUser { get; set; } = () => Task.FromResult("me");
         public Func<Task<IReadOnlyList<string>>> OrgLogins { get; set; } =
             () => Task.FromResult<IReadOnlyList<string>>([]);
+        public Func<string, Task<GitHubAccountKind>> AccountKind { get; set; } =
+            _ => Task.FromResult(GitHubAccountKind.User);
 
         public Task<IReadOnlyList<GitHubRepo>> GetOrganizationRepositoriesPageAsync(string organization, int page)
             => OrgPages(organization, page);
@@ -29,6 +31,7 @@ public sealed class GitHubListerTests
             => UserPages(user, page);
         public Task<string> GetCurrentUserLoginAsync() => CurrentUser();
         public Task<IReadOnlyList<string>> GetOrganizationLoginsAsync() => OrgLogins();
+        public Task<GitHubAccountKind> GetAccountKindAsync(string login) => AccountKind(login);
     }
 
     private readonly FakeGateway _gateway = new();
@@ -58,6 +61,14 @@ public sealed class GitHubListerTests
 
     private static RateLimitExceededException RateLimited()
         => new(new FakeResponse(HttpStatusCode.Forbidden, new RateLimit(60, 0, 1735689600)));
+
+    private static SecondaryRateLimitExceededException SecondaryRateLimited()
+        => new(new FakeResponse(HttpStatusCode.Forbidden));
+
+    private static LoginAttemptsExceededException LoginAttemptsExceeded()
+        => new(new FakeResponse(HttpStatusCode.Forbidden));
+
+    private static AbuseException Abuse() => new(new FakeResponse(HttpStatusCode.Forbidden));
 
     /// <summary>Octokit's Response type is internal; its IResponse is not.</summary>
     private sealed class FakeResponse(HttpStatusCode status, RateLimit? rateLimit = null) : IResponse
@@ -119,6 +130,56 @@ public sealed class GitHubListerTests
         var repos = await RepoLister().ListOrganizationRepositoriesAsync("kof", "tok-1234567890");
 
         Assert.Equal("mine", Assert.Single(repos).Name); // login match is case-insensitive
+    }
+
+    [Fact]
+    public async Task Repos_OrgNotFound_ButItIsAnOrganizationTheTokenCannotSee_FailsInsteadOfListingPublicRepos()
+    {
+        // The worst failure mode for a mirror tool: a green sync of the 12 public
+        // repos of a 400-repo org. The account kind is resolved before any fallback.
+        _gateway.OrgPages = (_, _) => throw NotFound();
+        _gateway.AccountKind = _ => Task.FromResult(GitHubAccountKind.Organization);
+        bool userReposAsked = false;
+        _gateway.UserPages = (_, _) => { userReposAsked = true; return Task.FromResult<IReadOnlyList<GitHubRepo>>([Repo("public-only")]); };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+        Assert.Contains("'acme' is an organization", ex.Message);
+        Assert.Contains("cannot see its repositories", ex.Message);
+        Assert.Contains("resource owner", ex.Message);
+        Assert.False(userReposAsked, "the public-repos endpoint must never be consulted for an organization");
+    }
+
+    [Fact]
+    public async Task Repos_OrgNotFound_AndNoSuchAccount_FailsWithSpellingHint()
+    {
+        _gateway.OrgPages = (_, _) => throw NotFound();
+        _gateway.AccountKind = _ => Task.FromResult(GitHubAccountKind.NotFound);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => RepoLister().ListOrganizationRepositoriesAsync("typo", "tok-1234567890"));
+
+        Assert.Contains("neither as an organization nor as a user account", ex.Message);
+        Assert.Contains("Check the spelling", ex.Message);
+    }
+
+    [Fact]
+    public async Task Repos_SecondaryRateLimit_TranslatesWithRetryHint()
+    {
+        _gateway.OrgPages = (_, _) => throw SecondaryRateLimited();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+        Assert.Contains("secondary rate limit", ex.Message);
+        Assert.Contains("retry in", ex.Message);
+        Assert.IsType<SecondaryRateLimitExceededException>(ex.InnerException);
+
+        _gateway.OrgPages = (_, _) => throw Abuse();
+        var abuse = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+        Assert.Contains("retry in 60 seconds", abuse.Message);
     }
 
     [Fact]
@@ -223,6 +284,35 @@ public sealed class GitHubListerTests
         var orgs = await OrgLister().ListOrganizationsAsync("tok-1234567890");
 
         Assert.Equal(["Kof"], orgs);
+    }
+
+    [Fact]
+    public async Task Orgs_SecondaryRateLimit_IsNotMistakenForAMissingScope()
+    {
+        // A throttle must surface as an error, not silently shrink the org list to
+        // the personal account (which reads as a permanent scope problem).
+        _gateway.OrgLogins = () => throw SecondaryRateLimited();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
+
+        Assert.Contains("secondary rate limit", ex.Message);
+
+        _gateway.OrgLogins = () => throw Abuse();
+        var abuse = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
+        Assert.Contains("retry in 60 seconds", abuse.Message);
+    }
+
+    [Fact]
+    public async Task Orgs_LoginAttemptsExceeded_IsNotMistakenForAMissingScope()
+    {
+        _gateway.OrgLogins = () => throw LoginAttemptsExceeded();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
+
+        Assert.Contains("too many failed attempts", ex.Message);
     }
 
     [Fact]

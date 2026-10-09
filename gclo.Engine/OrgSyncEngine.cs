@@ -107,10 +107,27 @@ public sealed class OrgSyncEngine
                 {
                     token.ThrowIfCancellationRequested();
 
+                    // A name that is one safe segment (RepositoryPathResolver) can still be
+                    // impossible as a Windows folder: GitHub allows repositories called
+                    // 'aux' or 'con'. Fail the row with a plain reason instead of an opaque
+                    // OS error from the clone (#31).
+                    if (OperatingSystem.IsWindows()
+                        && WindowsPathValidator.ValidatePaths(new[] { repo.Name }) is { Count: > 0 } invalidName)
+                    {
+                        throw new InvalidOperationException(
+                            $"Repository name '{repo.Name}' cannot be a folder on Windows ({invalidName[0].Reason}). "
+                            + "Rename the repository on GitHub, or sync it on another platform.");
+                    }
+
+                    // WaitAsync: a git operation wedged in native transport code (DNS,
+                    // TLS, a black-holed connection) observes no callback and therefore
+                    // no cancellation. Abandoning the await keeps cancellation prompt;
+                    // the orphaned operation finishes (or times out) on its own thread
+                    // and its own cleanup still runs (#31).
                     if (_git.IsValidRepository(path))
                     {
                         progress?.Report(new RepoProgress(repo.Name, SyncStatus.Pulling));
-                        await _git.FetchAndPullAsync(path, request.Token, token).ConfigureAwait(false);
+                        await _git.FetchAndPullAsync(path, request.Token, token).WaitAsync(token).ConfigureAwait(false);
                         Interlocked.Increment(ref updated);
                     }
                     else
@@ -119,7 +136,7 @@ public sealed class OrgSyncEngine
                         await _git.CloneAsync(
                             repo.CloneUrl, path, request.Token,
                             pct => progress?.Report(new RepoProgress(repo.Name, SyncStatus.Cloning, Percent: pct)),
-                            token).ConfigureAwait(false);
+                            token).WaitAsync(token).ConfigureAwait(false);
                         Interlocked.Increment(ref cloned);
                     }
 

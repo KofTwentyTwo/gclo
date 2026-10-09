@@ -297,6 +297,60 @@ public sealed class LibGit2GitClientTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchAndPull_UpstreamDefaultBranchRenamed_FollowsTheNewBranch()
+    {
+        // The routine master -> main migration: the tracked remote branch disappears,
+        // and a mirror must follow origin's new default instead of saying "up to
+        // date" forever against a pruned ref (#31).
+        string source = CreateSourceRepo();
+        string target = NewPath("clone");
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+        string oldName;
+        using (var src = new Repository(source))
+        {
+            oldName = src.Head.FriendlyName;
+            src.Branches.Rename(src.Head, "renamed-main");
+            src.Refs.UpdateTarget("HEAD", "refs/heads/renamed-main");
+        }
+        string newSha = CommitFile(source, "after-rename.txt", "after", "commit on the renamed branch");
+
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+
+        using var after = new Repository(target);
+        Assert.Equal("renamed-main", after.Head.FriendlyName);
+        Assert.Equal(newSha, after.Head.Tip.Sha);
+        Assert.Equal("origin/renamed-main", after.Head.TrackedBranch!.FriendlyName);
+        Assert.Equal("after", File.ReadAllText(Path.Combine(target, "after-rename.txt")));
+        Assert.Null(after.Branches[oldName]); // the orphaned local branch is gone
+        Assert.Null(after.Branches["origin/" + oldName]); // and so is its pruned tracking ref
+
+        // The next pull is an ordinary up-to-date pull on the new branch.
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+        Assert.Equal(newSha, HeadSha(target));
+    }
+
+    [Fact]
+    public async Task FetchAndPull_UpstreamBranchRenamed_ButLocalHasOwnCommits_RefusesToDiscardThem()
+    {
+        string source = CreateSourceRepo();
+        string target = NewPath("clone");
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+        string localSha = CommitFile(target, "local.txt", "mine", "local work");
+        using (var src = new Repository(source))
+        {
+            src.Branches.Rename(src.Head, "renamed-main");
+            src.Refs.UpdateTarget("HEAD", "refs/heads/renamed-main");
+        }
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+
+        Assert.Contains("local commits", ex.Message);
+        Assert.Contains("never discards local work", ex.Message);
+        Assert.Equal(localSha, HeadSha(target)); // untouched
+    }
+
+    [Fact]
     public async Task FetchAndPull_BranchWithoutUpstream_FetchesButMergesNothing()
     {
         string source = CreateSourceRepo();
