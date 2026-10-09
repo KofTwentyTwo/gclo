@@ -213,8 +213,21 @@ jobs:
       - name: Pack gclo.Engine
         run: dotnet pack gclo.Engine -c Release -p:Version=${{ needs.verify.outputs.version }} -p:ContinuousIntegrationBuild=true -o artifacts/nuget
 
+      # The secrets context is not available in a step's `if`, so one step turns
+      # "is it configured?" into outputs; it is the only step besides the two
+      # publishers that sees the values, and it never prints them.
+      - name: Check which optional publishing secrets are configured
+        id: secrets
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          Add-Content -Path $env:GITHUB_OUTPUT -Value ("nuget=" + (-not [string]::IsNullOrEmpty($env:NUGET_API_KEY)).ToString().ToLower())
+          Add-Content -Path $env:GITHUB_OUTPUT -Value ("winget=" + (-not [string]::IsNullOrEmpty($env:WINGET_TOKEN)).ToString().ToLower())
+
       - name: Push gclo.Engine to nuget.org
-        if: ${{ secrets.NUGET_API_KEY != '' }}
+        if: steps.secrets.outputs.nuget == 'true'
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: dotnet nuget push "artifacts/nuget/*.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
@@ -229,7 +242,7 @@ jobs:
       # docs/RELEASING.md), then this step keeps it current.
       # ----------------------------------------------------------------------
       - name: Submit winget manifest update
-        if: ${{ needs.verify.outputs.prerelease == 'false' && secrets.WINGET_TOKEN != '' }}
+        if: needs.verify.outputs.prerelease == 'false' && steps.secrets.outputs.winget == 'true'
         shell: pwsh
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
