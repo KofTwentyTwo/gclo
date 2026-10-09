@@ -53,7 +53,7 @@ get a release without a delta package, which is normal.
 | GitHub Release (Setup, portable, full/delta packages, CLI zip) | always | none — the built-in `GITHUB_TOKEN` is enough |
 | nuget.org (`gclo.Engine` package) | `NUGET_API_KEY` secret is set | `NUGET_API_KEY` — an API key from nuget.org with push rights for `gclo.Engine` |
 | winget (`KofTwentyTwo.gclo`) | stable releases only, and `WINGET_TOKEN` secret is set | `WINGET_TOKEN` — a GitHub personal access token (classic, `public_repo` scope) used by `wingetcreate` to fork/PR [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) |
-| `SHA256SUMS.txt` on the GitHub Release | always | none |
+| `SHA256SUMS` and CycloneDX SBOMs on the GitHub Release | always | none |
 | Scoop (`bucket/gclo.json` in this repository) | stable releases only | none — the workflow opens a PR against `main` with the updated manifest; merge it (then `main` back into `dev`) and `scoop update gclo` sees the release |
 | Chocolatey (`gclo` on chocolatey.org) | stable releases only, and `CHOCO_API_KEY` secret is set | `CHOCO_API_KEY` — an API key from your chocolatey.org account; the first push creates the package (it then goes through Chocolatey moderation) |
 
@@ -88,7 +88,7 @@ Both install the same asset, `gclo-cli-win-x64.zip`, by URL and SHA-256.
 - **Scoop** needs no account: this repository is its own bucket. Users run
   `scoop bucket add gclo https://github.com/KofTwentyTwo/gclo` once, then
   `scoop install gclo`. The manifest (`bucket/gclo.json`) carries `checkver` and
-  `autoupdate` entries keyed on `SHA256SUMS.txt`, so `scoop update` works as
+  `autoupdate` entries keyed on `SHA256SUMS`, so `scoop update` works as
   soon as the manifest on `main` names the new version. The release workflow
   therefore opens its "Packaging" pull request **against `main`** (the one
   exception to the dev-first branch model: three generated files, nothing else).

@@ -39,6 +39,13 @@
           "gclo.Engine": "[1.0.1-dev, )"
         }
       }
+    },
+    "net10.0/win-x64": {
+      "LibGit2Sharp.NativeBinaries": {
+        "type": "Transitive",
+        "resolved": "2.0.324",
+        "contentHash": "5YZVGNuO9nYFQfzRQGPGY9fdpSsABwlF2jSaZ7ydxCfjvt5Krbj/eHbXkvvgAQzp4lkjvgDrlAuuI4KTmqhDlA=="
+      }
     }
   }
 }

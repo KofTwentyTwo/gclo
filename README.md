@@ -39,7 +39,7 @@ scoop install gclo
 choco install gclo
 ```
 
-Every release also attaches `SHA256SUMS.txt`, and every asset carries a build-provenance attestation you can check with `gh attestation verify <file> -R KofTwentyTwo/gclo`. `winget` support for the desktop app is tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7).
+Every release also attaches `SHA256SUMS` and a CycloneDX SBOM per artifact, and every asset carries a build-provenance attestation you can check with `gh attestation verify <file> -R KofTwentyTwo/gclo`. `winget` support for the desktop app is tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7).
 
 ## Getting a token
 

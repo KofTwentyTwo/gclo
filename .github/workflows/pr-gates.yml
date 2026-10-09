@@ -1,0 +1,26 @@
+# Pull request gates (K22-CI-01): Conventional Commit title, DCO sign-off on every
+# commit, and review of added dependencies, through the KofTwentyTwo standards'
+# reusable workflow. Pinned by full commit SHA like any other action (K22-CI-11);
+# the comment names the standards revision. Dependabot's github-actions ecosystem
+# updates the SHA and the comment together.
+name: pr-gates
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: pr-gates-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr:
+    uses: KofTwentyTwo/standards/.github/workflows/pr.yml@ae174f54959ba4297f2ae174356c4481918fdf44 # main 2026-10-09 (pre-1.0 draft, standards#4)
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      # These packages declare a license FILE in their nuspec, so the dependency
+      # graph reports NOASSERTION; see standards EX-0003.
+      allow-dependencies-licenses: pkg:nuget/LibGit2Sharp, pkg:nuget/Microsoft.WindowsAppSDK, pkg:nuget/Microsoft.Windows.SDK.BuildTools

@@ -1,23 +1,27 @@
-# Weekly dependency updates for the GitHub Actions pinned in .github/workflows.
+# Dependabot (K22-DEP-20): keeps the SHA-pinned actions and the standards'
+# reusable workflows current, weekly and grouped. The 7-day cooldown lets the
+# community catch a compromised release before it reaches us; security updates
+# are not delayed by it.
 #
-# NuGet packages are deliberately NOT handled here. Dependabot's NuGet updater
-# cannot evaluate the WinUI project's Windows-versioned target framework
+# NuGet is deliberately NOT handled here. Dependabot's NuGet updater cannot
+# evaluate the WinUI project's Windows-versioned target framework
 # (net10.0-windows10.0.19041.0; dependabot/dependabot-core#13923) and declares
-# every newer package "not compatible", which also blocks the same packages in the
-# other projects. The NuGet updates workflow (.github/workflows/nuget-updates.yml)
-# does that job through `dotnet list package --outdated` instead. Dependabot
-# security alerts for NuGet are unaffected: they come from the dependency graph.
+# every newer package "not compatible", which also blocks the same packages in
+# the other projects. .github/workflows/nuget-updates.yml does that job through
+# `dotnet list package --outdated`, with the same cooldown (docs/adr/0004).
+# Dependabot security alerts for NuGet are unaffected: they come from the
+# dependency graph.
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: "/"
-    target-branch: dev
+    directory: /
     schedule:
       interval: weekly
       day: monday
-      time: "06:00"
-      timezone: America/New_York
+    cooldown:
+      default-days: 7
     groups:
-      actions-all:
-        patterns:
-          - "*"
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
