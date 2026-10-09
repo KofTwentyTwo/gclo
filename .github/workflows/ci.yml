@@ -45,8 +45,6 @@ jobs:
           dotnet-version: 10.0.x
           cache: true
           cache-dependency-path: '**/packages.lock.json'
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
 
       # RestoreLockedMode: the committed packages.lock.json files are the restore
       # graph; a stale lock file (a bump without 'dotnet restore --force-evaluate')
@@ -130,8 +128,6 @@ jobs:
           dotnet-version: 10.0.x
           cache: true
           cache-dependency-path: '**/packages.lock.json'
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
 
       # Self-contained Windows App SDK: hosted runners do not have the runtime
       # installed. The output path is the same one AppSession resolves by default.
@@ -166,8 +162,6 @@ jobs:
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
           cache: true
           cache-dependency-path: '**/packages.lock.json'
 
