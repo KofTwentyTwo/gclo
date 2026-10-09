@@ -76,7 +76,7 @@ Every pull request must pass:
 | **UI end-to-end tests (x64)** | FlaUI/UIA smoke tests drive the real `gclo.exe` (`gclo.UiTests`) |
 | **Format (style gate)** | `dotnet format gclo.slnx --verify-no-changes --severity error` |
 | **Dependency review** | New/changed dependencies must have no known vulnerabilities (any severity fails) and a license on the repo's allowlist |
-| **CodeQL** | Static security analysis (runs on PRs targeting `main` and weekly) |
+| **CodeQL** | Static security analysis (runs on pushes and PRs to `dev` and `main`, plus a weekly scheduled scan) |
 
 Running the build, test, and format commands above locally before pushing will catch almost everything CI would.
 
