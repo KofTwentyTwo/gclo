@@ -1,44 +1,37 @@
 # Contributing to gclo
 
-Thanks for your interest in contributing. This document covers what you need to get set up, how changes flow through the repository, and what is expected of a pull request.
+Thanks for helping. This project follows the
+[KofTwentyTwo standards](https://github.com/KofTwentyTwo/standards); this page is the
+short version of what they ask of a contribution.
 
-Before starting on a feature, check the [development roadmap (#11)](https://github.com/KofTwentyTwo/gclo/issues/11) — it may already be planned (or deliberately out of scope). For anything non-trivial, open an issue first so the approach can be agreed before you invest time.
+## Before you start
 
-## Prerequisites
+Check the [development roadmap (#11)](https://github.com/KofTwentyTwo/gclo/issues/11):
+it may already be planned, or deliberately out of scope. For anything beyond a small
+fix, open an issue first so the approach can be agreed before you invest time.
+Questions and proposals are welcome in
+[Issues](https://github.com/KofTwentyTwo/gclo/issues).
+
+## Setup
+
+Prerequisites:
 
 - Windows 11, or Windows 10 version 1809 (build 17763) or later
-- [.NET 10 SDK](https://dotnet.microsoft.com/)
-- Visual Studio 2026 with the Windows App SDK / WinUI workload (recommended for working on the app UI; the engine, the CLI, and the tests only need the SDK)
+- the .NET 10 SDK (the feature band is pinned by `global.json`)
+- Visual Studio 2026 with the Windows App SDK / WinUI workload, for working on the app
+  UI; the engine, the CLI, and the tests only need the SDK
+- [pre-commit](https://pre-commit.com/) (or prek) for the git hooks
 
-## Branch model
-
-- **`dev`** is the integration branch. **Pull requests target `dev`**, not `main`. CI, CodeQL, and dependency review run on every push and PR to `dev` and their results are visible on the PR, but they are **not enforced** as required checks there — the maintainer merges on green.
-- **`main`** is the stable branch. It only moves via PRs from `dev`, and those are enforced: the branch ruleset requires the build/test, format, dependency-review, and CodeQL checks to pass before a merge. Releases are tagged from `main`, and the release workflow refuses a tag that is not on it.
-
-Fork the repository, branch from `dev`, and open your PR against `dev`.
-
-## Building and testing
-
-All commands run from the repository root:
+These are the commands CI runs; run them from the repository root before pushing:
 
 ```powershell
-# Packaged build (what F5 in Visual Studio does).
-# CI runs this with -warnaserror — the build must produce ZERO warnings.
-dotnet build gclo.slnx -p:Platform=x64
+# Build (packaged, as F5 in Visual Studio does). Zero warnings: -warnaserror is the gate.
+dotnet build gclo.slnx -p:Platform=x64 -warnaserror
 
-# Changed a PackageReference? Refresh the committed lock files, or CI's
-# locked restore rejects the change.
-dotnet restore gclo.slnx --force-evaluate
-
-# Unpackaged build — runs without MSIX deployment or package identity.
-# Verify this still works before opening a PR.
+# Unpackaged build: runs without MSIX deployment or package identity. Must keep working.
 dotnet build gclo.slnx -p:Platform=x64 -p:WindowsPackageType=None
 
-# Run the unit/integration test suites (engine + view models, and the CLI)
-dotnet test gclo.Engine.Tests
-dotnet test gclo.Cli.Tests
-
-# Coverage as CI measures it (must be 100% for gclo.Engine, gclo.ViewModels, gclo)
+# Tests (engine + view models, and the CLI), with coverage as CI measures it
 dotnet test gclo.Engine.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage"
 dotnet test gclo.Cli.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage"
 
@@ -46,74 +39,123 @@ dotnet test gclo.Cli.Tests --settings coverage.runsettings --collect:"XPlat Code
 dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None
 dotnet test gclo.UiTests/gclo.UiTests.csproj
 
-# Formatting/style gate — must report no changes needed
-dotnet format gclo.slnx --verify-no-changes --severity error
+# Format and style gate
+dotnet restore gclo.slnx --locked-mode
+dotnet format gclo.slnx --verify-no-changes --severity warn --no-restore
+
+# PowerShell scripts
+Invoke-ScriptAnalyzer -Path .github/scripts -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit
+
+# Changed a PackageReference? Refresh the committed lock files, or the locked restore rejects it.
+dotnet restore gclo.slnx --force-evaluate
 ```
 
-## Debugging in Visual Studio: expect (and silence) exception breaks
+Install the git hooks once per clone. They run the same secret, workflow, format, and
+commit-message checks CI does:
 
-Per-repo failure isolation is exception-based by design: a repository that
-cannot be cloned or pulled throws (`LibGit2SharpException`,
-`InvalidRepositoryPathsException`, ...) and the sync engine catches it, marks
-that row Failed, and keeps going. Many of these exceptions surface from inside
-native libgit2 frames, so with **Just My Code** enabled Visual Studio breaks on
-them as "user-unhandled" even though they are always caught — during a sync
-with failing repositories the debugger pauses every thread on each one, which
-looks like the whole UI is frozen until you press Continue.
+```sh
+pre-commit install --hook-type pre-commit --hook-type commit-msg
+```
 
-None of this happens outside the debugger. Options, in order of preference:
+## Workflow
 
-1. Run without the debugger (**Ctrl+F5**) unless you are actively debugging.
-2. In **Debug → Windows → Exception Settings**, uncheck *Break when this
-   exception type is user-unhandled* for `LibGit2Sharp.LibGit2SharpException`
-   (and `gclo.Engine.InvalidRepositoryPathsException`) after the first break.
-3. Disable **Tools → Options → Debugging → Enable Just My Code** — the
-   debugger then only breaks on genuinely unhandled exceptions.
+1. Branch from `main` with a short-lived topic branch named `<type>/<short-description>`,
+   for example `feat/export-csv` or `fix/42-crash-on-empty-folder`. `main` is the only
+   long-lived branch (GitHub Flow).
+2. Commit with [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+   (`feat: ...`, `fix(sync): ...`; allowed types: `feat`, `fix`, `perf`, `refactor`,
+   `docs`, `test`, `build`, `ci`, `chore`, `revert`, `style`). Every commit is
+   **signed** and **signed off**: `git commit -S -s` (see *Sign-off* below).
+3. Open a pull request against `main`. Its title must itself be a Conventional Commit
+   header: pull requests are **squash-merged**, so the title becomes the commit
+   message on `main`. Fill in the template: what, why, how it was tested.
+4. Every required check must pass, and every review thread must be resolved, before
+   the pull request merges. The maintainer merges; nobody pushes to `main` directly.
 
-## What CI enforces
+## What makes a contribution acceptable
 
-Every pull request must pass:
+- The build has **zero warnings**, and format and lint checks are clean.
+- New behavior has tests; a bug fix has a test that fails without the fix.
+- Line coverage stays at **100%** on `gclo.Engine`, `gclo.ViewModels`, and `gclo`
+  (the CLI), measured via `coverage.runsettings`.
+- Tests stay offline: engine tests use local fixture repositories and the fakes in
+  `gclo.Engine.Tests/Fakes.cs`; UI tests use the offline fixture token. No network, no
+  real tokens.
+- Unpackaged mode keeps working: no APIs that require package identity without a
+  fallback.
+- User-visible changes update the docs (`README.md`, `docs/CLI.md`) in the same pull
+  request; a change to the attack surface updates
+  [the threat model](docs/security/threat-model.md); an expensive-to-reverse decision
+  gets an ADR in `docs/adr/`.
+- No secrets, credentials, or personal data, ever.
+- New dependencies are justified in the pull request description.
 
-| Check | What it gates |
+## Checks that gate a merge
+
+| Check | What it verifies |
 | --- | --- |
-| **Build and test (x64)** | `dotnet build gclo.slnx -p:Platform=x64 -warnaserror` — zero warnings, including NuGetAudit vulnerability warnings; then the test suites with coverage. **Line coverage must be 100%** on each of `gclo.Engine`, `gclo.ViewModels`, and `gclo` (the CLI), measured via `coverage.runsettings` (source-generated code and the `[ExcludeFromCodeCoverage]` native/network adapters are excluded — see that file) |
-| **UI end-to-end tests (x64)** | FlaUI/UIA smoke tests drive the real `gclo.exe` (`gclo.UiTests`) |
-| **Format (style gate)** | `dotnet format gclo.slnx --verify-no-changes --severity error` |
-| **Dependency review** | New/changed dependencies must have no known vulnerabilities (any severity fails) and a license on the repo's allowlist |
-| **CodeQL** | Static security analysis (runs on pushes and PRs to `dev` and `main`, plus a weekly scheduled scan) |
+| `pr / title` | The PR title is a Conventional Commit header |
+| `pr / dco` | Every commit is signed off |
+| `pr / dependency-review` | Added dependencies have no known vulnerabilities and an allowed license |
+| `security / secrets`, `security / sca`, `security / workflows` | No secrets, no vulnerable or malicious dependencies, safe workflows |
+| `codeql / analyze (csharp)`, `codeql / analyze (actions)` | No high-severity static analysis findings |
+| `ci / build-test` | Zero-warning x64 build, both unit suites, 100% coverage gate |
+| `ci / format` | `dotnet format --verify-no-changes --severity warn` and PSScriptAnalyzer |
+| `ci / ui-tests` | FlaUI end-to-end tests against the real `gclo.exe` (advisory until it is made required, #54) |
 
-Running the build, test, and format commands above locally before pushing will catch almost everything CI would.
+## Sign-off (Developer Certificate of Origin)
 
-## Pull request expectations
+By signing off a commit you certify the
+[Developer Certificate of Origin 1.1](https://developercertificate.org/): that you
+wrote the change, or otherwise have the right to submit it under the project's
+license. `git commit -s` appends the sign-off:
 
-- **Zero warnings.** The build must complete with 0 warnings. Treat any new warning as a failure.
-- **Tests pass.** `dotnet test gclo.Engine.Tests` must be green. Engine changes should come with corresponding xunit tests.
-- **Tests stay offline.** The engine tests exercise real git operations against **local fixture repositories** created on disk (via LibGit2Sharp) — no network access, no GitHub calls, no tokens. Keep new tests that way; fake `IRepositoryLister` / `IGitClient` implementations live in `gclo.Engine.Tests/Fakes.cs`.
-- **Unpackaged mode keeps working.** The app must run when built with `-p:WindowsPackageType=None`. Do not call APIs that require package identity (for example `Windows.Storage.ApplicationData` or `Package.Current`) without a try/catch fallback.
-- **Docs follow behavior.** If your change alters user-visible behavior, update the affected docs (`README.md`, `docs/CLI.md`) in the same PR.
-- Keep changes focused; unrelated refactors belong in separate PRs.
+```text
+Signed-off-by: Your Name <your.email@example.com>
+```
 
-## Architecture rule: no business logic in the UI project
-
-The `gclo` WinUI project contains XAML views, dialogs, and self-update plumbing — **nothing else**. View models and settings persistence live in `gclo.ViewModels`, a UI-framework-free library the test suite exercises headlessly. All sync/GitHub/git logic lives in `gclo.Engine`, a plain class library behind the `IRepositoryLister` / `IGitClient` / `IOrganizationLister` interfaces, shared by the scriptable CLI head (`gclo.Cli`). If you find yourself writing logic in the `gclo` project, it belongs in a library — GitHub or git logic in the engine, presentation state in the view models.
+The name and email must match the commit author. To add missing sign-offs to a
+branch, run `git rebase --signoff main` and force-push the branch.
 
 ## Code style
 
-Match the existing code. In particular:
+The code follows the Kingsrook layout of the
+[KofTwentyTwo C# profile](https://github.com/KofTwentyTwo/standards/blob/main/standards/coding/csharp-dotnet.md):
+3-space indentation, Allman braces, `if(` without a space, three blank lines between
+members, `///` header comments on every type and member, `var` only when the type is
+apparent, one type per file. `dotnet format` applies the layout from `.editorconfig`,
+and the build enforces it; Rider and ReSharper apply the blank-line rules. New
+in-body comments are flower boxes; older plain `//` comments are converted as the code
+around them is touched (K22-CODE-10 is a SHOULD).
 
-- `ImplicitUsings` is **off** in the app project — every `.cs` file needs explicit `using` directives.
-- Nullable reference types are enabled; keep code null-clean rather than suppressing warnings.
-- For CommunityToolkit.Mvvm observable properties, use the **partial property** form:
+In addition:
 
-  ```csharp
-  [ObservableProperty]
-  public partial string Foo { get; set; }
-  ```
+- `ImplicitUsings` is off in the app project: every `.cs` file lists its usings.
+- Nullable reference types are enabled; keep code null-clean rather than suppressing.
+- Observable properties use CommunityToolkit.Mvvm's partial-property form.
+- No business logic in the `gclo` UI project: GitHub and git logic belongs in
+  `gclo.Engine`, presentation state in `gclo.ViewModels` (see `docs/adr/0005`).
+- Never write a token to disk, logs, or process output, and never accept one as a
+  command-line argument. See [SECURITY.md](SECURITY.md).
 
-  Do not use the field-based form (it emits MVVMTK0045 warnings).
+## Debugging in Visual Studio: expect (and silence) exception breaks
 
-- Never write a token to disk, logs, or process output, and never accept one as a command-line argument. See [SECURITY.md](SECURITY.md).
+Per-repo failure isolation is exception-based by design: a repository that cannot be
+cloned or pulled throws (`LibGit2SharpException`, `InvalidRepositoryPathsException`,
+...) and the sync engine catches it, marks that row Failed, and keeps going. Many of
+these exceptions surface from inside native libgit2 frames, so with **Just My Code**
+enabled Visual Studio breaks on them as "user-unhandled" even though they are always
+caught. Run without the debugger (**Ctrl+F5**), uncheck *Break when this exception
+type is user-unhandled* for those types, or disable *Just My Code*.
+
+## AI-assisted contributions
+
+AI coding tools are welcome. You remain the author: you must understand, test, and be
+able to explain every line you submit, and you sign it off as your own. Note
+substantial AI assistance in the pull request description and with a
+`Co-Authored-By:` trailer naming the model.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).
+By contributing, you agree that your contributions are licensed under the project's
+[MIT License](LICENSE).

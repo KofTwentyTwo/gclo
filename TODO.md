@@ -4,6 +4,7 @@
 
 - Roadmap / current status: [#11 — Development roadmap](https://github.com/KofTwentyTwo/gclo/issues/11) (v1.0.0 shipped; post-1.0 backlog there)
 - Owner action items: [#7 — Owner setup checklist](https://github.com/KofTwentyTwo/gclo/issues/7)
+- Standards compliance: [#62 — epic](https://github.com/KofTwentyTwo/gclo/issues/62) and the maintainer checklist [#66](https://github.com/KofTwentyTwo/gclo/issues/66)
 
 Labels: `priority` (work first), `needs-owner` (blocked on the owner), `deferred`
 (agreed follow-up, unscheduled), `quality`, `release`, `refactor`.
