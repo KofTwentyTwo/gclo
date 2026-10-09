@@ -358,16 +358,16 @@ namespace gclo
         /// blocked by Windows-invalid paths. Returns the user's recovery choice, or null
         /// when the dialog was dismissed (or the row carries no path details).
         /// </summary>
-        private async Task<PathRecovery?> ShowPathRecoveryDialogAsync(RepoItemViewModel item)
+        private async Task<PathRecoveryDecision?> ShowPathRecoveryDialogAsync(RepoItemViewModel item)
         {
             if (item.InvalidPaths is not { Count: > 0 } paths)
             {
                 return null;
             }
 
-            var dialog = new PathRecoveryDialog(item.Name, paths) { XamlRoot = XamlRoot };
+            var dialog = new PathRecoveryDialog(item.Name, paths, ViewModel.IsWslCloneAvailable) { XamlRoot = XamlRoot };
             await DialogGuard.ShowAsync(dialog);
-            return dialog.Result; // blocked by another open dialog reads as dismissed
+            return dialog.Decision; // blocked by another open dialog reads as dismissed
         }
 
         private async void OpenFolderButton_Click(object sender, RoutedEventArgs e)

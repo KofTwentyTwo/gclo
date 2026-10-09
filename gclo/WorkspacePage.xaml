@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <UserControl
     x:Class="gclo.WorkspacePage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -732,6 +732,7 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="{StaticResource SelectColumnWidth}" />
@@ -800,8 +801,18 @@
                                     Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                                     Text="{x:Bind Error, Mode=OneWay}"
                                     Visibility="{x:Bind local:StatusFormat.VisibleIf(HasError), Mode=OneWay}" />
-                                <HyperlinkButton
+                                <!-- Non-error remark, e.g. where a repository was cloned in WSL (#8). -->
+                                <TextBlock
                                     Grid.Row="2"
+                                    Grid.Column="0"
+                                    Grid.ColumnSpan="5"
+                                    IsTextSelectionEnabled="True"
+                                    TextWrapping="Wrap"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="{x:Bind Note, Mode=OneWay}"
+                                    Visibility="{x:Bind local:StatusFormat.VisibleIf(HasNote), Mode=OneWay}" />
+                                <HyperlinkButton
+                                    Grid.Row="3"
                                     Grid.Column="0"
                                     Grid.ColumnSpan="5"
                                     Padding="0"

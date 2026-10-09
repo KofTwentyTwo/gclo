@@ -74,6 +74,17 @@ public sealed partial class RepoItemViewModel : ObservableObject
     /// <summary>True when there is an error message to show inline.</summary>
     public bool HasError => !string.IsNullOrEmpty(Error);
 
+    /// <summary>
+    /// A non-error remark shown under the row, e.g. where a repository was cloned when
+    /// it lives outside the target folder (in WSL, #8). Cleared by the next run.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasNote))]
+    public partial string? Note { get; set; }
+
+    /// <summary>True when there is a remark to show inline.</summary>
+    public bool HasNote => !string.IsNullOrEmpty(Note);
+
     partial void OnStatusChanged(SyncStatus value)
     {
         OnPropertyChanged(nameof(StatusText));

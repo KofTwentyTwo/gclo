@@ -28,8 +28,10 @@ public sealed class ActionLoggingTests : IDisposable
         public void Report(RepoProgress value) => handler(value);
     }
 
+    private readonly FakeWslCloner _wsl = new();
+
     private WorkspaceViewModel CreateViewModel()
-        => new(_lister, _git, _orgs, handler => new SyncProgress(handler), TimeSpan.FromMilliseconds(1), _log);
+        => new(_lister, _git, _orgs, handler => new SyncProgress(handler), TimeSpan.FromMilliseconds(1), _log, wsl: _wsl);
 
     private void AssertNoTokenLogged()
         => Assert.All(_log.Messages, m => Assert.DoesNotContain(Token, m));
@@ -86,13 +88,44 @@ public sealed class ActionLoggingTests : IDisposable
         Assert.Contains("Retrying 1 failed repositories.", _log.Messages);
 
         // The user opens recovery and cancels it.
-        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(null);
+        _wsl.Availability = new WslAvailability(false, "wsl.exe is not installed");
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(null);
         await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
         Assert.Contains("alpha: path recovery requested (1 invalid paths).", _log.Messages);
+        Assert.Contains("WSL clone not available: wsl.exe is not installed", _log.Messages);
         Assert.Contains("alpha: path recovery canceled; the repository stays failed.", _log.Messages);
 
         vm.NoteFolderOpened();
         Assert.Contains($"Opened folder '{vm.EffectiveTargetRoot}'.", _log.Messages);
+        AssertNoTokenLogged();
+    }
+
+    [Fact]
+    public async Task Workspace_CloneInWsl_IsLogged_WithoutTheToken()
+    {
+        _lister.Repositories = Repos("alpha");
+        var vm = CreateViewModel();
+        vm.Organization = "acme";
+        vm.Token = Token;
+        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+        vm.TargetFolder = _root;
+        await vm.LoadReposCommand.ExecuteAsync(null);
+        var invalid = new List<InvalidPathInfo> { new("bad:name.txt", "invalid on Windows", "bad_name.txt") };
+        _git.CloneHandler = (_, _, _, _, _) => Task.FromException(new InvalidRepositoryPathsException(invalid));
+        await vm.SyncCommand.ExecuteAsync(null);
+        _wsl.Availability = new WslAvailability(true, "git version 2.53.0");
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.CloneInWsl());
+
+        await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+        Assert.Contains("WSL clone available (git version 2.53.0).", _log.Messages);
+        Assert.Contains("alpha: cloning in WSL instead.", _log.Messages);
+        Assert.Contains("alpha: cloned in WSL (Ubuntu) at /home/me/gclo/acme/alpha.", _log.Messages);
+
+        _wsl.CloneHandler = (_, _) => Task.FromException<WslCloneResult>(new WslCloneException("Clone in WSL failed: boom"));
+        vm.Repos[0].InvalidPaths = invalid;
+        vm.Repos[0].Status = SyncStatus.Failed;
+        await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+        Assert.Contains("alpha: clone in WSL failed: Clone in WSL failed: boom", _log.Messages);
         AssertNoTokenLogged();
     }
 

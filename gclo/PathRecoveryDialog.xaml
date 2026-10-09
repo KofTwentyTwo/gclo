@@ -11,7 +11,8 @@
     PrimaryButtonText="Apply and check out"
     CloseButtonText="Skip this repo"
     DefaultButton="Primary"
-    PrimaryButtonClick="OnPrimaryButtonClick">
+    PrimaryButtonClick="OnPrimaryButtonClick"
+    SecondaryButtonClick="OnSecondaryButtonClick">
 
     <ContentDialog.Resources>
         <!-- Repository paths are wide; loosen the stock 548px dialog cap. -->
