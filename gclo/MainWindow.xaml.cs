@@ -29,9 +29,14 @@ namespace gclo
         private const string RepoUrl = "https://github.com/KofTwentyTwo/gclo";
 
         // Smallest logical (DPI-independent) size at which the workspace toolbar,
-        // connect card, and repo table remain usable.
-        private const int MinWindowWidth = 700;
+        // connect card, and repo table remain usable WITH the navigation pane open:
+        // the pane takes 240, page and card padding 64, the fixed table columns 400,
+        // and the Name column needs room to show a name (#31).
+        private const int MinWindowWidth = 900;
         private const int MinWindowHeight = 520;
+
+        /// <summary>Set once the root's theme-change subscription exists.</summary>
+        private bool _themeHooked;
 
         private readonly AppSettings _settings;
         private readonly UpdateService _updateService;
@@ -92,6 +97,7 @@ namespace gclo
             _accountsStore = new AccountsStore(_tokenVault, log: _log);
 
             InitializeComponent();
+            ApplyBackdrop();
 
             Title = "gclo — Git Clone Large Organizations";
 
@@ -191,11 +197,39 @@ namespace gclo
         /// (theme, splash) cannot silently reset a value the user tuned in the
         /// workspace's Options flyout (#30).
         /// </summary>
+        /// <summary>
+        /// Mica where the OS supports it, acrylic where only that does, otherwise the
+        /// themed page background so the layered card brushes have a surface to sit on.
+        /// </summary>
+        private void ApplyBackdrop()
+        {
+            if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
+            {
+                SystemBackdrop = new MicaBackdrop();
+            }
+            else if (Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController.IsSupported())
+            {
+                SystemBackdrop = new DesktopAcrylicBackdrop();
+            }
+            else if (Application.Current.Resources.TryGetValue("ApplicationPageBackgroundThemeBrush", out object? brush)
+                && brush is Brush background)
+            {
+                RootGrid.Background = background;
+            }
+        }
+
         private void ApplySettings(bool seedQuickSyncConcurrency)
         {
             if (Content is FrameworkElement root)
             {
                 root.RequestedTheme = StatusFormat.ToElementTheme(_settings.Theme);
+                if (!_themeHooked)
+                {
+                    // Covers an OS light/dark flip while running in System mode too.
+                    root.ActualThemeChanged += (sender, _) => OnThemeChanged(sender.ActualTheme);
+                    _themeHooked = true;
+                }
+                OnThemeChanged(root.ActualTheme);
             }
 
             if (_workspaces.TryGetValue(Guid.Empty, out var quickSync))
@@ -211,6 +245,28 @@ namespace gclo
                     viewModel.MaxConcurrency = _settings.DefaultMaxConcurrency;
                 }
             }
+        }
+
+        /// <summary>
+        /// Keeps everything that is not a ThemeResource reference in step with the
+        /// effective theme: the function-bound status brushes (resolved from the
+        /// matching theme dictionary from now on), the rows that cache them (asked to
+        /// re-evaluate), the pane badges, and the title bar (#31).
+        /// </summary>
+        private void OnThemeChanged(ElementTheme actual)
+        {
+            StatusFormat.CurrentTheme = actual;
+            foreach ((Guid id, WorkspaceEntry workspace) in _workspaces)
+            {
+                workspace.ViewModel.RefreshPresentation();
+                OnWorkspaceStateChanged(id);
+            }
+            AppWindow.TitleBar.PreferredTheme = actual switch
+            {
+                ElementTheme.Light => TitleBarTheme.Light,
+                ElementTheme.Dark => TitleBarTheme.Dark,
+                _ => TitleBarTheme.UseDefaultAppMode,
+            };
         }
 
         // ---------------------------------------------------------------- workspaces
@@ -465,10 +521,9 @@ namespace gclo
             {
                 badge.Style = style;
             }
-            else if (Application.Current.Resources.TryGetValue(fallbackBrushKey, out object? brushValue)
-                && brushValue is Brush brush)
+            else
             {
-                badge.Background = brush;
+                badge.Background = StatusFormat.ThemedBrush(fallbackBrushKey);
             }
             return badge;
         }
@@ -556,6 +611,11 @@ namespace gclo
             {
                 XamlRoot = Content.XamlRoot,
             };
+            if (DialogGuard.IsDialogOpen)
+            {
+                _log.Info("Account wizard not opened: another dialog is open.");
+                return;
+            }
             _log.Info(existing is null ? "Account wizard opened (add)." : $"Account wizard opened (edit '{existing.Name}').");
             await DialogGuard.ShowAsync(dialog);
             if (!dialog.Saved)
@@ -596,6 +656,11 @@ namespace gclo
             {
                 XamlRoot = Content.XamlRoot,
             };
+            if (DialogGuard.IsDialogOpen)
+            {
+                _log.Info("Account wizard not opened: another dialog is open.");
+                return;
+            }
             _log.Info($"Account wizard opened (save Quick Sync connection to '{seed.Organization}' as an account).");
             await DialogGuard.ShowAsync(dialog);
             if (dialog.Saved)

@@ -72,15 +72,10 @@ namespace gclo
             // with PathRecoveryDialog.
             ViewModel.RecoveryInteraction = ShowPathRecoveryDialogAsync;
 
-            // A token the view model already holds (an account's vault token, or the
-            // saved default token) is deliberately NOT mirrored into the box: the
-            // placeholder says what is in effect, and an untouched box keeps it. Only
-            // what the user types replaces it (#32).
-            TokenBox.PlaceholderText = ViewModel.Token.Length == 0
-                ? "ghp_…"
-                : IsAccountWorkspace
-                    ? "Using the account's stored token — type here to replace it"
-                    : "Using the saved default token — type here to replace it";
+            // Both hosts of the shared connection form need the window handle for
+            // their folder picker.
+            ConnectForm.WindowHandleProvider = _windowHandleProvider;
+            EditForm.WindowHandleProvider = _windowHandleProvider;
 
             // SelectorBar starts with no selection; the view model's filter default is
             // All, so select that item (the resulting SelectionChanged is a no-op set).
@@ -89,7 +84,8 @@ namespace gclo
         }
 
         /// <summary>
-        /// Label for the org-subfolder checkbox; names the actual organization once one is chosen.
+        /// Label for the org-subfolder checkbox in the Options flyout; names the actual
+        /// organization once one is chosen (the connection form has its own copy).
         /// </summary>
         public string OrgSubfolderLabel(string organization)
             => string.IsNullOrWhiteSpace(organization)
@@ -276,13 +272,6 @@ namespace gclo
             null => "Filter by archived",
         };
 
-        // An editable ComboBox does not render Text that was set before its template
-        // loaded, so an account workspace's seeded org shows as blank even though
-        // the view model holds it — see EditableComboBox. Runs on every Loaded:
-        // the connect card's box on page creation, the chip flyout's on each open.
-        private void OrgBox_Loaded(object sender, RoutedEventArgs e)
-            => EditableComboBox.ReapplyText((ComboBox)sender, ViewModel.Organization);
-
         private void Toolbar_SizeChanged(object sender, SizeChangedEventArgs e)
             => UpdateToolbarLayout();
 
@@ -335,16 +324,6 @@ namespace gclo
             }
         }
 
-        // The flyout's token box never shows the token in effect either (see the
-        // connect card): it opens empty with a placeholder, and only typing replaces.
-        private void EditFlyout_Opening(object? sender, object e)
-        {
-            EditTokenBox.Password = "";
-            EditTokenBox.PlaceholderText = ViewModel.Token.Length == 0
-                ? "ghp_…"
-                : "A token is in effect — type here to replace it";
-        }
-
         private void RaiseStatusLiveRegionChanged()
         {
             var peer = Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(StatusTextBlock)
@@ -389,28 +368,6 @@ namespace gclo
             var dialog = new PathRecoveryDialog(item.Name, paths) { XamlRoot = XamlRoot };
             await DialogGuard.ShowAsync(dialog);
             return dialog.Result; // blocked by another open dialog reads as dismissed
-        }
-
-        // PasswordBox does not support reliable two-way x:Bind on Password;
-        // mirror it into the view model by hand (shared by the connect card's box
-        // and the edit flyout's box).
-        private void TokenBox_PasswordChanged(object sender, RoutedEventArgs e)
-        {
-            ViewModel.Token = ((PasswordBox)sender).Password;
-        }
-
-        private async void BrowseButton_Click(object sender, RoutedEventArgs e)
-        {
-            var picker = new Windows.Storage.Pickers.FolderPicker();
-            picker.FileTypeFilter.Add("*"); // required in packaged apps
-
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, _windowHandleProvider());
-
-            var folder = await picker.PickSingleFolderAsync();
-            if (folder is not null)
-            {
-                ViewModel.TargetFolder = folder.Path;
-            }
         }
 
         private async void OpenFolderButton_Click(object sender, RoutedEventArgs e)

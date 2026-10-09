@@ -17,8 +17,11 @@
     PrimaryButtonClick="OnPrimaryButtonClick"
     SecondaryButtonClick="OnSecondaryButtonClick">
 
-    <!-- The four step panels overlay each other; StepVisible shows exactly one. -->
-    <Grid MinWidth="400">
+    <!-- The four step panels overlay each other; StepVisible shows exactly one. The
+         MinHeight is the tallest step (token + hint + validation row + error), so the
+         dialog keeps one footprint across steps instead of resizing and re-centering
+         under the pointer on every Next (#31). -->
+    <Grid MinWidth="400" MinHeight="280">
 
         <!-- ============================================================ Step 1
              Identity: the unique display name plus an optional note. -->

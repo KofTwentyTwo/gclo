@@ -45,6 +45,14 @@ public sealed class LibGit2GitClient : IGitClient
 
     private static readonly JsonSerializerOptions RecoveryJsonOptions = new() { WriteIndented = true };
 
+    /// <summary>
+    /// Test seam: invoked right after a fetch completed, before the cancellation
+    /// check that precedes any working-tree work. Local-transport fixtures fire no
+    /// transfer callbacks, so this is how the offline suite exercises "canceled
+    /// between fetch and checkout/merge" deterministically (#31). Null in production.
+    /// </summary>
+    internal Action? AfterFetchForTesting { get; set; }
+
     /// <inheritdoc/>
     public bool IsValidRepository(string path)
         => Directory.Exists(path) && Repository.IsValid(path);
@@ -69,7 +77,7 @@ public sealed class LibGit2GitClient : IGitClient
             () => ApplyRecovery(path, recovery, cancellationToken),
             cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-    private static void Clone(string url, string path, string token, Action<double>? onProgress, CancellationToken ct)
+    private void Clone(string url, string path, string token, Action<double>? onProgress, CancellationToken ct)
     {
         bool existedBefore = Directory.Exists(path);
 
@@ -102,6 +110,7 @@ public sealed class LibGit2GitClient : IGitClient
         try
         {
             Repository.Clone(url, path, options);
+            AfterFetchForTesting?.Invoke();
 
             using var repo = new Repository(path);
 
@@ -174,7 +183,7 @@ public sealed class LibGit2GitClient : IGitClient
         }
     }
 
-    private static void FetchAndPull(string path, string token, CancellationToken ct)
+    private void FetchAndPull(string path, string token, CancellationToken ct)
     {
         using var repo = new Repository(path);
 
@@ -206,6 +215,7 @@ public sealed class LibGit2GitClient : IGitClient
         {
             throw new OperationCanceledException(ct);
         }
+        AfterFetchForTesting?.Invoke();
 
         ct.ThrowIfCancellationRequested();
 

@@ -3,6 +3,7 @@
     x:Class="gclo.AboutDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:gclo"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
@@ -79,27 +80,21 @@
             <!-- Third-party attributions -->
             <StackPanel Spacing="4">
                 <TextBlock Text="Open source components" Style="{ThemeResource BodyStrongTextBlockStyle}" />
-                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
-                    <Run FontWeight="SemiBold" Text="Octokit" /><Run Text=" — MIT License" />
-                </TextBlock>
-                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
-                    <Run FontWeight="SemiBold" Text="LibGit2Sharp" /><Run Text=" — MIT License" />
-                </TextBlock>
-                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
-                    <Run FontWeight="SemiBold" Text="libgit2 (native library)" /><Run Text=" — GPLv2 with Linking Exception" />
-                </TextBlock>
-                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
-                    <Run FontWeight="SemiBold" Text="CommunityToolkit.Mvvm" /><Run Text=" — MIT License" />
-                </TextBlock>
-                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
-                    <Run FontWeight="SemiBold" Text="Velopack" /><Run Text=" — MIT License" />
-                </TextBlock>
-                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
-                    <Run FontWeight="SemiBold" Text="Windows App SDK / WinUI 3" /><Run Text=" — MIT License, with Microsoft binary components" />
-                </TextBlock>
-                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
-                    <Run FontWeight="SemiBold" Text=".NET Runtime" /><Run Text=" — MIT License" />
-                </TextBlock>
+                <!-- Data, not seven copies of one TextBlock: see AboutDialog.Attributions. -->
+                <ItemsControl ItemsSource="{x:Bind Attributions}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="4" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="local:Attribution">
+                            <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap">
+                                <Run FontWeight="SemiBold" Text="{x:Bind Name}" /><Run Text="{x:Bind LicenseText}" />
+                            </TextBlock>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </StackPanel>
 
             <TextBlock

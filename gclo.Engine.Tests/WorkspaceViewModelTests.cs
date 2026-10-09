@@ -9,11 +9,26 @@ namespace gclo.Engine.Tests;
 /// (the production default, <see cref="Progress{T}"/>, posts asynchronously and would
 /// make assertions racy) and a near-zero org-lookup debounce.
 /// </summary>
-public sealed class WorkspaceViewModelTests
+public sealed class WorkspaceViewModelTests : IDisposable
 {
     private readonly FakeRepositoryLister _lister = new();
     private readonly FakeGitClient _git = new();
     private readonly FakeOrganizationLister _orgs = new();
+
+    /// <summary>Every view model the test created, disposed and cleaned up after it — pass or fail.</summary>
+    private readonly List<WorkspaceViewModel> _created = new();
+
+    public void Dispose()
+    {
+        foreach (WorkspaceViewModel vm in _created)
+        {
+            vm.Dispose();
+            if (vm.TargetFolder.Length > 0 && Path.IsPathRooted(vm.TargetFolder))
+            {
+                TryDeleteDirectory(vm.TargetFolder);
+            }
+        }
+    }
 
     /// <summary>Synchronous progress: handler runs inline on the reporting thread.</summary>
     private sealed class SyncProgress(Action<RepoProgress> handler) : IProgress<RepoProgress>
@@ -37,11 +52,17 @@ public sealed class WorkspaceViewModelTests
         Account? account = null,
         ITokenVault? vault = null,
         AccountsStore? store = null)
-        => new(_lister, _git, _orgs,
+        => Track(new WorkspaceViewModel(_lister, _git, _orgs,
                handler => new SyncProgress(handler),
                debounce ?? TimeSpan.FromMilliseconds(1),
                new NullActivityLog(),
-               account, vault, store);
+               account, vault, store));
+
+    private WorkspaceViewModel Track(WorkspaceViewModel vm)
+    {
+        _created.Add(vm);
+        return vm;
+    }
 
     /// <summary>
     /// A view model with valid inputs and the given repositories already loaded into the
@@ -203,7 +224,6 @@ public sealed class WorkspaceViewModelTests
         await run;
         Assert.True(vm.CanEditInputs);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- sync flow
@@ -229,7 +249,6 @@ public sealed class WorkspaceViewModelTests
         Assert.True(vm.HasCompletedRun);
         Assert.False(vm.IsRunning);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -255,7 +274,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Contains("1 updated", vm.StatusText);
         Assert.Contains("1 failed", vm.StatusText);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -277,7 +295,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Contains("failed", announcement);
         Assert.Contains("boom", announcement);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -291,7 +308,6 @@ public sealed class WorkspaceViewModelTests
 
         Assert.Empty(announcements);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -328,7 +344,6 @@ public sealed class WorkspaceViewModelTests
             r.Status is SyncStatus.Canceled or SyncStatus.Done or SyncStatus.Failed,
             $"{r.Name} left in non-terminal state {r.Status}"));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- run-scoped progress
@@ -351,7 +366,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(3, vm.TotalCount);
         Assert.Equal(0, vm.CompletedCount);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- active strip
@@ -389,7 +403,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Empty(vm.ActiveRepos); // cleared when the run ends
         Assert.All(vm.Repos, r => Assert.Equal(SyncStatus.Done, r.Status));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- retry failed
@@ -424,7 +437,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(1, vm.CompletedCount);
         Assert.False(vm.RetryFailedCommand.CanExecute(null)); // nothing failed anymore
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- run results
@@ -442,7 +454,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(RunResultKind.Success, vm.ResultKind);
         Assert.Contains("2 cloned", vm.ResultMessage);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -460,7 +471,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(RunResultKind.PartialFailure, vm.ResultKind);
         Assert.Contains("1 failed", vm.ResultMessage);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -487,7 +497,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(RunResultKind.Canceled, vm.ResultKind);
         Assert.StartsWith("Canceled", vm.ResultMessage);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -543,7 +552,6 @@ public sealed class WorkspaceViewModelTests
         Assert.True(vm.ResultOpen);
         Assert.Equal(RunResultKind.Success, vm.ResultKind);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -559,7 +567,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(RunResultKind.None, vm.ResultKind);
         Assert.Equal("", vm.ResultMessage);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- path recovery
@@ -597,7 +604,6 @@ public sealed class WorkspaceViewModelTests
         Assert.False(vm.ResolvePathsCommand.CanExecute(byName["bravo"])); // no path issue
         Assert.False(vm.ResolvePathsCommand.CanExecute(null));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -632,7 +638,6 @@ public sealed class WorkspaceViewModelTests
         Assert.False(vm.ResolvePathsCommand.CanExecute(row)); // nothing left to resolve
         Assert.False(vm.RetryFailedCommand.CanExecute(null)); // nothing failed anymore
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -660,7 +665,6 @@ public sealed class WorkspaceViewModelTests
 
         Assert.Equal(SyncStatus.Done, row.Status);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -679,7 +683,6 @@ public sealed class WorkspaceViewModelTests
         Assert.True(row.HasPathIssue); // payload kept for another attempt
         Assert.True(vm.ResolvePathsCommand.CanExecute(row));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -706,7 +709,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(stillInvalid, row.InvalidPaths); // the fresh list, ready for another round
         Assert.True(vm.ResolvePathsCommand.CanExecute(row));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -727,7 +729,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal("disk full", row.Error);
         Assert.False(row.HasPathIssue); // renaming again would not help
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -760,7 +761,6 @@ public sealed class WorkspaceViewModelTests
         await run;
         Assert.True(vm.ResolvePathsCommand.CanExecute(alpha)); // unlocked again
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -780,7 +780,6 @@ public sealed class WorkspaceViewModelTests
         Assert.False(row.HasPathIssue);
         Assert.False(vm.ResolvePathsCommand.CanExecute(row));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- load errors and stale tables (#30)
@@ -1228,7 +1227,6 @@ public sealed class WorkspaceViewModelTests
 
         Assert.Equal(["bravo"], vm.FilteredRepos.Select(r => r.Name));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -1362,7 +1360,10 @@ public sealed class WorkspaceViewModelTests
     public async Task TokenChange_RapidEdits_OnlyNewestLookupLands()
     {
         _orgs.Handler = (token, _) => Task.FromResult<IReadOnlyList<string>>([token[^4..]]);
-        var vm = CreateViewModel(debounce: TimeSpan.FromMilliseconds(120));
+        // The two assignments below must land inside one debounce window; a
+        // loaded CI runner can pause a test for hundreds of milliseconds between
+        // two lines, so the window is generous (this is the one wall-clock test).
+        var vm = CreateViewModel(debounce: TimeSpan.FromMilliseconds(1500));
 
         vm.Token = "token-1234567890-AAAA";
         vm.Token = "token-1234567890-BBBB"; // supersedes within the debounce window
@@ -1370,6 +1371,55 @@ public sealed class WorkspaceViewModelTests
         await WaitUntilAsync(() => vm.Organizations.Count == 1, "debounced load");
         Assert.Equal("BBBB", vm.Organizations[0]);
         Assert.Equal(1, _orgs.Calls);
+    }
+
+    // ---------------------------------------------------------------- lifecycle
+
+    [Fact]
+    public async Task Dispose_MidOrgLookup_CancelsTheLookup_AndALateResultCannotMutateState()
+    {
+        var gate = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken seen = default;
+        _orgs.Handler = (_, ct) =>
+        {
+            seen = ct;
+            return gate.Task.WaitAsync(ct);
+        };
+        var vm = CreateViewModel();
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => _orgs.Calls == 1, "lookup to start");
+
+        vm.Dispose();
+
+        Assert.True(seen.IsCancellationRequested, "the in-flight lookup's token must be canceled");
+        gate.SetResult(["late"]);
+        await Task.Yield();
+        Assert.Empty(vm.Organizations); // the canceled wait threw before the result could land
+    }
+
+    [Fact]
+    public void Dispose_Twice_IsANoOp()
+    {
+        var vm = CreateViewModel();
+        vm.Dispose();
+        vm.Dispose(); // must not throw (the lookup token source is already gone)
+        Assert.Empty(vm.Organizations);
+    }
+
+    [Fact]
+    public async Task RefreshPresentation_ReRaisesStatusForEveryRow_WithoutChangingIt()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+        var raised = new List<string>();
+        foreach (RepoItemViewModel row in vm.Repos)
+        {
+            row.PropertyChanged += (sender, e) => raised.Add($"{((RepoItemViewModel)sender!).Name}:{e.PropertyName}");
+        }
+
+        vm.RefreshPresentation();
+
+        Assert.Equal(["alpha:Status", "bravo:Status"], raised);
+        Assert.All(vm.Repos, r => Assert.Equal(SyncStatus.Queued, r.Status));
     }
 
     // ---------------------------------------------------------------- account workspaces
@@ -1487,7 +1537,6 @@ public sealed class WorkspaceViewModelTests
         await vm.RetryFailedCommand.ExecuteAsync(null);
         Assert.False(vm.HasFailedRepos);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -1738,7 +1787,6 @@ public sealed class WorkspaceViewModelTests
         Assert.True(vm.SyncCommand.CanExecute(null));
         Assert.True(vm.CanEditInputs);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- residue
@@ -1823,7 +1871,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(SyncStatus.Failed, vm.Repos[0].Status); // unchanged
         Assert.False(vm.IsResolvingPaths);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -1850,6 +1897,5 @@ public sealed class WorkspaceViewModelTests
 
         Assert.DoesNotContain(vm.Repos, r => r.Name == "ghost-repo");
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 }

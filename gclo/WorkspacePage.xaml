@@ -27,6 +27,14 @@
             <Setter Property="Padding" Value="4" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
+        <!-- Table column widths, declared once and referenced by both the header grid
+             and the row template (WinUI has no SharedSizeGroup): editing a width here
+             keeps header and cells aligned by construction. -->
+        <GridLength x:Key="SelectColumnWidth">40</GridLength>
+        <GridLength x:Key="NameColumnWidth">2*</GridLength>
+        <GridLength x:Key="StatusColumnWidth">160</GridLength>
+        <GridLength x:Key="BranchColumnWidth">120</GridLength>
+        <GridLength x:Key="ArchivedColumnWidth">80</GridLength>
     </UserControl.Resources>
 
     <Grid Padding="20" RowSpacing="12">
@@ -95,81 +103,11 @@
                 <StackPanel Spacing="12">
                     <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Connect to GitHub" />
 
-                    <!-- ContentControl: panels have no IsEnabled; a disabled Control disables its subtree. -->
-                    <ContentControl
-                        HorizontalContentAlignment="Stretch"
+                    <local:ConnectionFormControl
+                        x:Name="ConnectForm"
+                        AutomationIdPrefix="Connect"
                         IsEnabled="{x:Bind ViewModel.CanEditInputs, Mode=OneWay}"
-                        IsTabStop="False">
-                    <StackPanel Spacing="12">
-                        <PasswordBox
-                            x:Name="TokenBox"
-                            AutomationProperties.AutomationId="ConnectTokenBox"
-                            Header="Personal access token"
-                            ToolTipService.ToolTip="Fine-grained or classic PAT with repository read access; used for the GitHub API and git over HTTPS. Never written to disk or logs."
-                            PlaceholderText="ghp_…"
-                            PasswordChanged="TokenBox_PasswordChanged" />
-                        <HyperlinkButton
-                            Padding="0"
-                            Content="How to create a token"
-                            NavigateUri="https://github.com/settings/tokens" />
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <ComboBox
-                                Grid.Column="0"
-                                AutomationProperties.AutomationId="ConnectOrgBox"
-                                HorizontalAlignment="Stretch"
-                                Header="Organization or account"
-                                ToolTipService.ToolTip="The GitHub organization or user account whose repositories are synced. Populated from the token; typing a name also works."
-                                IsEditable="True"
-                                ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
-                                PlaceholderText="Paste a token first, or type an org"
-                                Loaded="OrgBox_Loaded"
-                                Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
-                            <ProgressRing
-                                Grid.Column="1"
-                                Width="20"
-                                Height="20"
-                                Margin="0,0,0,8"
-                                VerticalAlignment="Bottom"
-                                AutomationProperties.Name="Loading organizations"
-                                IsActive="{x:Bind ViewModel.IsLoadingOrgs, Mode=OneWay}" />
-                        </Grid>
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox
-                                Grid.Column="0"
-                                AutomationProperties.AutomationId="ConnectTargetBox"
-                                ToolTipService.ToolTip="Local folder each repository is cloned into (one subfolder per repository)"
-                                Header="Target folder"
-                                PlaceholderText="C:\src\my-org"
-                                Text="{x:Bind ViewModel.TargetFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                            <Button
-                                Grid.Column="1"
-                                AutomationProperties.AutomationId="ConnectBrowseButton"
-                                ToolTipService.ToolTip="Choose the target folder"
-                                VerticalAlignment="Bottom"
-                                Content="Browse…"
-                                Click="BrowseButton_Click" />
-                        </Grid>
-                        <CheckBox
-                            MinWidth="0"
-                            Content="{x:Bind OrgSubfolderLabel(ViewModel.Organization), Mode=OneWay}"
-                            IsChecked="{x:Bind ViewModel.CreateOrgSubfolder, Mode=TwoWay}" />
-                        <TextBlock
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            TextWrapping="Wrap"
-                            Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.TargetPreview), Mode=OneWay}">
-                            <Run Text="Each repository will be placed at:" />
-                            <Run FontWeight="SemiBold" Text="{x:Bind ViewModel.TargetPreview, Mode=OneWay}" />
-                        </TextBlock>
-                    </StackPanel>
-                    </ContentControl>
+                        ViewModel="{x:Bind ViewModel, Mode=OneTime}" />
 
                     <TextBlock
                         Style="{ThemeResource CaptionTextBlockStyle}"
@@ -261,7 +199,7 @@
                         Content="Edit"
                         Click="EditButton_Click">
                         <FlyoutBase.AttachedFlyout>
-                            <Flyout x:Name="EditFlyout" Placement="Bottom" Opening="EditFlyout_Opening">
+                            <Flyout x:Name="EditFlyout" Placement="Bottom">
                                 <StackPanel Width="360" Spacing="12">
                                     <!-- Account workspace: the connection is the saved profile; the one
                                          visible Edit affordance must lead to the wizard that edits it. -->
@@ -279,71 +217,14 @@
                                             IsEnabled="{x:Bind ViewModel.CanEditInputs, Mode=OneWay}"
                                             Click="EditAccountButton_Click" />
                                     </StackPanel>
-                                    <ContentControl
-                                        HorizontalContentAlignment="Stretch"
-                                        IsEnabled="{x:Bind ViewModel.CanEditInputs, Mode=OneWay}"
-                                        IsTabStop="False"
+                                    <StackPanel
+                                        Spacing="12"
                                         Visibility="{x:Bind local:StatusFormat.VisibleIfNot(IsAccountWorkspace), Mode=OneTime}">
-                                    <StackPanel Spacing="12">
-                                        <PasswordBox
-                                            x:Name="EditTokenBox"
-                                            Header="Personal access token"
-                                            PlaceholderText="ghp_…"
-                                            PasswordChanged="TokenBox_PasswordChanged" />
-                                        <HyperlinkButton
-                                            Padding="0"
-                                            Content="How to create a token"
-                                            NavigateUri="https://github.com/settings/tokens" />
-                                        <Grid ColumnSpacing="8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <ComboBox
-                                                Grid.Column="0"
-                                                HorizontalAlignment="Stretch"
-                                                Header="Organization or account"
-                                                IsEditable="True"
-                                                ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
-                                                PlaceholderText="Paste a token first, or type an org"
-                                                Loaded="OrgBox_Loaded"
-                                                Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
-                                            <ProgressRing
-                                                Grid.Column="1"
-                                                Width="20"
-                                                Height="20"
-                                                Margin="0,0,0,8"
-                                                VerticalAlignment="Bottom"
-                                                AutomationProperties.Name="Loading organizations"
-                                                IsActive="{x:Bind ViewModel.IsLoadingOrgs, Mode=OneWay}" />
-                                        </Grid>
-                                        <Grid ColumnSpacing="8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBox
-                                                Grid.Column="0"
-                                                Header="Target folder"
-                                                PlaceholderText="C:\src\my-org"
-                                                Text="{x:Bind ViewModel.TargetFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                            <Button
-                                                Grid.Column="1"
-                                                VerticalAlignment="Bottom"
-                                                Content="Browse…"
-                                                Click="BrowseButton_Click" />
-                                        </Grid>
-                                        <CheckBox
-                                            MinWidth="0"
-                                            Content="{x:Bind OrgSubfolderLabel(ViewModel.Organization), Mode=OneWay}"
-                                            IsChecked="{x:Bind ViewModel.CreateOrgSubfolder, Mode=TwoWay}" />
-                                        <TextBlock
-                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                            TextWrapping="Wrap"
-                                            Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.TargetPreview), Mode=OneWay}">
-                                            <Run Text="Each repository will be placed at:" />
-                                            <Run FontWeight="SemiBold" Text="{x:Bind ViewModel.TargetPreview, Mode=OneWay}" />
-                                        </TextBlock>
+                                        <local:ConnectionFormControl
+                                            x:Name="EditForm"
+                                            AutomationIdPrefix="Edit"
+                                            IsEnabled="{x:Bind ViewModel.CanEditInputs, Mode=OneWay}"
+                                            ViewModel="{x:Bind ViewModel, Mode=OneTime}" />
                                         <!-- The bridge from a working ad-hoc setup to a saved account:
                                              the wizard opens seeded with everything above. -->
                                         <Button
@@ -352,7 +233,6 @@
                                             ToolTipService.ToolTip="Keep this token, organization, and folder as a named account in the navigation pane"
                                             Click="SaveAsAccountButton_Click" />
                                     </StackPanel>
-                                    </ContentControl>
                                 </StackPanel>
                             </Flyout>
                         </FlyoutBase.AttachedFlyout>
@@ -533,15 +413,19 @@
                 </Grid>
 
                 <!-- Active strip: exactly the repos cloning/pulling right now, bounded by
-                     the parallelism setting, so the table never moves under the user. -->
-                <ItemsControl
-                    x:Name="ActiveStrip"
+                     the parallelism setting, so the table never moves under the user.
+                     Three whole rows of chips are visible; beyond that (parallelism up
+                     to 64) it scrolls instead of clipping chips to a sliver (#31). -->
+                <ScrollViewer
                     Grid.Row="1"
                     Margin="0,8,0,0"
-                    MaxHeight="64"
-                    AutomationProperties.Name="Repositories syncing now"
-                    ItemsSource="{x:Bind ViewModel.ActiveRepos, Mode=OneTime}"
+                    MaxHeight="102"
+                    VerticalScrollBarVisibility="Auto"
                     Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.IsRunning), Mode=OneWay}">
+                <ItemsControl
+                    x:Name="ActiveStrip"
+                    AutomationProperties.Name="Repositories syncing now"
+                    ItemsSource="{x:Bind ViewModel.ActiveRepos, Mode=OneTime}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <VariableSizedWrapGrid Orientation="Horizontal" ItemWidth="208" ItemHeight="30" />
@@ -580,6 +464,7 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                </ScrollViewer>
 
                 <!-- Run results: opens when a run ends, user-dismissable (two-way IsOpen). -->
                 <InfoBar
@@ -617,11 +502,11 @@
                     CornerRadius="4,4,0,0">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="40" />
-                            <ColumnDefinition Width="2*" />
-                            <ColumnDefinition Width="160" />
-                            <ColumnDefinition Width="120" />
-                            <ColumnDefinition Width="80" />
+                            <ColumnDefinition Width="{StaticResource SelectColumnWidth}" />
+                            <ColumnDefinition Width="{StaticResource NameColumnWidth}" />
+                            <ColumnDefinition Width="{StaticResource StatusColumnWidth}" />
+                            <ColumnDefinition Width="{StaticResource BranchColumnWidth}" />
+                            <ColumnDefinition Width="{StaticResource ArchivedColumnWidth}" />
                         </Grid.ColumnDefinitions>
                         <CheckBox
                             Grid.Column="0"
@@ -849,11 +734,11 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="40" />
-                                    <ColumnDefinition Width="2*" />
-                                    <ColumnDefinition Width="160" />
-                                    <ColumnDefinition Width="120" />
-                                    <ColumnDefinition Width="80" />
+                                    <ColumnDefinition Width="{StaticResource SelectColumnWidth}" />
+                                    <ColumnDefinition Width="{StaticResource NameColumnWidth}" />
+                                    <ColumnDefinition Width="{StaticResource StatusColumnWidth}" />
+                                    <ColumnDefinition Width="{StaticResource BranchColumnWidth}" />
+                                    <ColumnDefinition Width="{StaticResource ArchivedColumnWidth}" />
                                 </Grid.ColumnDefinitions>
                                 <CheckBox
                                     Grid.Row="0"

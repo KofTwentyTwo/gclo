@@ -11,9 +11,18 @@ namespace gclo;
 public static class StatusFormat
 {
     /// <summary>
-    /// Theme- and high-contrast-aware brush for a status. Resolved from the app's
-    /// resources on every call so the current theme's instance is returned; x:Bind
-    /// re-invokes this whenever the bound Status changes.
+    /// The theme the window actually shows, kept current by MainWindow. Function-bound
+    /// brushes resolve against it: Application.Current.Resources follows the
+    /// application theme fixed at startup, so after an in-session switch (or an OS
+    /// flip in System mode) it would keep handing out the old theme's colors (#31).
+    /// </summary>
+    public static ElementTheme CurrentTheme { get; set; } = ElementTheme.Default;
+
+    /// <summary>
+    /// Theme- and high-contrast-aware brush for a status. Resolved from the theme
+    /// dictionary matching <see cref="CurrentTheme"/> on every call; x:Bind
+    /// re-invokes this whenever the bound Status changes, and MainWindow asks every
+    /// row to re-evaluate when the theme changes.
     /// </summary>
     public static Brush BrushFor(SyncStatus status) => ResourceBrush(status switch
     {
@@ -43,12 +52,53 @@ public static class StatusFormat
     public static string ResolveAutomationName(string repoName)
         => $"Resolve invalid paths for {repoName}";
 
+    /// <summary>A brush resource resolved for <see cref="CurrentTheme"/> (see <see cref="BrushFor"/>).</summary>
+    public static Brush ThemedBrush(string key) => ResourceBrush(key);
+
     private static Brush ResourceBrush(string key)
-        => Application.Current.Resources.TryGetValue(key, out object? value) && value is Brush brush
+    {
+        // Explicit Light/Dark: read the matching theme dictionary directly. The WinUI
+        // control resources merge their brushes under "Light" and "Default" (dark);
+        // high contrast and Default fall back to the application-theme lookup.
+        string? dictionary = CurrentTheme switch
+        {
+            ElementTheme.Light => "Light",
+            ElementTheme.Dark => "Default",
+            _ => null,
+        };
+        if (dictionary is not null && TryFindThemed(Application.Current.Resources, dictionary, key, out Brush? themed))
+        {
+            return themed;
+        }
+
+        return Application.Current.Resources.TryGetValue(key, out object? value) && value is Brush brush
             ? brush
             // Unreachable with XamlControlsResources merged; a visible-but-neutral
             // fallback beats crashing the row template if a key ever disappears.
             : new SolidColorBrush(Colors.Gray);
+    }
+
+    private static bool TryFindThemed(
+        ResourceDictionary resources, string theme, string key, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Brush? brush)
+    {
+        if (resources.ThemeDictionaries.TryGetValue(theme, out object? themed)
+            && themed is ResourceDictionary themeDictionary
+            && themeDictionary.TryGetValue(key, out object? value)
+            && value is Brush found)
+        {
+            brush = found;
+            return true;
+        }
+        foreach (ResourceDictionary merged in resources.MergedDictionaries)
+        {
+            if (TryFindThemed(merged, theme, key, out brush))
+            {
+                return true;
+            }
+        }
+        brush = null;
+        return false;
+    }
 
     public static Visibility VisibleIf(bool value)
         => value ? Visibility.Visible : Visibility.Collapsed;

@@ -109,6 +109,50 @@ public sealed class LibGit2GitClientTests : IDisposable
     }
 
     [Fact]
+    public async Task Clone_CanceledAfterTheFetch_ThrowsOperationCanceled_AndRemovesTheTargetDirectory()
+    {
+        // The real cancellation contract: the objects arrived, the token was observed
+        // before checkout, and the half-made directory does not survive to be mistaken
+        // for a repository on the next run.
+        string source = CreateSourceRepo();
+        string target = NewPath("canceled-mid-clone");
+        using var cts = new CancellationTokenSource();
+        _client.AfterFetchForTesting = () =>
+        {
+            Assert.True(Directory.Exists(Path.Combine(target, ".git")), "the fetch had completed");
+            cts.Cancel();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => _client.CloneAsync(source, target, Token, null, cts.Token));
+
+        Assert.False(Directory.Exists(target));
+    }
+
+    [Fact]
+    public async Task FetchAndPull_CanceledAfterTheFetch_ThrowsOperationCanceled_AndMergesNothing()
+    {
+        string source = CreateSourceRepo();
+        string target = NewPath("clone");
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+        string tipBefore = HeadSha(target);
+        CommitFile(source, "update.txt", "new content", "second commit");
+        using var cts = new CancellationTokenSource();
+        _client.AfterFetchForTesting = cts.Cancel;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => _client.FetchAndPullAsync(target, Token, cts.Token));
+
+        Assert.Equal(tipBefore, HeadSha(target));
+        Assert.False(File.Exists(Path.Combine(target, "update.txt")));
+
+        // The fetch itself landed: a later uncanceled pull is a plain fast-forward.
+        _client.AfterFetchForTesting = null;
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+        Assert.True(File.Exists(Path.Combine(target, "update.txt")));
+    }
+
+    [Fact]
     public async Task Clone_TokenAlreadyCanceled_ThrowsOperationCanceledAndCreatesNothing()
     {
         string source = CreateSourceRepo();

@@ -112,8 +112,11 @@ public sealed partial class SmokeTests : UiTestBase
             Session.WaitForText("Step 1 of 4: Identity"); // right dialog, right step
 
             Session.ClickButton("Next");
-            Thread.Sleep(PostInvokeSettle); // validation runs behind the dialog deferral
 
+            // Positive oracle: the step-1 validation message appearing proves the
+            // Next handler ran and rejected; only then is "still on step 1" meaningful.
+            Session.WaitForText("Enter a name for this account.");
+            Assert.NotNull(Session.FindInApp(cf => cf.ByName("Step 1 of 4: Identity")));
             Assert.NotNull(Session.WaitForElement("WizardNameBox")); // still open
             Assert.False(Session.App.HasExited);
 
@@ -153,7 +156,11 @@ public sealed partial class SmokeTests : UiTestBase
             Session.WaitForElement("AboutVersionText");
 
             Session.InvokeNavItem("NavAddAccount"); // second dialog: must be a no-op
-            Thread.Sleep(PostInvokeSettle);
+
+            // Positive oracle: the shell logs that it declined to open the wizard, so
+            // the negative assertions below are checked after the command was handled,
+            // not after an arbitrary pause.
+            Session.WaitForLogLine("Account wizard not opened: another dialog is open.");
 
             Assert.False(Session.App.HasExited);
             Assert.Null(Session.FindInApp(cf => cf.ByAutomationId("WizardNameBox")));

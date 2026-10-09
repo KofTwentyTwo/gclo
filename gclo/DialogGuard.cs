@@ -17,6 +17,9 @@ namespace gclo
     {
         private static bool _dialogOpen;
 
+        /// <summary>True while a dialog shown through <see cref="ShowAsync"/> is on screen.</summary>
+        public static bool IsDialogOpen => _dialogOpen;
+
         /// <summary>
         /// Shows <paramref name="dialog"/> unless another dialog is on screen.
         /// Returns the dialog result, or null when the request was ignored —

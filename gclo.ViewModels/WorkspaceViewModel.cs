@@ -420,9 +420,29 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     /// <summary>Records that the user opened the target folder from the results bar (#40).</summary>
     public void NoteFolderOpened() => _log.Info($"Opened folder '{EffectiveTargetRoot}'.");
 
-    /// <summary>Stops the in-flight org lookup and path recovery, if any.</summary>
+    /// <summary>Asks every row to re-evaluate its theme-dependent presentation (see <see cref="RepoItemViewModel.RefreshPresentation"/>).</summary>
+    public void RefreshPresentation()
+    {
+        foreach (RepoItemViewModel item in Repos)
+        {
+            item.RefreshPresentation();
+        }
+    }
+
+    private bool _disposed;
+
+    /// <summary>
+    /// Stops the in-flight org lookup and path recovery, if any. Idempotent: the shell
+    /// disposes workspaces on eviction and again on window close, and a second call
+    /// used to throw ObjectDisposedException from the lifetime token source (#31).
+    /// </summary>
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
         _orgLoadCts?.Cancel();
         _orgLoadCts?.Dispose();
         _orgLoadCts = null;
