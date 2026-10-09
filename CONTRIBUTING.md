@@ -12,8 +12,8 @@ Before starting on a feature, check the [development roadmap (#11)](https://gith
 
 ## Branch model
 
-- **`dev`** is the integration branch. **Pull requests target `dev`**, not `main`.
-- **`main`** is the stable branch. It only moves via reviewed PRs from `dev` and is protected by required status checks. Releases are tagged from `main`.
+- **`dev`** is the integration branch. **Pull requests target `dev`**, not `main`. CI, CodeQL, and dependency review run on every push and PR to `dev` and their results are visible on the PR, but they are **not enforced** as required checks there — the maintainer merges on green.
+- **`main`** is the stable branch. It only moves via PRs from `dev`, and those are enforced: the branch ruleset requires the build/test, format, dependency-review, and CodeQL checks to pass before a merge. Releases are tagged from `main`, and the release workflow refuses a tag that is not on it.
 
 Fork the repository, branch from `dev`, and open your PR against `dev`.
 
@@ -25,6 +25,10 @@ All commands run from the repository root:
 # Packaged build (what F5 in Visual Studio does).
 # CI runs this with -warnaserror — the build must produce ZERO warnings.
 dotnet build gclo.slnx -p:Platform=x64
+
+# Changed a PackageReference? Refresh the committed lock files, or CI's
+# locked restore rejects the change.
+dotnet restore gclo.slnx --force-evaluate
 
 # Unpackaged build — runs without MSIX deployment or package identity.
 # Verify this still works before opening a PR.

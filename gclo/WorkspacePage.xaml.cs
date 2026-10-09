@@ -72,14 +72,15 @@ namespace gclo
             // with PathRecoveryDialog.
             ViewModel.RecoveryInteraction = ShowPathRecoveryDialogAsync;
 
-            // An account-seeded view model already carries its vault token; mirror it
-            // into the box so the UI shows what is in effect. The resulting
-            // PasswordChanged echoes the same value back, which the Token setter
-            // ignores as a no-op.
-            if (ViewModel.Token.Length > 0)
-            {
-                TokenBox.Password = ViewModel.Token;
-            }
+            // A token the view model already holds (an account's vault token, or the
+            // saved default token) is deliberately NOT mirrored into the box: the
+            // placeholder says what is in effect, and an untouched box keeps it. Only
+            // what the user types replaces it (#32).
+            TokenBox.PlaceholderText = ViewModel.Token.Length == 0
+                ? "ghp_…"
+                : IsAccountWorkspace
+                    ? "Using the account's stored token — type here to replace it"
+                    : "Using the saved default token — type here to replace it";
 
             // SelectorBar starts with no selection; the view model's filter default is
             // All, so select that item (the resulting SelectionChanged is a no-op set).
@@ -334,14 +335,14 @@ namespace gclo
             }
         }
 
-        // PasswordBox has no reliable two-way binding, so the flyout's token box is
-        // synchronized on open; it then always shows the token in effect.
+        // The flyout's token box never shows the token in effect either (see the
+        // connect card): it opens empty with a placeholder, and only typing replaces.
         private void EditFlyout_Opening(object? sender, object e)
         {
-            if (EditTokenBox.Password != ViewModel.Token)
-            {
-                EditTokenBox.Password = ViewModel.Token;
-            }
+            EditTokenBox.Password = "";
+            EditTokenBox.PlaceholderText = ViewModel.Token.Length == 0
+                ? "ghp_…"
+                : "A token is in effect — type here to replace it";
         }
 
         private void RaiseStatusLiveRegionChanged()

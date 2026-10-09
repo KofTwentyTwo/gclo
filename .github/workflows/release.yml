@@ -33,7 +33,7 @@ jobs:
       channel: ${{ steps.version.outputs.channel }}
     steps:
       - name: Checkout (full history, so main's ancestry can be checked)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -96,20 +96,32 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: write
+      # Build provenance attestations for the published assets.
+      id-token: write
+      attestations: write
     env:
-      # Optional secrets. Empty when not configured; the steps that need them
-      # check for that in their `if:` and are skipped cleanly.
-      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
       REPO_URL: https://github.com/KofTwentyTwo/gclo
+      # Pinned release tooling. vpk builds the installer and packages users
+      # receive and wingetcreate is a binary fetched at run time; neither may
+      # float. Bump deliberately, together with the Velopack package reference.
+      VPK_VERSION: 1.2.161
+      WINGETCREATE_VERSION: v1.12.13.0
+      WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea
+    # The publishing secrets (NUGET_API_KEY, WINGET_TOKEN) are NOT job-level env:
+    # only the two steps that publish receive them, so nothing executed by the
+    # build, the tests, vpk, or wingetcreate's download can read them.
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       # ----------------------------------------------------------------------
       # (a) CLI: self-contained single-file publish, zipped as a release asset.
@@ -132,7 +144,7 @@ jobs:
         run: dotnet publish gclo/gclo.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained -p:Version=${{ needs.verify.outputs.version }} -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true -p:PublishTrimmed=false -o publish/app
 
       - name: Install Velopack CLI
-        run: dotnet tool install -g vpk
+        run: dotnet tool install -g vpk --version $env:VPK_VERSION
 
       - name: Download previous Velopack release (delta baseline)
         # The very first release on a channel has nothing to download; that is
@@ -149,6 +161,19 @@ jobs:
 
       - name: Velopack pack
         run: vpk pack --packId gclo --packVersion ${{ needs.verify.outputs.version }} --packDir publish/app --mainExe gclo.exe --channel ${{ needs.verify.outputs.channel }} --icon gclo/Assets/Brand/gclo.ico
+
+      # Provenance: a signed statement that THIS workflow run built these exact
+      # bytes, verifiable with `gh attestation verify <file> -R KofTwentyTwo/gclo`.
+      # Not a code signature (see #57); it makes a release attributable to the
+      # workflow rather than only to whoever holds the account.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: |
+            artifacts/gclo-cli-win-x64.zip
+            Releases/*.exe
+            Releases/*.zip
+            Releases/*.nupkg
 
       # This repo has immutable releases: assets freeze the moment a release is
       # PUBLISHED. So vpk creates a DRAFT (no --publish), every asset and the
@@ -184,11 +209,16 @@ jobs:
       # (c) NuGet: pack gclo.Engine and push to nuget.org - only when the
       # NUGET_API_KEY secret is configured on the repository.
       # ----------------------------------------------------------------------
+      # ContinuousIntegrationBuild normalizes the embedded source paths so the
+      # package is deterministic and SourceLink step-through works; the .snupkg
+      # beside it carries the symbols.
       - name: Pack gclo.Engine
-        run: dotnet pack gclo.Engine -c Release -p:Version=${{ needs.verify.outputs.version }} -o artifacts/nuget
+        run: dotnet pack gclo.Engine -c Release -p:Version=${{ needs.verify.outputs.version }} -p:ContinuousIntegrationBuild=true -o artifacts/nuget
 
       - name: Push gclo.Engine to nuget.org
-        if: env.NUGET_API_KEY != ''
+        if: ${{ secrets.NUGET_API_KEY != '' }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: dotnet nuget push "artifacts/nuget/*.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       # ----------------------------------------------------------------------
@@ -201,10 +231,20 @@ jobs:
       # docs/RELEASING.md), then this step keeps it current.
       # ----------------------------------------------------------------------
       - name: Submit winget manifest update
-        if: needs.verify.outputs.prerelease == 'false' && env.WINGET_TOKEN != ''
+        if: ${{ needs.verify.outputs.prerelease == 'false' && secrets.WINGET_TOKEN != '' }}
         shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
-          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          # A pinned release asset, verified against its committed SHA-256, instead
+          # of whatever https://aka.ms/wingetcreate/latest redirects to today.
+          $url = "https://github.com/microsoft/winget-create/releases/download/$env:WINGETCREATE_VERSION/wingetcreate.exe"
+          Invoke-WebRequest $url -OutFile wingetcreate.exe
+          $actual = (Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:WINGETCREATE_SHA256) {
+            Write-Error "wingetcreate.exe hash mismatch: expected $env:WINGETCREATE_SHA256, got $actual"
+            exit 1
+          }
           # Velopack names the installer '<packId>-<channel>-Setup.exe'.
           $setupUrl = "$env:REPO_URL/releases/download/$env:GITHUB_REF_NAME/gclo-stable-Setup.exe"
           .\wingetcreate.exe update KofTwentyTwo.gclo --urls $setupUrl --version ${{ needs.verify.outputs.version }} --submit --token $env:WINGET_TOKEN

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-gclo is pre-1.0 software. Only the **latest release** receives security fixes — there are no maintenance branches for older versions.
+Only the **latest release** receives security fixes — there are no maintenance branches for older versions.
 
 | Version | Supported |
 | --- | --- |
@@ -36,8 +36,16 @@ gclo is maintained by a single person in their spare time, so response times are
 gclo works with GitHub Personal Access Tokens, so token safety is part of the design:
 
 - **Quick Sync tokens are kept in memory only.** A token pasted into Quick Sync is used for the GitHub API and as the git HTTPS credential for the duration of the session, and is never written to disk, settings, or logs.
-- **Saved-account tokens and the default token live in the Windows Credential Manager.** When you save an account, or set a default token in Settings, the token is stored in the per-user Windows Credential Manager (DPAPI-protected), under a `gclo:account:<id>` target, and removed when the account or token is deleted. It is **never** written to `settings.json`, `accounts.json`, or any log — those files hold only non-secret metadata (organization, target folder, parallelism, theme, last-sync summary). This is why accounts are Windows-only.
+- **Saved-account tokens and the default token are persisted — in the Windows Credential Manager, nowhere else.** When you save an account (in the app or with `gclo accounts add`), or set a default token in Settings, the token is stored as a generic credential in the per-user Windows Credential Manager (DPAPI-protected, non-roaming) under a `gclo:account:<id>` target, and removed when the account or token is deleted. It is **never** written to `settings.json`, `accounts.json`, or any log — those files hold only non-secret metadata (organization, target folder, parallelism, theme, last-sync summary). This is why accounts are Windows-only.
+- **The trust boundary of stored tokens is the Windows user account.** Credential Manager protects a stored token from other users and from offline access, not from code running as the same user: any process you run can read it with `CredRead`, exactly as it can read your git credentials or browser cookies. Treat a machine where untrusted code runs as your user as a machine where the token is exposed.
+- **The app never redisplays a stored token.** Editing an account or opening a connection flyout shows an empty token box with a placeholder; the stored value is read from Credential Manager only when it must be sent to GitHub (a sync, an organization lookup, a validation on save). Activity-log entries about tokens record only that one was entered or replaced, and its length.
 - **The CLI refuses tokens on the command line.** There is deliberately no `--token <value>` option; tokens are accepted only via environment variable (`--token-env`, default `GITHUB_TOKEN`), a file (`--token-file`), or standard input (`--token-stdin`). See [docs/CLI.md](docs/CLI.md).
 - **Secret-scanning push protection is enabled** on this repository, so credentials cannot be accidentally committed and pushed.
 
-If you find any code path where a token can end up on disk, in a log, in process output, or on a command line, that is a vulnerability — please report it through the channel above.
+If you find any code path where a token can end up in a file other than Credential Manager, in a log, in process output, on a command line, or redisplayed by the UI, that is a vulnerability — please report it through the channel above.
+
+## How releases are trusted
+
+- Releases are built only by the `Release` workflow from a tag that must be contained in `main`, after the full CI gates, and every published asset carries a [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) you can verify with `gh attestation verify <file> -R KofTwentyTwo/gclo`.
+- Self-update downloads only from this repository's GitHub Releases and verifies each package against the release's `releases.<channel>.json` feed.
+- The binaries are **not yet Authenticode-signed** (tracked in [#57](https://github.com/KofTwentyTwo/gclo/issues/57)); until they are, expect a SmartScreen prompt on first install, and prefer the attestation check above over trusting a download by its name.

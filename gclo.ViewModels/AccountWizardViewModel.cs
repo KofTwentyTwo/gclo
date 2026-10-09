@@ -18,23 +18,28 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     private readonly IActivityLog _log;
     private readonly Account? _existing;
 
-    /// <summary>What the token box was seeded with; unchanged means "leave the vault alone".</summary>
-    private readonly string _seededToken;
+    /// <summary>
+    /// For edits: fetches the account's stored token from the vault, called only when
+    /// a step actually needs to transmit it (validating on step 2 with the box left
+    /// empty). The token is never copied into <see cref="Token"/>, so the dialog never
+    /// holds or shows it; an empty box means "keep the stored token" (#32).
+    /// </summary>
+    private readonly Func<string?>? _storedToken;
 
     /// <summary>
     /// A wizard for a new account seeded from <paramref name="defaults"/>, or — when
-    /// <paramref name="existing"/> is given — an edit wizard seeded from that account
-    /// and <paramref name="existingToken"/> (the vault's current token, or null when
-    /// the vault has no entry for it).
+    /// <paramref name="existing"/> is given — an edit wizard seeded from that account.
+    /// <paramref name="storedToken"/> fetches the vault's current token on demand for
+    /// an edit (null, or returning null, when the vault has no entry).
     /// </summary>
     public AccountWizardViewModel(
         AccountsStore store,
         IOrganizationLister orgLister,
         AppSettings defaults,
         Account? existing = null,
-        string? existingToken = null,
+        Func<string?>? storedToken = null,
         IActivityLog? log = null)
-        : this(store, orgLister, existing, existingToken ?? "", log)
+        : this(store, orgLister, existing, storedToken, log)
     {
         ArgumentNullException.ThrowIfNull(defaults);
 
@@ -67,7 +72,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     /// </summary>
     public AccountWizardViewModel(
         AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed, IActivityLog? log = null)
-        : this(store, orgLister, existing: null, seededToken: "", log)
+        : this(store, orgLister, existing: null, storedToken: null, log)
     {
         ArgumentNullException.ThrowIfNull(seed);
         Name = "";
@@ -80,7 +85,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     }
 
     private AccountWizardViewModel(
-        AccountsStore store, IOrganizationLister orgLister, Account? existing, string seededToken, IActivityLog? log)
+        AccountsStore store, IOrganizationLister orgLister, Account? existing, Func<string?>? storedToken, IActivityLog? log)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(orgLister);
@@ -88,14 +93,14 @@ public sealed partial class AccountWizardViewModel : ObservableObject
         _orgLister = orgLister;
         _log = log ?? new NullActivityLog();
         _existing = existing;
-        _seededToken = seededToken;
+        _storedToken = existing is null ? null : storedToken;
 
         Step = 1;
         NameError = "";
         TokenError = "";
         OrganizationError = "";
         TargetError = "";
-        Token = _seededToken;
+        Token = "";
         Name = "";
         Description = "";
         Organization = "";
@@ -116,7 +121,11 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     [ObservableProperty]
     public partial string Description { get; set; }
 
-    /// <summary>GitHub personal access token; validated when leaving step 2.</summary>
+    /// <summary>
+    /// GitHub personal access token as typed; validated when leaving step 2. For an
+    /// edit it starts empty and stays empty unless the user types a replacement —
+    /// the stored token is never loaded into it.
+    /// </summary>
     [ObservableProperty]
     public partial string Token { get; set; }
 
@@ -213,11 +222,24 @@ public sealed partial class AccountWizardViewModel : ObservableObject
                 {
                     // The lister is the validation: it fails on a rejected or rate-limited
                     // token and returns the organizations the dropdown offers otherwise.
+                    // An edit with the box left empty validates the STORED token, fetched
+                    // here and used for this one call only.
+                    string candidate = Token.Trim();
+                    if (candidate.Length == 0 && IsEditing)
+                    {
+                        candidate = _storedToken?.Invoke()?.Trim() ?? "";
+                        if (candidate.Length == 0)
+                        {
+                            TokenError = "This account has no stored token. Enter one to continue.";
+                            return false;
+                        }
+                    }
+
                     IsValidatingToken = true;
                     _log.Info("Account wizard: validating the token.");
                     try
                     {
-                        var organizations = await _orgLister.ListOrganizationsAsync(Token.Trim());
+                        var organizations = await _orgLister.ListOrganizationsAsync(candidate);
                         Organizations.Clear();
                         foreach (string organization in organizations)
                         {
@@ -281,9 +303,8 @@ public sealed partial class AccountWizardViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
-    /// <summary>New accounts always persist their token; edits only when it was altered.</summary>
-    private bool TokenChanged
-        => !IsEditing || !string.Equals(Token, _seededToken, StringComparison.Ordinal);
+    /// <summary>New accounts always persist their token; edits only when one was typed.</summary>
+    private bool TokenChanged => !IsEditing || Token.Trim().Length > 0;
 
     private Account BuildAccount() => new()
     {

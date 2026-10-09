@@ -8,6 +8,11 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Deterministic>true</Deterministic>
+    <!-- packages.lock.json per project: pins the restore graph (NuGetAudit sees
+         exactly what ships) and keys the CI restore cache. CI restores in locked
+         mode; after changing a PackageReference run
+         dotnet restore gclo.slnx with the force-evaluate switch and commit the lock files. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <!-- Single version source. Local builds are <prefix>-dev; release builds pass an

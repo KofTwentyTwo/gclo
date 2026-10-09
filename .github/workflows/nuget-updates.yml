@@ -50,14 +50,18 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout dev
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: dev
 
       - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       - name: Bump package versions
         id: bump
@@ -66,6 +70,12 @@ jobs:
           $params = @{ Solution = 'gclo.slnx'; ReportPath = 'nuget-update-report.md' }
           if ('${{ inputs.include-major }}' -eq 'true') { $params.IncludeMajor = $true }
           ./.github/scripts/Update-NuGetPackages.ps1 @params
+
+      # The committed lock files must follow the bump, or CI's locked restore
+      # rejects the PR.
+      - name: Refresh package lock files
+        if: steps.bump.outputs.changed == 'true'
+        run: dotnet restore gclo.slnx --force-evaluate
 
       # The gates CI applies, run against the bumped tree. They are allowed to fail
       # so the PR still opens and shows what broke; the outcome lands in the body.
@@ -136,6 +146,7 @@ jobs:
             .NET
           add-paths: |
             **/*.csproj
+            **/packages.lock.json
 
       - name: Nothing to update
         if: steps.bump.outputs.changed != 'true'

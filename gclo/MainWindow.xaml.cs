@@ -147,12 +147,39 @@ namespace gclo
                 {
                     await Task.Delay(_settings.SplashMilliseconds);
                     await StartupSplash.DismissAsync();
+                    await CheckForUpdatesAtStartupAsync();
                 });
             }
             else
             {
                 StartupSplash.Visibility = Visibility.Collapsed;
+                DispatcherQueue.TryEnqueue(async () => await CheckForUpdatesAtStartupAsync());
             }
+        }
+
+        /// <summary>
+        /// A background check on every launch (installed builds only): a newer release
+        /// is offered in the update bar with an "Update and restart…" action that runs
+        /// the same flow as Help > Check for updates; nothing is shown when up to date
+        /// or when the check fails (the activity log records both) (#32).
+        /// </summary>
+        private async Task CheckForUpdatesAtStartupAsync()
+        {
+            if (!_updateService.IsSupported || _updateInFlight)
+            {
+                return;
+            }
+
+            UpdateCheckResult result = await _updateService.CheckAsync();
+            if (result.AvailableVersion is not { } version)
+            {
+                return;
+            }
+
+            ShowUpdateBar(InfoBarSeverity.Informational, $"gclo v{version} is available.", busy: false);
+            var install = new Button { Content = "Update and restart…" };
+            install.Click += async (_, _) => await RunUpdateFlowAsync();
+            UpdateBar.ActionButton = install;
         }
 
         /// <summary>
@@ -519,9 +546,11 @@ namespace gclo
         /// </summary>
         private async Task ShowAccountWizardAsync(Account? existing)
         {
-            string? existingToken = existing is null ? null : _tokenVault.TryRetrieve(existing.Id);
+            // The vault is consulted only if step 2 needs the stored token for a
+            // validation call; the wizard never displays or retains it.
+            Func<string?>? storedToken = existing is null ? null : () => _tokenVault.TryRetrieve(existing.Id);
             var viewModel = new AccountWizardViewModel(
-                _accountsStore, new GitHubOrganizationLister(), _settings, existing, existingToken, _log);
+                _accountsStore, new GitHubOrganizationLister(), _settings, existing, storedToken, _log);
             var dialog = new AccountWizardDialog(
                 viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
             {
@@ -886,6 +915,9 @@ namespace gclo
         /// Only "update available" still asks with a dialog, because that is a decision.
         /// </summary>
         private async void CheckForUpdatesMenuItem_Click(object sender, RoutedEventArgs e)
+            => await RunUpdateFlowAsync();
+
+        private async Task RunUpdateFlowAsync()
         {
             if (_updateInFlight)
             {
@@ -966,6 +998,7 @@ namespace gclo
 
         private void ShowUpdateBar(InfoBarSeverity severity, string message, bool busy, bool determinate = false)
         {
+            UpdateBar.ActionButton = null; // only the startup offer carries one
             UpdateBar.Severity = severity;
             UpdateBar.Message = message;
             UpdateBar.IsClosable = !busy;

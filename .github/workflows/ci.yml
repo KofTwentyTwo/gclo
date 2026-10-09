@@ -37,15 +37,22 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
+      # RestoreLockedMode: the committed packages.lock.json files are the restore
+      # graph; a stale lock file (a bump without 'dotnet restore --force-evaluate')
+      # fails here instead of silently restoring something else.
       - name: Build solution (x64, warnings as errors)
-        run: dotnet build gclo.slnx -p:Platform=x64 -warnaserror
+        run: dotnet build gclo.slnx -p:Platform=x64 -warnaserror -p:RestoreLockedMode=true
 
       # coverage.runsettings scopes collection to the three library assemblies and
       # excludes source-generated code and the [ExcludeFromCodeCoverage] native/
@@ -96,7 +103,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-cobertura
           path: TestResults/**/coverage.cobertura.xml
@@ -115,20 +122,37 @@ jobs:
     continue-on-error: ${{ inputs.ui-tests-advisory == true }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       # Self-contained Windows App SDK: hosted runners do not have the runtime
       # installed. The output path is the same one AppSession resolves by default.
       - name: Build app (unpackaged, self-contained Windows App SDK)
-        run: dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true
+        run: dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true -p:RestoreLockedMode=true
 
+      # Diagnostics for the day this job fails on a hosted runner: a TRX log of
+      # the run, a screenshot of the screen at the end of every test session, and
+      # the app's own activity log, all uploaded only when something failed.
       - name: Run UI tests
-        run: dotnet test gclo.UiTests/gclo.UiTests.csproj
+        env:
+          GCLO_UITEST_ARTIFACTS: ${{ github.workspace }}\TestResults\ui
+        run: dotnet test gclo.UiTests/gclo.UiTests.csproj --logger "trx;LogFileName=uitests.trx" --results-directory TestResults
+
+      - name: Upload UI test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-test-diagnostics
+          path: TestResults
+          if-no-files-found: warn
 
   format:
     name: Format (style gate)
@@ -136,15 +160,19 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       - name: Restore
-        run: dotnet restore gclo.slnx
+        run: dotnet restore gclo.slnx --locked-mode
 
       # Kept at --severity error so this gates real issues (analyzer errors and
       # error-severity style rules), not whitespace preferences.

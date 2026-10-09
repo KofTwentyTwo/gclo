@@ -29,7 +29,7 @@ public sealed class AccountWizardViewModelTests : IDisposable
     public void Dispose() => GitTestHelpers.TryDeleteDirectory(_root);
 
     private AccountWizardViewModel NewWizard(Account? existing = null, string? existingToken = null)
-        => new(_store, _orgs, _defaults, existing, existingToken);
+        => new(_store, _orgs, _defaults, existing, () => existingToken);
 
     private static Account MakeAccount(string name) => new()
     {
@@ -86,7 +86,7 @@ public sealed class AccountWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void EditWizard_SeedsEveryFieldFromTheExistingAccount_AndItsToken()
+    public void EditWizard_SeedsEveryFieldFromTheExistingAccount_ButNeverItsToken()
     {
         var account = MakeAccount("Work") with
         {
@@ -103,7 +103,7 @@ public sealed class AccountWizardViewModelTests : IDisposable
         Assert.Equal("Edit account", wizard.Title);
         Assert.Equal("Work", wizard.Name);
         Assert.Equal("primary org", wizard.Description);
-        Assert.Equal("ghp_original", wizard.Token);
+        Assert.Equal("", wizard.Token); // the stored token is never loaded into the box (#32)
         Assert.Equal("acme-inc", wizard.Organization);
         Assert.Equal(@"C:\work-repos", wizard.TargetRoot);
         Assert.True(wizard.CreateOrgSubfolder);
@@ -111,11 +111,35 @@ public sealed class AccountWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void EditWizard_WithNoVaultToken_SeedsAnEmptyTokenBox()
+    public async Task EditWizard_WithNoVaultToken_CannotPassStepTwoWithAnEmptyBox()
     {
         var wizard = NewWizard(MakeAccount("Work"), existingToken: null);
-
         Assert.Equal("", wizard.Token);
+        await AdvanceToStepAsync(wizard, 2);
+
+        Assert.False(await wizard.TryAdvanceAsync());
+        Assert.Equal("This account has no stored token. Enter one to continue.", wizard.TokenError);
+
+        wizard.Token = "ghp_typed";
+        Assert.True(await wizard.TryAdvanceAsync());
+    }
+
+    [Fact]
+    public async Task EditWizard_EmptyBox_ValidatesWithTheStoredToken_WithoutExposingIt()
+    {
+        string? tokenSeenByLister = null;
+        _orgs.Handler = (token, _) =>
+        {
+            tokenSeenByLister = token;
+            return Task.FromResult<IReadOnlyList<string>>(["me"]);
+        };
+        var wizard = NewWizard(MakeAccount("Work"), "ghp_stored");
+        await AdvanceToStepAsync(wizard, 2);
+
+        Assert.True(await wizard.TryAdvanceAsync());
+
+        Assert.Equal("ghp_stored", tokenSeenByLister); // fetched for the call...
+        Assert.Equal("", wizard.Token); // ...and still not in the box
     }
 
     [Fact]

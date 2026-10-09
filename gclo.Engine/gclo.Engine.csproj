@@ -9,7 +9,15 @@
     <Authors>James Maes</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/KofTwentyTwo/gclo</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/KofTwentyTwo/gclo</PackageProjectUrl>
+    <PackageTags>github;git;clone;mirror;organization;libgit2sharp;octokit</PackageTags>
     <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
+    <!-- Publish-quality package: SourceLink to the public repo, symbols in a
+         .snupkg, untracked (generated) sources embedded so step-through works. -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
   <ItemGroup>
