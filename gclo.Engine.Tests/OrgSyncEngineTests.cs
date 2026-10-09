@@ -287,6 +287,62 @@ public sealed class OrgSyncEngineTests : IDisposable
         Assert.Empty(_lister.Calls);
     }
 
+    [Theory]
+    [InlineData("../escape")]
+    [InlineData("..\\escape")]
+    [InlineData("nested/child")]
+    [InlineData("nested\\child")]
+    [InlineData("C:\\Windows")]
+    [InlineData("/etc")]
+    [InlineData("\\\\server\\share")]
+    [InlineData("..")]
+    [InlineData(".")]
+    [InlineData("")]
+    public async Task Sync_RepoNameThatIsNotOneSafeSegment_FailsBeforeTouchingDisk(string badName)
+    {
+        // The list overload is a public API: a descriptor whose Name would land
+        // outside TargetRoot (or deeper than one level) must fail the whole call
+        // before the root is created, anything is reported, or git is invoked.
+        RepoDescriptor[] repositories = [Repo("alpha"), Repo(badName), Repo("bravo")];
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => CreateEngine().SyncAsync(CreateRequest(), repositories, _progress));
+
+        Assert.Contains(badName, ex.Message);
+        Assert.False(Directory.Exists(_targetRoot), "nothing may be created when a name is rejected");
+        Assert.Empty(_progress.Reports);
+        Assert.Empty(_git.ValidityChecks);
+        Assert.Empty(_git.CloneCalls);
+        Assert.Empty(_git.PullCalls);
+    }
+
+    [Fact]
+    public async Task Sync_RepoNameFromLister_IsRejectedTheSameWay()
+    {
+        _lister.Repositories = [Repo("alpha"), Repo("../escape")];
+
+        await Assert.ThrowsAsync<ArgumentException>(() => CreateEngine().SyncAsync(CreateRequest(), _progress));
+
+        Assert.False(Directory.Exists(_targetRoot));
+        Assert.Empty(_git.CloneCalls);
+    }
+
+    [Fact]
+    public async Task Sync_PassesTheNormalizedAbsoluteFolder_ToTheGitClient()
+    {
+        // A relative TargetRoot is resolved against the current directory once, so
+        // the folder handed to git is absolute and sits exactly one level below it.
+        _lister.Repositories = Repos("alpha");
+        string relativeRoot = Path.GetRelativePath(Environment.CurrentDirectory, _targetRoot);
+        var request = new SyncRequest("acme", "test-token", relativeRoot);
+
+        await CreateEngine().SyncAsync(request, _progress);
+
+        var call = Assert.Single(_git.CloneCalls);
+        Assert.True(Path.IsPathRooted(call.LocalPath));
+        Assert.Equal(Path.GetFullPath(Path.Combine(_targetRoot, "alpha")), call.LocalPath);
+    }
+
     [Fact]
     public async Task Sync_ListerFailure_PropagatesAndMakesNoGitCalls()
     {

@@ -45,6 +45,33 @@ public sealed class LibGit2GitClientTests : IDisposable
     }
 
     [Fact]
+    public async Task Clone_Completed_LeavesCheckoutPendingMarkerCleared()
+    {
+        string source = CreateSourceRepo();
+        string target = NewPath("clone-target");
+
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+
+        // The marker is set when the fetch lands and cleared only after checkout, so a
+        // finished clone must read as "not pending" — the next pull trusts its tree.
+        Assert.False(IsCheckoutPending(target));
+    }
+
+    [Fact]
+    public async Task Clone_EmptyOrigin_LeavesCheckoutPendingMarkerCleared()
+    {
+        string origin = NewPath("bare-origin");
+        Repository.Init(origin, isBare: true);
+        string target = NewPath("unborn-clone");
+
+        await _client.CloneAsync(origin, target, Token, null, CancellationToken.None);
+
+        // Nothing to check out means nothing is pending; the unborn-HEAD pull path
+        // (not the pending path) must handle this repo once the remote gets commits.
+        Assert.False(IsCheckoutPending(target));
+    }
+
+    [Fact]
     public async Task Clone_SourceMissing_ThrowsAndLeavesNoTargetDirectory()
     {
         string missingSource = NewPath("no-such-source");
@@ -162,6 +189,71 @@ public sealed class LibGit2GitClientTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchAndPull_IncompleteCloneLeftBehind_CompletesCheckoutInsteadOfReportingUpToDate()
+    {
+        // Simulates a clone whose checkout failed (or was killed) and whose cleanup
+        // could not delete the directory: .git is complete and valid, the marker is
+        // still set, and the working tree is partial. Commit tips are EQUAL, which is
+        // exactly the case that used to pass as "already up to date".
+        string source = CreateSourceRepo();
+        string target = NewPath("half-clone");
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+        string tipBefore = HeadSha(target);
+        File.Delete(Path.Combine(target, "readme.txt"));
+        SetCheckoutPending(target, true);
+        Assert.True(_client.IsValidRepository(target));
+
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+
+        Assert.Equal("hello from source", File.ReadAllText(Path.Combine(target, "readme.txt")));
+        Assert.Equal(tipBefore, HeadSha(target));
+        Assert.False(IsCheckoutPending(target));
+    }
+
+    [Fact]
+    public async Task FetchAndPull_IncompleteCloneAndRemoteAhead_MaterializesTheNewTip()
+    {
+        string source = CreateSourceRepo();
+        string target = NewPath("half-clone");
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+        File.Delete(Path.Combine(target, "readme.txt"));
+        SetCheckoutPending(target, true);
+        string newSha = CommitFile(source, "update.txt", "new content", "second commit");
+
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+
+        Assert.Equal(newSha, HeadSha(target));
+        Assert.Equal("hello from source", File.ReadAllText(Path.Combine(target, "readme.txt")));
+        Assert.Equal("new content", File.ReadAllText(Path.Combine(target, "update.txt")));
+        Assert.False(IsCheckoutPending(target));
+    }
+
+    [Fact]
+    public async Task FetchAndPull_IncompleteCloneWhoseTipIsNowInvalidOnWindows_FailsTypedNotUpToDate()
+    {
+        // The pending path re-validates before checking out: an incomplete clone whose
+        // tree gained a Windows-invalid path must surface the structured failure, not
+        // a silent "Done" with a partial tree. (Forged entries cannot be created on a
+        // Windows working tree, which is why this uses the object-database fixture.)
+        string source = CreateSourceRepo();
+        string target = NewPath("half-clone");
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+        SetCheckoutPending(target, true);
+        AppendForgedCommit(source, ("bad:name.txt", "unwritable on Windows"));
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return; // the validator only runs on Windows
+        }
+
+        var ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
+            () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+
+        Assert.Equal("bad:name.txt", Assert.Single(ex.Paths).RepoPath);
+        Assert.True(IsCheckoutPending(target), "still incomplete; the marker must survive the failure");
+    }
+
+    [Fact]
     public async Task FetchAndPull_DivergedHistories_ThrowsNonFastForward()
     {
         string source = CreateSourceRepo();
@@ -275,6 +367,18 @@ public sealed class LibGit2GitClientTests : IDisposable
     // ---------------------------------------------------------------- fixture helpers
 
     private string NewPath(string name) => Path.Combine(_root, name);
+
+    private static bool IsCheckoutPending(string workdir)
+    {
+        using var repo = new Repository(workdir);
+        return repo.Config.Get<bool>("gclo.checkoutpending")?.Value == true;
+    }
+
+    private static void SetCheckoutPending(string workdir, bool value)
+    {
+        using var repo = new Repository(workdir);
+        repo.Config.Set("gclo.checkoutpending", value, ConfigurationLevel.Local);
+    }
 
     /// <summary>Initializes a non-bare repository under the test root with one commit.</summary>
     private string CreateSourceRepo(string name = "source")

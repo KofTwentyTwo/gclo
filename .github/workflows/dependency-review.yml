@@ -48,3 +48,16 @@ jobs:
             GPL-2.0-only WITH Classpath-exception-2.0,
             GPL-2.0-or-later WITH Classpath-exception-2.0,
             GPL-2.0-only WITH GCC-exception-2.0
+          # Packages whose nuspec declares the license as a FILE rather than an
+          # SPDX expression, which the dependency graph reports as "unknown" /
+          # NOASSERTION and would otherwise fail every version bump. All three have
+          # shipped in gclo since the first commit, so this is not a new license
+          # decision - it records what they actually are:
+          #   LibGit2Sharp                     MIT (App_Readme/LICENSE.md)
+          #   Microsoft.WindowsAppSDK          Microsoft Software License Terms (license.txt)
+          #   Microsoft.Windows.SDK.BuildTools Windows SDK license (aka.ms/WinSDKLicenseURL)
+          # Vulnerability scanning still applies to them; only the license check is skipped.
+          allow-dependencies-licenses: >-
+            pkg:nuget/LibGit2Sharp,
+            pkg:nuget/Microsoft.WindowsAppSDK,
+            pkg:nuget/Microsoft.Windows.SDK.BuildTools
