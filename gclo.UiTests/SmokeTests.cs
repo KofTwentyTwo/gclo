@@ -44,6 +44,12 @@ public sealed partial class SmokeTests : UiTestBase
     {
         Assert.NotNull(Session.WaitForElement("ConnectTokenBox"));
         Assert.NotNull(Session.WaitForElement("LoadReposButton"));
+        // The fresh data dir must also mean a fresh vault: a default token saved in the
+        // developer's real profile must not pre-fill Quick Sync (#60). The session
+        // snapshots this at launch, before any test types a token.
+        Assert.False(
+            Session.TokenPrefilledAtLaunch,
+            "Quick Sync was pre-filled with a token from outside the test data directory.");
 
         AutomationElement syncAll = Session.WaitForElement("NavSyncAll");
         Assert.False(syncAll.IsEnabled, "'Sync all' should be disabled while no accounts exist.");
