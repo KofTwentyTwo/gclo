@@ -54,25 +54,30 @@ public sealed class GitHubOrganizationLister : IOrganizationLister
         }
         catch (AuthorizationException ex)
         {
-            throw new InvalidOperationException("GitHub rejected the token (401). Check the PAT.", ex);
+            throw new GitHubAccessException(GitHubAccessKind.Unauthorized, "GitHub rejected the token (401). Check the PAT.", ex);
         }
         catch (RateLimitExceededException ex)
         {
-            throw new InvalidOperationException($"GitHub API rate limit exceeded; it resets at {ex.Reset:u}.", ex);
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited, $"GitHub API rate limit exceeded; it resets at {ex.Reset:u}.", ex);
         }
         catch (SecondaryRateLimitExceededException ex)
         {
-            throw new InvalidOperationException(
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited,
                 "GitHub's secondary rate limit was hit (too many requests in a short time); retry in a minute.", ex);
         }
         catch (AbuseException ex)
         {
-            throw new InvalidOperationException(
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited,
                 $"GitHub's secondary rate limit was hit (too many requests in a short time); retry in {ex.RetryAfterSeconds ?? 60} seconds.", ex);
         }
         catch (LoginAttemptsExceededException ex)
         {
-            throw new InvalidOperationException("GitHub temporarily blocked this token after too many failed attempts; wait a few minutes and retry.", ex);
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited,
+                "GitHub temporarily blocked this token after too many failed attempts; wait a few minutes and retry.", ex);
         }
 
         cancellationToken.ThrowIfCancellationRequested();

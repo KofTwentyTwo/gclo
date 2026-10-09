@@ -84,6 +84,25 @@ public sealed class SyncCommandTests : IDisposable
             () => Run(new FakeRepoLister(), new FakeGit(), "--org", "acme"));
 
     [Theory]
+    [InlineData("0")]
+    [InlineData("65")]
+    [InlineData("abc")]
+    public async Task ParallelOutsideTheSupportedRange_IsRejected(string value)
+    {
+        var ex = await Assert.ThrowsAsync<CliUsageException>(
+            () => Run(new FakeRepoLister(), new FakeGit(), "--org", "acme", "--target", Target, "--parallel", value));
+        Assert.Contains("between 1 and 64", ex.Message);
+    }
+
+    [Fact]
+    public async Task JsonAndJsonLines_AreMutuallyExclusive()
+    {
+        var ex = await Assert.ThrowsAsync<CliUsageException>(
+            () => Run(new FakeRepoLister(), new FakeGit(), "--org", "acme", "--target", Target, "--json", "--json-lines"));
+        Assert.Contains("not both", ex.Message);
+    }
+
+    [Theory]
     [InlineData("zero")]
     [InlineData("0")]
     [InlineData("-3")]
@@ -219,6 +238,170 @@ public sealed class SyncCommandTests : IDisposable
 
         Assert.Equal(1, code);
         Assert.Empty(git.RecoveredRepoNames); // recovery was never attempted
+    }
+
+    [Fact]
+    public async Task ListerAccessRefusal_MapsToTheExitCodeTaxonomy()
+    {
+        var unauthorized = new FakeRepoLister
+        {
+            Throw = new GitHubAccessException(GitHubAccessKind.Unauthorized, "GitHub rejected the token (401)."),
+        };
+        var ex = await Assert.ThrowsAsync<CliErrorException>(
+            () => Run(unauthorized, new FakeGit(), "--org", "acme", "--target", Target, "--token-env", EnvVar));
+        Assert.Equal(ExitCodes.Auth, ex.ExitCode);
+
+        var forbidden = new FakeRepoLister
+        {
+            Throw = new GitHubAccessException(GitHubAccessKind.Forbidden, "'acme' is an organization, but this token cannot see it."),
+        };
+        ex = await Assert.ThrowsAsync<CliErrorException>(
+            () => Run(forbidden, new FakeGit(), "--org", "acme", "--target", Target, "--token-env", EnvVar));
+        Assert.Equal(ExitCodes.Auth, ex.ExitCode);
+
+        var throttled = new FakeRepoLister
+        {
+            Throw = new GitHubAccessException(GitHubAccessKind.RateLimited, "rate limit exceeded"),
+        };
+        ex = await Assert.ThrowsAsync<CliErrorException>(
+            () => Run(throttled, new FakeGit(), "--org", "acme", "--target", Target, "--token-env", EnvVar));
+        Assert.Equal(ExitCodes.Transient, ex.ExitCode);
+
+        var missing = new FakeRepoLister
+        {
+            Throw = new GitHubAccessException(GitHubAccessKind.NotFound, "'ghost' was found neither as an organization nor as a user account (404)."),
+        };
+        ex = await Assert.ThrowsAsync<CliErrorException>(
+            () => Run(missing, new FakeGit(), "--org", "ghost", "--target", Target, "--token-env", EnvVar));
+        Assert.Equal(ExitCodes.Fatal, ex.ExitCode);
+    }
+
+    // ---------------------------------------------------------------- selection
+
+    [Fact]
+    public async Task IncludeExcludeAndSkipArchived_NarrowTheSelection()
+    {
+        using var console = new ConsoleCapture();
+        var lister = new FakeRepoLister
+        {
+            Result =
+            [
+                Repo("platform-api"), Repo("platform-web"), Repo("platform-legacy"), Repo("docs"),
+                new RepoDescriptor("platform-old", "https://x/platform-old.git", "main", IsArchived: true),
+            ],
+        };
+        var git = new FakeGit();
+
+        int code = await Run(lister, git, "--org", "acme", "--target", Target, "--token-env", EnvVar,
+            "--include", "platform-*", "--exclude", "*-legacy", "--skip-archived");
+
+        Assert.Equal(0, code);
+        Assert.Equal(["platform-api", "platform-web"], git.ClonedRepoNames.OrderBy(n => n));
+        Assert.Contains("2 cloned", console.Out);
+        Assert.Contains("of 2.", console.Out); // the summary counts the selection, not the listing
+    }
+
+    [Fact]
+    public async Task EmptyIncludePattern_IsAUsageError()
+    {
+        var ex = await Assert.ThrowsAsync<CliUsageException>(
+            () => Run(new FakeRepoLister(), new FakeGit(), "--org", "acme", "--target", Target, "--include", "  "));
+        Assert.Contains("--include expects", ex.Message);
+    }
+
+    [Fact]
+    public async Task DryRun_ListsActionsAndTouchesNothing()
+    {
+        using var console = new ConsoleCapture();
+        var lister = new FakeRepoLister { Result = [Repo("new-one"), Repo("existing")] };
+        var git = new FakeGit { IsValid = path => Path.GetFileName(path) == "existing" };
+
+        int code = await Run(lister, git, "--org", "acme", "--target", Target, "--token-env", EnvVar, "--dry-run");
+
+        Assert.Equal(0, code);
+        Assert.Empty(git.ClonedRepoNames);
+        Assert.Contains("new-one  would clone", console.Out);
+        Assert.Contains("existing  would update", console.Out);
+        Assert.Contains("Dry run: 1 would clone, 1 would update of 2.", console.Out);
+    }
+
+    [Fact]
+    public async Task DryRun_Json_PrintsAnArrayOfActions()
+    {
+        using var console = new ConsoleCapture();
+        var lister = new FakeRepoLister { Result = [Repo("new-one")] };
+
+        int code = await Run(lister, new FakeGit(), "--org", "acme", "--target", Target, "--token-env", EnvVar, "--dry-run", "--json");
+
+        Assert.Equal(0, code);
+        Assert.Equal("[{\"repo\":\"new-one\",\"action\":\"clone\"}]", console.Out.Trim());
+    }
+
+    // ---------------------------------------------------------------- machine-readable output
+
+    [Fact]
+    public async Task JsonLines_PrintsOneObjectPerTransition_ThenTheSummary()
+    {
+        using var console = new ConsoleCapture();
+        var lister = new FakeRepoLister { Result = [Repo("a"), Repo("b")] };
+        var git = new FakeGit
+        {
+            OnClone = (_, path, _, _, _) => Path.GetFileName(path) == "b"
+                ? Task.FromException(new InvalidOperationException("boom"))
+                : Task.CompletedTask,
+        };
+
+        int code = await Run(lister, git, "--org", "acme", "--target", Target, "--token-env", EnvVar, "--json-lines", "--parallel", "1");
+
+        Assert.Equal(1, code);
+        string[] lines = console.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToArray();
+        Assert.All(lines, l => Assert.StartsWith("{", l));
+        Assert.Contains("{\"type\":\"progress\",\"repo\":\"a\",\"status\":\"Queued\",\"error\":null}", lines);
+        Assert.Contains("{\"type\":\"progress\",\"repo\":\"a\",\"status\":\"Done\",\"error\":null}", lines);
+        Assert.Contains("{\"type\":\"progress\",\"repo\":\"b\",\"status\":\"Failed\",\"error\":\"boom\"}", lines);
+        Assert.StartsWith("{\"type\":\"summary\",\"total\":2,\"cloned\":1,\"updated\":0,\"failed\":1", lines[^1]);
+        Assert.Equal("", console.Error); // failures live in the stream, not on stderr
+    }
+
+    [Fact]
+    public async Task Json_CarriesSanitizedRepos_AndFullInvalidPathLists_WithNoStderrNoise()
+    {
+        using var console = new ConsoleCapture();
+        var lister = new FakeRepoLister { Result = [Repo("fixable"), Repo("stuck")] };
+        var git = new FakeGit
+        {
+            OnClone = (_, path, _, _, _) => Task.FromException(InvalidPaths()),
+            OnApplyRecovery = (path, _, _) => Path.GetFileName(path) == "stuck"
+                ? Task.FromException(new IOException("disk full"))
+                : Task.CompletedTask,
+        };
+
+        int code = await Run(lister, git, "--org", "acme", "--target", Target, "--token-env", EnvVar, "--json", "--sanitize-paths", "--parallel", "1");
+
+        Assert.Equal(1, code);
+        Assert.Equal("", console.Error); // the 'Sanitized' note and path details stay out of stderr in JSON mode
+        string json = console.Out.Trim();
+        Assert.StartsWith("{\"type\":\"summary\"", json);
+        Assert.Contains("\"sanitized\":[{\"repo\":\"fixable\",\"renamed\":1,\"skipped\":1,\"skippedPaths\":[\"dup\"]}]", json);
+        Assert.Contains("\"repo\":\"stuck\"", json);
+        Assert.Contains("path sanitization failed: disk full", json);
+        Assert.Contains("\"invalidPaths\":null", json); // a non-path failure has no list
+    }
+
+    [Fact]
+    public async Task Json_FailureFromInvalidPaths_CarriesEveryOffendingPath()
+    {
+        using var console = new ConsoleCapture();
+        var many = Enumerable.Range(0, 12)
+            .Select(i => new InvalidPathInfo($"bad{i}:x.txt", "invalid on Windows", $"bad{i}_x.txt"))
+            .ToList();
+        var lister = new FakeRepoLister { Result = [Repo("a")] };
+        var git = new FakeGit { OnClone = (_, _, _, _, _) => Task.FromException(new InvalidRepositoryPathsException(many)) };
+
+        int code = await Run(lister, git, "--org", "acme", "--target", Target, "--token-env", EnvVar, "--json");
+
+        Assert.Equal(1, code);
+        Assert.Contains("\"path\":\"bad11:x.txt\",\"reason\":\"invalid on Windows\",\"suggestedName\":\"bad11_x.txt\"", console.Out);
     }
 
     [Fact]

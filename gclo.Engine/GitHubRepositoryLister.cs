@@ -65,14 +65,16 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
                 GitHubAccountKind kind = await gateway.GetAccountKindAsync(organization).ConfigureAwait(false);
                 if (kind == GitHubAccountKind.Organization)
                 {
-                    throw new InvalidOperationException(
+                    throw new GitHubAccessException(
+                        GitHubAccessKind.Forbidden,
                         $"'{organization}' is an organization, but this token cannot see its repositories (404). "
                         + "Grant the PAT access to the organization — for a fine-grained token choose it as the resource owner, "
                         + "for a classic token authorize it for SSO — then try again.");
                 }
                 if (kind == GitHubAccountKind.NotFound)
                 {
-                    throw new InvalidOperationException(
+                    throw new GitHubAccessException(
+                        GitHubAccessKind.NotFound,
                         $"'{organization}' was found neither as an organization nor as a user account (404). Check the spelling.");
                 }
 
@@ -95,7 +97,8 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
                     }
                     catch (NotFoundException ex)
                     {
-                        throw new InvalidOperationException(
+                        throw new GitHubAccessException(
+                            GitHubAccessKind.NotFound,
                             $"'{organization}' was found neither as an organization nor as a user account (404) — or the token cannot see it.", ex);
                     }
                 }
@@ -103,24 +106,27 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
         }
         catch (AuthorizationException ex)
         {
-            throw new InvalidOperationException(
+            throw new GitHubAccessException(
+                GitHubAccessKind.Unauthorized,
                 "GitHub rejected the token (401). Check the PAT and make sure it has 'repo' (classic) or repository read access (fine-grained).", ex);
         }
         catch (RateLimitExceededException ex)
         {
-            throw new InvalidOperationException(
-                $"GitHub API rate limit exceeded; it resets at {ex.Reset:u}.", ex);
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited, $"GitHub API rate limit exceeded; it resets at {ex.Reset:u}.", ex);
         }
         catch (SecondaryRateLimitExceededException ex)
         {
             // A burst of requests, not a scope problem; Octokit models it beside (not
             // under) AbuseException, so both get the same translation.
-            throw new InvalidOperationException(
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited,
                 "GitHub's secondary rate limit was hit (too many requests in a short time); retry in a minute.", ex);
         }
         catch (AbuseException ex)
         {
-            throw new InvalidOperationException(
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited,
                 $"GitHub's secondary rate limit was hit (too many requests in a short time); retry in {ex.RetryAfterSeconds ?? 60} seconds.", ex);
         }
 

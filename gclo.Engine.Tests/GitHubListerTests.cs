@@ -142,11 +142,12 @@ public sealed class GitHubListerTests
         bool userReposAsked = false;
         _gateway.UserPages = (_, _) => { userReposAsked = true; return Task.FromResult<IReadOnlyList<GitHubRepo>>([Repo("public-only")]); };
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
 
         Assert.Contains("'acme' is an organization", ex.Message);
         Assert.Contains("cannot see its repositories", ex.Message);
+        Assert.Equal(GitHubAccessKind.Forbidden, ex.Kind);
         Assert.Contains("resource owner", ex.Message);
         Assert.False(userReposAsked, "the public-repos endpoint must never be consulted for an organization");
     }
@@ -157,11 +158,12 @@ public sealed class GitHubListerTests
         _gateway.OrgPages = (_, _) => throw NotFound();
         _gateway.AccountKind = _ => Task.FromResult(GitHubAccountKind.NotFound);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => RepoLister().ListOrganizationRepositoriesAsync("typo", "tok-1234567890"));
 
         Assert.Contains("neither as an organization nor as a user account", ex.Message);
         Assert.Contains("Check the spelling", ex.Message);
+        Assert.Equal(GitHubAccessKind.NotFound, ex.Kind);
     }
 
     [Fact]
@@ -169,15 +171,16 @@ public sealed class GitHubListerTests
     {
         _gateway.OrgPages = (_, _) => throw SecondaryRateLimited();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
 
         Assert.Contains("secondary rate limit", ex.Message);
         Assert.Contains("retry in", ex.Message);
         Assert.IsType<SecondaryRateLimitExceededException>(ex.InnerException);
+        Assert.Equal(GitHubAccessKind.RateLimited, ex.Kind);
 
         _gateway.OrgPages = (_, _) => throw Abuse();
-        var abuse = await Assert.ThrowsAsync<InvalidOperationException>(
+        var abuse = await Assert.ThrowsAsync<GitHubAccessException>(
             () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
         Assert.Contains("retry in 60 seconds", abuse.Message);
     }
@@ -199,7 +202,7 @@ public sealed class GitHubListerTests
         _gateway.OrgPages = (_, _) => throw NotFound();
         _gateway.UserPages = (_, _) => throw NotFound();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => RepoLister().ListOrganizationRepositoriesAsync("ghost", "tok-1234567890"));
 
         Assert.Contains("'ghost'", ex.Message);
@@ -211,7 +214,7 @@ public sealed class GitHubListerTests
     {
         _gateway.OrgPages = (_, _) => throw Unauthorized();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
 
         Assert.Contains("401", ex.Message);
@@ -223,7 +226,7 @@ public sealed class GitHubListerTests
     {
         _gateway.OrgPages = (_, _) => throw RateLimited();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
 
         Assert.Contains("rate limit", ex.Message);
@@ -293,13 +296,13 @@ public sealed class GitHubListerTests
         // the personal account (which reads as a permanent scope problem).
         _gateway.OrgLogins = () => throw SecondaryRateLimited();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
 
         Assert.Contains("secondary rate limit", ex.Message);
 
         _gateway.OrgLogins = () => throw Abuse();
-        var abuse = await Assert.ThrowsAsync<InvalidOperationException>(
+        var abuse = await Assert.ThrowsAsync<GitHubAccessException>(
             () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
         Assert.Contains("retry in 60 seconds", abuse.Message);
     }
@@ -309,7 +312,7 @@ public sealed class GitHubListerTests
     {
         _gateway.OrgLogins = () => throw LoginAttemptsExceeded();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
 
         Assert.Contains("too many failed attempts", ex.Message);
@@ -320,7 +323,7 @@ public sealed class GitHubListerTests
     {
         _gateway.CurrentUser = () => throw Unauthorized();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
 
         Assert.Contains("401", ex.Message);
@@ -331,7 +334,7 @@ public sealed class GitHubListerTests
     {
         _gateway.OrgLogins = () => throw RateLimited();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<GitHubAccessException>(
             () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
 
         Assert.Contains("rate limit", ex.Message);

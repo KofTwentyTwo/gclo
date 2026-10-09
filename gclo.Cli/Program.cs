@@ -19,21 +19,25 @@ internal static class Program
         Usage:
           gclo sync --org <name> --target <folder> [options]
           gclo sync --account <name> [options]
+          gclo repos --org <name> [options]
           gclo orgs [options]
-          gclo accounts [--json]
+          gclo accounts [list|add|edit|remove] [options]
           gclo --version
           gclo --help
 
         Commands:
           sync      Clone every repository of an organization; fast-forward ones
                     that already exist locally. '--account <name>' runs it with a
-                    saved account's settings and stored token.
+                    saved account's settings and stored token. '--include',
+                    '--exclude', and '--skip-archived' narrow the selection;
+                    '--dry-run' shows it without syncing.
+          repos     List the repositories a sync would see, with the same filters.
           orgs      List the account and organization logins the token can see.
-          accounts  List the saved accounts (name, organization, target root, last
-                    sync). Accounts are created in the gclo desktop app and are
+          accounts  List, add, edit, or remove saved accounts (name, organization,
+                    target root, parallelism, token in Windows Credential Manager).
                     Windows-only.
 
-        Run 'gclo <command> --help' (e.g. 'gclo sync --help') for command options.
+        Run 'gclo <command> --help' or 'gclo help <command>' for command options.
 
         Token:
           There is deliberately no '--token <value>' option: command-line arguments
@@ -46,6 +50,11 @@ internal static class Program
           When no token option is given, the GITHUB_TOKEN environment variable is
           used — except with 'gclo sync --account', which reads the account's token
           from Windows Credential Manager instead. A token option always wins.
+
+        Exit codes:
+          0 success, 1 completed with failures or canceled, 2 usage or fatal error,
+          3 token rejected or access denied, 4 rate limited (retry later),
+          70 unexpected error (details in the activity log).
         """;
 
     public static async Task<int> Main(string[] args)
@@ -72,23 +81,50 @@ internal static class Program
         {
             Console.Error.WriteLine(ex.Message);
             Console.Error.WriteLine("Run 'gclo --help' for usage.");
-            return 2;
+            return ExitCodes.Fatal;
         }
         catch (CliErrorException ex)
         {
             Console.Error.WriteLine(ex.Message);
-            return 2;
+            return ex.ExitCode;
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
             Console.Error.WriteLine("Canceled.");
-            return 1;
+            return ExitCodes.Partial;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine(ex.Message);
-            return 2;
+            return ReportUnexpected(ex);
         }
+    }
+
+    /// <summary>
+    /// A bug in gclo, not a caller mistake: say so, with the exception type, and point
+    /// at the activity log where the full exception (with its stack) is recorded, so
+    /// a bug report has something to go on. Exit 70 keeps it apart from exit 2.
+    /// </summary>
+    private static int ReportUnexpected(Exception ex)
+    {
+        string details = "";
+        try
+        {
+            var log = new FileActivityLog();
+            log.Error($"unexpected error ({ex.GetType().FullName}): {ex.Message}", ex);
+            details = log.CurrentLogFilePath;
+        }
+        catch
+        {
+            // The log must never make a bad situation worse.
+        }
+
+        Console.Error.WriteLine($"Unexpected error ({ex.GetType().Name}): {ex.Message}");
+        if (details.Length > 0)
+        {
+            Console.Error.WriteLine($"Details: {details}");
+        }
+        Console.Error.WriteLine("This looks like a bug in gclo; please report it at https://github.com/KofTwentyTwo/gclo/issues.");
+        return ExitCodes.Unexpected;
     }
 
     private static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
@@ -104,16 +140,28 @@ internal static class Program
         {
             case "sync":
                 return SyncCommand.RunAsync(rest, cancellationToken);
+            case "repos":
+                return ReposCommand.RunAsync(rest, cancellationToken);
             case "orgs":
                 return OrgsCommand.RunAsync(rest, cancellationToken);
             case "accounts":
                 return Task.FromResult(AccountsCommand.Run(rest));
-            case "--help" or "-h" or "help":
+            case "--help" or "-h":
                 Console.Out.WriteLine(RootHelp);
-                return Task.FromResult(0);
+                return Task.FromResult(ExitCodes.Success);
+            case "help":
+                if (rest.Length == 0)
+                {
+                    Console.Out.WriteLine(RootHelp);
+                    return Task.FromResult(ExitCodes.Success);
+                }
+                // 'gclo help sync' means 'gclo sync --help'; an unknown name is a usage error.
+                return rest[0] is "sync" or "repos" or "orgs" or "accounts"
+                    ? RunAsync([rest[0], "--help"], cancellationToken)
+                    : throw new CliUsageException($"Unknown command '{rest[0]}'.");
             case "--version":
                 Console.Out.WriteLine(Version());
-                return Task.FromResult(0);
+                return Task.FromResult(ExitCodes.Success);
             default:
                 throw new CliUsageException($"Unknown command '{command}'.");
         }

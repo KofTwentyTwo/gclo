@@ -1,3 +1,5 @@
+using gclo.Engine;
+
 namespace gclo.Cli.Tests;
 
 /// <summary>Covers 'gclo orgs': parsing, plain and JSON output, and error translation.</summary>
@@ -86,6 +88,20 @@ public sealed class OrgsCommandTests
 
         var ex = await Assert.ThrowsAsync<CliErrorException>(() => Run(lister, "--token-env", EnvVar));
         Assert.Contains("401", ex.Message);
+    }
+
+    [Fact]
+    public async Task ListerAccessRefusal_MapsToTheExitCodeTaxonomy()
+    {
+        using var _ = Token("ghp_x");
+
+        var rejected = new FakeOrgLister { Throw = new GitHubAccessException(GitHubAccessKind.Unauthorized, "401") };
+        var ex = await Assert.ThrowsAsync<CliErrorException>(() => Run(rejected, "--token-env", EnvVar));
+        Assert.Equal(ExitCodes.Auth, ex.ExitCode);
+
+        var throttled = new FakeOrgLister { Throw = new GitHubAccessException(GitHubAccessKind.RateLimited, "slow down") };
+        ex = await Assert.ThrowsAsync<CliErrorException>(() => Run(throttled, "--token-env", EnvVar));
+        Assert.Equal(ExitCodes.Transient, ex.ExitCode);
     }
 
     [Fact]
