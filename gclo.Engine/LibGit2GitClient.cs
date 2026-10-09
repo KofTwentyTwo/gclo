@@ -28,10 +28,15 @@ namespace gclo.Engine;
 public sealed class LibGit2GitClient : IGitClient
 {
     /// <summary>
-    /// Local git config flag set when a clone fetched successfully but its tree failed
-    /// Windows path validation, so nothing was ever checked out. Cleared once a working
-    /// tree is materialized (normal checkout after upstream fixed the paths, or
-    /// <see cref="ApplyRecoveryAsync"/>).
+    /// Local git config flag meaning "the objects are here, but the working tree was
+    /// never completely checked out". Set the moment a clone's fetch completes and
+    /// cleared only after checkout finishes, so it is durable evidence of an
+    /// incomplete clone whatever interrupted it: Windows path validation (the repo is
+    /// deliberately kept for recovery), a checkout error whose best-effort cleanup
+    /// could not delete the directory, or the process dying mid-checkout. The next
+    /// pull sees the flag and completes the checkout instead of comparing commit tips
+    /// and calling an incomplete tree "up to date". Cleared by a normal checkout or by
+    /// <see cref="ApplyRecoveryAsync"/>.
     /// </summary>
     private const string CheckoutPendingKey = "gclo.checkoutpending";
 
@@ -99,6 +104,13 @@ public sealed class LibGit2GitClient : IGitClient
             Repository.Clone(url, path, options);
 
             using var repo = new Repository(path);
+
+            // From here until checkout completes the directory is a valid repository
+            // with no (or a partial) working tree. Record that durably first: if the
+            // cleanup in the catch below cannot remove the directory, or the process
+            // dies, the next run must not mistake this for a finished clone.
+            repo.Config.Set(CheckoutPendingKey, true, ConfigurationLevel.Local);
+
             if (OperatingSystem.IsWindows())
             {
                 // Lifts the 260-character path limit before anything touches the
@@ -109,7 +121,9 @@ public sealed class LibGit2GitClient : IGitClient
             var tip = repo.Head.Tip;
             if (tip is null)
             {
-                return; // empty repository — nothing to check out
+                // Empty repository — nothing to check out, so nothing is pending.
+                repo.Config.Set(CheckoutPendingKey, false, ConfigurationLevel.Local);
+                return;
             }
 
             if (OperatingSystem.IsWindows())
@@ -119,9 +133,8 @@ public sealed class LibGit2GitClient : IGitClient
                 {
                     // Keep the fetched repo: all objects are already downloaded, so
                     // ApplyRecoveryAsync can materialize a sanitized working tree without
-                    // touching the network. The marker tells FetchAndPull that this
-                    // repository was never checked out.
-                    repo.Config.Set(CheckoutPendingKey, true, ConfigurationLevel.Local);
+                    // touching the network. The pending marker (already set) tells
+                    // FetchAndPull that this repository was never checked out.
                     throw new InvalidRepositoryPathsException(invalidPaths);
                 }
             }
@@ -131,13 +144,19 @@ public sealed class LibGit2GitClient : IGitClient
             {
                 CheckoutModifiers = CheckoutModifiers.Force, // materialize the fresh working tree
             });
+
+            // Only now is the clone complete. Config writes are atomic on disk, so an
+            // observer sees either "pending" or "done", never a torn state.
+            repo.Config.Set(CheckoutPendingKey, false, ConfigurationLevel.Local);
         }
         catch (Exception ex)
         {
             // Don't leave a half-cloned directory behind: the next run would treat a
             // partial checkout as "exists locally" and try to pull it. Invalid-path
             // failures are the deliberate exception — the fetched repo is kept (with
-            // the pending marker set above) so recovery needs no re-download.
+            // the pending marker set above) so recovery needs no re-download. If this
+            // delete fails (open handle, antivirus, permissions) the marker is still
+            // set, and the next pull completes the checkout instead of trusting the tree.
             if (!existedBefore && ex is not InvalidRepositoryPathsException)
             {
                 TryDeleteDirectory(path);
@@ -182,11 +201,12 @@ public sealed class LibGit2GitClient : IGitClient
 
         ct.ThrowIfCancellationRequested();
 
-        // Repositories whose clone hit Windows-invalid paths never had a checkout;
-        // they carry a pending marker (and, once the user chose renames/skips, a
-        // persisted recovery). Both take a dedicated path — their working tree is
-        // materialized manually, never by a merge checkout. Every other repository
-        // takes the normal fetch + fast-forward pull below.
+        // Repositories whose clone never finished its checkout — Windows-invalid
+        // paths, a checkout error whose cleanup failed, a killed process — carry the
+        // pending marker (and, once the user chose renames/skips, a persisted
+        // recovery). Both take a dedicated path — their working tree is materialized
+        // from the tip, never by a merge checkout that trusts the existing tree.
+        // Every other repository takes the normal fetch + fast-forward pull below.
         string recoveryFile = GetRecoveryFilePath(repo);
         if (File.Exists(recoveryFile))
         {
@@ -458,10 +478,11 @@ public sealed class LibGit2GitClient : IGitClient
     }
 
     /// <summary>
-    /// Finishes a clone that was interrupted by invalid paths but has no stored
-    /// recovery: if upstream has fixed the paths, check out normally and clear the
-    /// marker; otherwise rethrow the same typed failure — the repo must not silently
-    /// report success with an empty working tree.
+    /// Finishes a clone whose checkout never completed and that has no stored
+    /// recovery: moves to the upstream tip, re-validates its paths on Windows, and
+    /// force-checks-out the whole tree (whatever partial files exist are overwritten
+    /// to match). If the paths are still invalid, rethrows the same typed failure —
+    /// the repo must not silently report success with an empty or partial tree.
     /// </summary>
     private static void CompletePendingCheckout(Repository repo, CancellationToken ct)
     {
