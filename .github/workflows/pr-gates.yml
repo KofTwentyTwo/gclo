@@ -16,7 +16,11 @@ concurrency:
 
 jobs:
   pr:
-    uses: KofTwentyTwo/standards/.github/workflows/pr.yml@855cf4409180d2f1aa58a062c8c140be2ac27917 # main 2026-10-09 (pre-1.0 draft)
+    uses: KofTwentyTwo/standards/.github/workflows/pr.yml@ae174f54959ba4297f2ae174356c4481918fdf44 # main 2026-10-09 (pre-1.0 draft, standards#4)
     permissions:
       contents: read
       pull-requests: read
+    with:
+      # These packages declare a license FILE in their nuspec, so the dependency
+      # graph reports NOASSERTION; see standards EX-0003.
+      allow-dependencies-licenses: pkg:nuget/LibGit2Sharp, pkg:nuget/Microsoft.WindowsAppSDK, pkg:nuget/Microsoft.Windows.SDK.BuildTools
