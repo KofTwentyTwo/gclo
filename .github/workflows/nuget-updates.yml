@@ -1,0 +1,142 @@
+# Weekly NuGet dependency updates, as a pull request against dev.
+#
+# This replaces Dependabot's NuGet ecosystem for this repository. Dependabot's NuGet
+# updater cannot evaluate Windows-versioned target frameworks (the WinUI project's
+# net10.0-windows10.0.19041.0; dependabot/dependabot-core#13923): it reports every
+# newer package as "not compatible", and because it updates a package consistently
+# across projects, that silently blocked updates for the test projects as well. The
+# only updates it ever delivered were the ones it later closed as "updatable in
+# another way". `dotnet list package --outdated` evaluates through real MSBuild and
+# NuGet, so the script below drives the bump from that instead.
+#
+# Flow: bump minor/patch versions in the .csproj files -> run the same gates CI
+# runs (zero-warning x64 build, both unit suites, format) -> open or update a single
+# PR on branch deps/nuget-weekly with the report and the gate results in its body.
+# Major bumps are listed in the report but not applied; run the workflow manually
+# with include-major to take them.
+#
+# Token note: with the default GITHUB_TOKEN, GitHub does not start other workflows
+# for the PR this job creates, so the PR shows no CI checks of its own (the gates
+# were run here, and dev -> main still goes through the required checks). To get
+# checks on the PR itself, add a fine-grained PAT with contents + pull-requests
+# write as the DEPS_PAT repository secret; the step below prefers it when present.
+name: NuGet updates
+
+on:
+  schedule:
+    # Mondays 06:00 America/New_York (11:00 UTC in winter, 10:00 UTC in summer).
+    - cron: '0 11 * * 1'
+  workflow_dispatch:
+    inputs:
+      include-major:
+        description: Also apply major-version bumps
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nuget-updates
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Bump packages and open PR
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v7
+        with:
+          ref: dev
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Bump package versions
+        id: bump
+        shell: pwsh
+        run: |
+          $params = @{ Solution = 'gclo.slnx'; ReportPath = 'nuget-update-report.md' }
+          if ('${{ inputs.include-major }}' -eq 'true') { $params.IncludeMajor = $true }
+          ./.github/scripts/Update-NuGetPackages.ps1 @params
+
+      # The gates CI applies, run against the bumped tree. They are allowed to fail
+      # so the PR still opens and shows what broke; the outcome lands in the body.
+      - name: Gate - build (x64, warnings as errors)
+        if: steps.bump.outputs.changed == 'true'
+        id: build
+        continue-on-error: true
+        run: dotnet build gclo.slnx -p:Platform=x64 -warnaserror
+
+      - name: Gate - engine and view-model tests
+        if: steps.bump.outputs.changed == 'true' && steps.build.outcome == 'success'
+        id: engine-tests
+        continue-on-error: true
+        run: dotnet test gclo.Engine.Tests
+
+      - name: Gate - CLI tests
+        if: steps.bump.outputs.changed == 'true' && steps.build.outcome == 'success'
+        id: cli-tests
+        continue-on-error: true
+        run: dotnet test gclo.Cli.Tests
+
+      - name: Gate - format
+        if: steps.bump.outputs.changed == 'true'
+        id: format
+        continue-on-error: true
+        run: dotnet format gclo.slnx --verify-no-changes --severity error
+
+      - name: Compose PR body
+        if: steps.bump.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          function Mark($outcome) {
+            switch ($outcome) {
+              'success' { ':white_check_mark: passed' }
+              'failure' { ':x: FAILED - see the workflow run' }
+              default   { ':heavy_minus_sign: skipped' }
+            }
+          }
+          $gates = @(
+            '### Gates (run in this workflow against the bumped tree)',
+            '',
+            "- Build (x64, warnings as errors): $(Mark '${{ steps.build.outcome }}')",
+            "- Engine + ViewModels tests: $(Mark '${{ steps.engine-tests.outcome }}')",
+            "- CLI tests: $(Mark '${{ steps.cli-tests.outcome }}')",
+            "- Format: $(Mark '${{ steps.format.outcome }}')",
+            '',
+            'The UI smoke suite and the 100% coverage gate run when dev is merged to main.',
+            "Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            ''
+          )
+          $report = Get-Content nuget-update-report.md -Raw
+          Set-Content -Path pr-body.md -Value (($gates -join "`n") + "`n" + $report) -NoNewline
+          Remove-Item nuget-update-report.md
+
+      - name: Open or update the pull request
+        if: steps.bump.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.DEPS_PAT || github.token }}
+          base: dev
+          branch: deps/nuget-weekly
+          delete-branch: true
+          commit-message: 'Deps: weekly NuGet package updates'
+          title: 'Deps: weekly NuGet package updates'
+          body-path: pr-body.md
+          labels: |
+            dependencies
+            .NET
+          add-paths: |
+            **/*.csproj
+
+      - name: Nothing to update
+        if: steps.bump.outputs.changed != 'true'
+        run: echo "All packages are current. No PR opened."
