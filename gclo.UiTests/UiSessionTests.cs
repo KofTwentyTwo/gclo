@@ -1,8 +1,14 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 // The table tests launch a second app instance in their own collection; two FlaUI
 // sessions must never drive input at the same time, so collections run one at a time.
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
 
 namespace gclo.UiTests;
+
 
 /// <summary>
 /// The single xunit collection every UI test belongs to (referenced via
@@ -16,6 +22,8 @@ public sealed class UiSessionTests : ICollectionFixture<AppSession>
 {
 }
 
+
+
 /// <summary>
 /// Base class for UI tests: holds the shared <see cref="AppSession"/> so test
 /// bodies read as session-relative steps. Derived classes must carry
@@ -23,13 +31,15 @@ public sealed class UiSessionTests : ICollectionFixture<AppSession>
 /// </summary>
 public abstract class UiTestBase
 {
-    /// <summary>Captures the collection fixture xunit injects per test class.</summary>
-    protected UiTestBase(AppSession session)
-    {
-        ArgumentNullException.ThrowIfNull(session);
-        Session = session;
-    }
+   /// <summary>Captures the collection fixture xunit injects per test class.</summary>
+   protected UiTestBase(AppSession session)
+   {
+      ArgumentNullException.ThrowIfNull(session);
+      Session = session;
+   }
 
-    /// <summary>The app instance shared by every test in the collection.</summary>
-    protected AppSession Session { get; }
+
+
+   /// <summary>The app instance shared by every test in the collection.</summary>
+   protected AppSession Session { get; }
 }

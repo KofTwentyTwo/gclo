@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.Engine;
+
 
 /// <summary>
 /// Application activity log for human-readable operational events. Implementations
@@ -7,15 +13,19 @@ namespace gclo.Engine;
 /// </summary>
 public interface IActivityLog
 {
-    /// <summary>Records an informational event.</summary>
-    void Info(string message);
+   /// <summary>Records an informational event.</summary>
+   void Info(string message);
 
-    /// <summary>Records a failure, with the exception's full text when one is given.</summary>
-    void Error(string message, Exception? exception = null);
 
-    /// <summary>Folder that holds the log files.</summary>
-    string LogDirectory { get; }
 
-    /// <summary>Full path of the file new entries are currently appended to.</summary>
-    string CurrentLogFilePath { get; }
+   /// <summary>Records a failure, with the exception's full text when one is given.</summary>
+   void Error(string message, Exception? exception = null);
+
+
+
+   /// <summary>Folder that holds the log files.</summary>
+   string LogDirectory { get; }
+
+   /// <summary>Full path of the file new entries are currently appended to.</summary>
+   string CurrentLogFilePath { get; }
 }

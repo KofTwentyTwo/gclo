@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.ViewModels;
+
 
 /// <summary>
 /// The single seam for where gclo keeps its per-user data (settings, accounts,
@@ -9,17 +15,19 @@ namespace gclo.ViewModels;
 /// </summary>
 public static class GcloPaths
 {
-    /// <summary>
-    /// Root directory for gclo's per-user data: GCLO_DATA_DIR when set and
-    /// non-empty, otherwise %LOCALAPPDATA%\gclo. Read on every access so a
-    /// value set before launch always wins over any cached default.
-    /// </summary>
-    public static string DataRoot =>
-        Environment.GetEnvironmentVariable("GCLO_DATA_DIR") is { Length: > 0 } dir
-            ? dir
-            : DefaultDataRoot;
+   /// <summary>
+   /// Root directory for gclo's per-user data: GCLO_DATA_DIR when set and
+   /// non-empty, otherwise %LOCALAPPDATA%\gclo. Read on every access so a
+   /// value set before launch always wins over any cached default.
+   /// </summary>
+   public static string DataRoot =>
+       Environment.GetEnvironmentVariable("GCLO_DATA_DIR") is { Length: > 0 } dir
+           ? dir
+           : DefaultDataRoot;
 
-    /// <summary>%LOCALAPPDATA%\gclo: the root used when GCLO_DATA_DIR is not set.</summary>
-    public static string DefaultDataRoot =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "gclo");
+
+
+   /// <summary>%LOCALAPPDATA%\gclo: the root used when GCLO_DATA_DIR is not set.</summary>
+   public static string DefaultDataRoot =>
+       Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "gclo");
 }

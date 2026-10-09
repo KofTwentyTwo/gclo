@@ -1,20 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.Engine;
 
-/// <summary>Why GitHub refused a request, in the terms a caller can act on.</summary>
-public enum GitHubAccessKind
-{
-    /// <summary>The token was rejected (401): expired, revoked, or malformed.</summary>
-    Unauthorized,
-
-    /// <summary>The token is valid but may not see the target (an ungranted organization, missing SSO).</summary>
-    Forbidden,
-
-    /// <summary>A primary or secondary rate limit, or temporary abuse/login throttling: retry later.</summary>
-    RateLimited,
-
-    /// <summary>No organization or user account with that login is visible to the token.</summary>
-    NotFound,
-}
 
 /// <summary>
 /// A GitHub API refusal translated into an actionable message. Derives from
@@ -24,13 +14,15 @@ public enum GitHubAccessKind
 /// </summary>
 public sealed class GitHubAccessException : InvalidOperationException
 {
-    /// <summary>The category of refusal.</summary>
-    public GitHubAccessKind Kind { get; }
+   /// <summary>The category of refusal.</summary>
+   public GitHubAccessKind Kind { get; }
 
-    /// <summary>Creates the exception with its category, user-facing message, and the Octokit cause.</summary>
-    public GitHubAccessException(GitHubAccessKind kind, string message, Exception? innerException = null)
-        : base(message, innerException)
-    {
-        Kind = kind;
-    }
+
+
+   /// <summary>Creates the exception with its category, user-facing message, and the Octokit cause.</summary>
+   public GitHubAccessException(GitHubAccessKind kind, string message, Exception? innerException = null)
+       : base(message, innerException)
+   {
+      Kind = kind;
+   }
 }

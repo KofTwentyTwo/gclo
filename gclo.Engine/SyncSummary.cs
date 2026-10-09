@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.Engine;
+
 
 /// <summary>Aggregate outcome of an organization sync.</summary>
 /// <param name="Total">Number of repositories the sync set out to process.</param>

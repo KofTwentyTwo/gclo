@@ -1,10 +1,17 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using gclo.Engine;
 
+
 namespace gclo.ViewModels;
+
 
 /// <summary>
 /// Drives one workspace of the org-sync UI in two phases: <see cref="LoadReposCommand"/>
@@ -16,1220 +23,1358 @@ namespace gclo.ViewModels;
 /// </summary>
 public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 {
-    private readonly IRepositoryLister _lister;
-    private readonly IGitClient _git;
-    private readonly IWslCloner _wsl;
-
-    /// <summary>Result of the one-time WSL probe; null until the first path recovery asks for it.</summary>
-    private WslAvailability? _wslAvailability;
-    private readonly IOrganizationLister _orgLister;
-    private readonly Func<Action<RepoProgress>, IProgress<RepoProgress>> _progressFactory;
-    private readonly TimeSpan _orgLookupDebounce;
-    private readonly IActivityLog _log;
-    private readonly Account? _account;
-    private readonly AccountsStore? _accountsStore;
-    private readonly Dictionary<string, RepoItemViewModel> _itemsByName = new(StringComparer.OrdinalIgnoreCase);
-    private CancellationTokenSource? _orgLoadCts;
-
-    /// <summary>
-    /// Position of every row in <see cref="Repos"/>; rebuilt on load and sort. Lets
-    /// progress-driven membership changes find a row's slot in <see cref="FilteredRepos"/>
-    /// by binary search instead of rebuilding the whole bound list (#30).
-    /// </summary>
-    private readonly Dictionary<RepoItemViewModel, int> _reposIndex = new();
-
-    /// <summary>Mirror of <see cref="FilteredRepos"/> for O(1) membership checks.</summary>
-    private readonly HashSet<RepoItemViewModel> _filteredSet = new();
-
-    /// <summary>Canceled on dispose so an in-flight path recovery dies with the workspace.</summary>
-    private readonly CancellationTokenSource _lifetimeCts = new();
-
-    /// <summary>
-    /// Runs one sync pass; the real <see cref="OrgSyncEngine"/> by default. A test seam:
-    /// the engine swallows cancellation into a summary, so the only way to exercise the
-    /// view model's own <see cref="OperationCanceledException"/> handling is to inject a
-    /// runner that throws it.
-    /// </summary>
-    internal Func<SyncRequest, IReadOnlyList<RepoDescriptor>, IProgress<RepoProgress>, CancellationToken, Task<SyncSummary>>? SyncRunner
-    {
-        get;
-        set;
-    }
-
-    /// <summary>Breaks the AllSelected &lt;-&gt; item.IsSelected feedback loop while one side updates the other.</summary>
-    private bool _syncingSelection;
-
-    /// <summary>False until the constructor finished seeding properties; gates user-action logging.</summary>
-    private readonly bool _constructed;
-
-    /// <summary>First repository name from the last load; makes <see cref="TargetPreview"/> concrete.</summary>
-    private string? _sampleRepoName;
-
-    /// <summary>
-    /// Rows captured for the in-flight (or most recent) sync run. Progress is scoped to
-    /// this set (#22): <see cref="TotalCount"/>/<see cref="CompletedCount"/> describe the
-    /// run, not the whole table. Empty until the first run and reset by each load.
-    /// </summary>
-    private IReadOnlyList<RepoItemViewModel> _runSet = [];
-
-    /// <summary>
-    /// Production dependencies by default; pass fakes for testing. The default progress
-    /// factory is <see cref="Progress{T}"/>, which marshals via the SynchronizationContext
-    /// captured at construction (the UI thread in the app); tests inject a synchronous one.
-    /// A non-null <paramref name="account"/> seeds the workspace from that profile — its
-    /// organization, target folder, subfolder preference, and concurrency — and pulls the
-    /// token from <paramref name="tokenVault"/> (the Token setter's org lookup fires
-    /// naturally); finished syncs are then recorded on <paramref name="accountsStore"/>.
-    /// </summary>
-    public WorkspaceViewModel(
-        IRepositoryLister? lister = null,
-        IGitClient? git = null,
-        IOrganizationLister? orgLister = null,
-        Func<Action<RepoProgress>, IProgress<RepoProgress>>? progressFactory = null,
-        TimeSpan? orgLookupDebounce = null,
-        IActivityLog? log = null,
-        Account? account = null,
-        ITokenVault? tokenVault = null,
-        AccountsStore? accountsStore = null,
-        IWslCloner? wsl = null)
-    {
-        _lister = lister ?? new GitHubRepositoryLister();
-        _git = git ?? new LibGit2GitClient();
-        _wsl = wsl ?? new WslCloner();
-        _orgLister = orgLister ?? new GitHubOrganizationLister();
-        _progressFactory = progressFactory ?? (handler => new Progress<RepoProgress>(handler));
-        _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
-        _log = log ?? new FileActivityLog();
-        _account = account;
-        _accountsStore = accountsStore;
-        Organization = "";
-        Token = "";
-        TargetFolder = "";
-        NameFilter = "";
-        BranchFilter = "";
-        MaxConcurrency = AppSettings.DefaultConcurrency;
-        StatusText = "";
-        ResultMessage = "";
-        LoadErrorTitle = "";
-        LoadErrorMessage = "";
-        AllSelected = true;
-        CanEditInputs = true;
-
-        if (account is not null)
-        {
-            Organization = account.Organization;
-            TargetFolder = account.TargetRoot;
-            CreateOrgSubfolder = account.CreateOrgSubfolder;
-            MaxConcurrency = account.MaxConcurrency;
-            // The Token setter's existing org lookup fires naturally with the vault token.
-            Token = tokenVault?.TryRetrieve(account.Id) ?? "";
-        }
-        _constructed = true;
-    }
-
-    /// <summary>Id of the account this workspace was created for, or null for Quick Sync.</summary>
-    public Guid? AccountId => _account?.Id;
-
-    /// <summary>Name shown for this workspace in navigation: the account's name, or "Quick Sync".</summary>
-    public string DisplayName => _account?.Name ?? "Quick Sync";
-
-    public ObservableCollection<RepoItemViewModel> Repos { get; } = new();
-
-    /// <summary>
-    /// The rows the table shows: the subset of <see cref="Repos"/> matching
-    /// <see cref="Filter"/>, in the table's current sort order. Rebuilt when the filter
-    /// changes, a load completes, a run starts or ends, and on terminal row transitions.
-    /// </summary>
-    public ObservableCollection<RepoItemViewModel> FilteredRepos { get; } = new();
-
-    /// <summary>
-    /// Rows with a git operation in flight right now; feeds the pinned active strip.
-    /// Maintained incrementally from progress reports, so its size is bounded by
-    /// <see cref="MaxConcurrency"/>. Cleared when a run starts and again when it ends.
-    /// </summary>
-    public ObservableCollection<RepoItemViewModel> ActiveRepos { get; } = new();
-
-    /// <summary>Organizations discovered from the current token; feeds the org dropdown.</summary>
-    public ObservableCollection<string> Organizations { get; } = new();
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
-    public partial string Organization { get; set; }
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
-    public partial string Token { get; set; }
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
-    public partial string TargetFolder { get; set; }
-
-    [ObservableProperty]
-    public partial int MaxConcurrency { get; set; }
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
-    [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
-    [NotifyCanExecuteChangedFor(nameof(RetryFailedCommand))]
-    [NotifyCanExecuteChangedFor(nameof(ResolvePathsCommand))]
-    public partial bool IsRunning { get; set; }
-
-    [ObservableProperty]
-    public partial string StatusText { get; set; }
-
-    [ObservableProperty]
-    public partial int CompletedCount { get; set; }
-
-    [ObservableProperty]
-    public partial int TotalCount { get; set; }
-
-    [ObservableProperty]
-    public partial bool IsLoadingOrgs { get; set; }
-
-    /// <summary>True while <see cref="LoadReposCommand"/> is listing repositories.</summary>
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
-    [NotifyCanExecuteChangedFor(nameof(RetryFailedCommand))]
-    public partial bool IsLoadingRepos { get; set; }
-
-    /// <summary>
-    /// True while a path-recovery checkout runs. Recovery writes a repository's working
-    /// tree outside a sync run, so every other git entry point is locked out for its
-    /// duration — two concurrent operations on one directory corrupt it.
-    /// </summary>
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
-    [NotifyCanExecuteChangedFor(nameof(RetryFailedCommand))]
-    [NotifyCanExecuteChangedFor(nameof(ResolvePathsCommand))]
-    public partial bool IsResolvingPaths { get; set; }
-
-    /// <summary>When set, repositories are placed under TargetFolder\Organization.</summary>
-    [ObservableProperty]
-    public partial bool CreateOrgSubfolder { get; set; }
-
-    /// <summary>
-    /// Header checkbox state: setting it checks or unchecks every VISIBLE row (the rows
-    /// in <see cref="FilteredRepos"/>), and it reads true when every visible row is
-    /// selected. With no filter active that is every row; with a filter it makes
-    /// "filter, then select what you see" the subset workflow (#30). Hidden rows keep
-    /// their selection and still sync.
-    /// </summary>
-    [ObservableProperty]
-    public partial bool AllSelected { get; set; }
-
-    /// <summary>
-    /// Organization whose repositories the table currently holds (trimmed, as loaded);
-    /// null before the first successful load.
-    /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsTableStale))]
-    [NotifyPropertyChangedFor(nameof(StaleTableMessage))]
-    public partial string? LoadedOrganization { get; set; }
-
-    /// <summary>
-    /// True when <see cref="Organization"/> was edited after a load: the table still
-    /// shows the previous organization's rows while the chip and target path describe
-    /// the new one. Sync is blocked until a reload replaces the rows (#30).
-    /// </summary>
-    public bool IsTableStale
-        => LoadedOrganization is not null
-            && !string.Equals(Organization.Trim(), LoadedOrganization, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>One-line explanation shown while <see cref="IsTableStale"/>; empty otherwise.</summary>
-    public string StaleTableMessage
-        => IsTableStale
-            ? $"The table still shows '{LoadedOrganization}'. Reload to list '{Organization.Trim()}' before syncing."
-            : "";
-
-    /// <summary>Title of the error surface for a failed load or organization lookup.</summary>
-    [ObservableProperty]
-    public partial string LoadErrorTitle { get; set; }
-
-    /// <summary>Message of the most recent failed load or organization lookup; empty when none.</summary>
-    [ObservableProperty]
-    public partial string LoadErrorMessage { get; set; }
-
-    /// <summary>
-    /// True while the load-error surface is showing. Set by a failed load or
-    /// organization lookup, cleared when the next load starts or a lookup succeeds; the
-    /// page two-way binds it so the user can dismiss the bar (#30).
-    /// </summary>
-    [ObservableProperty]
-    public partial bool LoadErrorOpen { get; set; }
-
-    /// <summary>True once a sync run has finished (successfully, canceled, or faulted).</summary>
-    [ObservableProperty]
-    public partial bool HasCompletedRun { get; set; }
-
-    /// <summary>True while any row is in the Failed state; drives the navigation badge.</summary>
-    [ObservableProperty]
-    public partial bool HasFailedRepos { get; set; }
-
-    /// <summary>Column the table is currently sorted by, or null for load order.</summary>
-    [ObservableProperty]
-    public partial string? SortColumn { get; set; }
-
-    [ObservableProperty]
-    public partial bool SortDescending { get; set; }
-
-    /// <summary>Which rows the repository table shows; defaults to <see cref="RepoFilter.All"/>.</summary>
-    [ObservableProperty]
-    public partial RepoFilter Filter { get; set; }
-
-    /// <summary>
-    /// Column filter: case-insensitive substring the repository name must contain.
-    /// Empty (the default) matches everything. Composes with <see cref="Filter"/>
-    /// and the other column filters; selection state is unaffected — hidden rows
-    /// stay selected and still sync.
-    /// </summary>
-    [ObservableProperty]
-    public partial string NameFilter { get; set; }
-
-    /// <summary>Column filter: case-insensitive substring the branch name must contain.</summary>
-    [ObservableProperty]
-    public partial string BranchFilter { get; set; }
-
-    /// <summary>Column filter: null shows all, true only archived, false only unarchived.</summary>
-    [ObservableProperty]
-    public partial bool? ArchivedFilter { get; set; }
-
-    /// <summary>Number of rows currently selected for the next sync.</summary>
-    [ObservableProperty]
-    public partial int SelectedCount { get; set; }
-
-    /// <summary>Caption for the primary sync button, pluralized for the current selection.</summary>
-    public string SyncButtonLabel => SelectedCount == 1 ? "Sync 1 repo" : $"Sync {SelectedCount} repos";
-
-    /// <summary>True when the connect inputs may be edited: no load and no run in flight.</summary>
-    [ObservableProperty]
-    public partial bool CanEditInputs { get; set; }
-
-    /// <summary>
-    /// True once this workspace has completed its first successful repository load;
-    /// drives the connect-card vs workspace visibility switch. Never reset.
-    /// </summary>
-    [ObservableProperty]
-    public partial bool HasLoadedRepos { get; set; }
-
-    /// <summary>Outcome of the most recent run; maps to the results InfoBar's severity.</summary>
-    [ObservableProperty]
-    public partial RunResultKind ResultKind { get; set; }
-
-    /// <summary>Summary or error line of the most recent run, shown in the results InfoBar.</summary>
-    [ObservableProperty]
-    public partial string ResultMessage { get; set; }
-
-    /// <summary>
-    /// True while the results InfoBar is showing: set when a run ends, cleared when the
-    /// next run or load starts. The page two-way binds it so the user can dismiss the bar.
-    /// </summary>
-    [ObservableProperty]
-    public partial bool ResultOpen { get; set; }
-
-    partial void OnFilterChanged(RepoFilter value) => RebuildFilteredRepos();
-
-    partial void OnNameFilterChanged(string value) => RebuildFilteredRepos();
-
-    partial void OnBranchFilterChanged(string value) => RebuildFilteredRepos();
-
-    partial void OnArchivedFilterChanged(bool? value) => RebuildFilteredRepos();
-
-    partial void OnSelectedCountChanged(int value) => OnPropertyChanged(nameof(SyncButtonLabel));
-
-    partial void OnIsRunningChanged(bool value) => UpdateCanEditInputs();
-
-    partial void OnIsLoadingReposChanged(bool value) => UpdateCanEditInputs();
-
-    partial void OnIsResolvingPathsChanged(bool value) => UpdateCanEditInputs();
-
-    private void UpdateCanEditInputs()
-        => CanEditInputs = !IsRunning && !IsLoadingRepos && !IsResolvingPaths;
-
-    /// <summary>Clears the previous run's result surface; called when a new run or load starts.</summary>
-    private void ResetRunResult()
-    {
-        ResultOpen = false;
-        ResultKind = RunResultKind.None;
-        ResultMessage = "";
-    }
-
-    /// <summary>Root folder repositories are placed under: TargetFolder, or TargetFolder\Organization.</summary>
-    public string EffectiveTargetRoot
-    {
-        get
-        {
-            string folder = TargetFolder.Trim();
-            if (folder.Length == 0)
-            {
-                return "";
-            }
-            string org = Organization.Trim();
-            return CreateOrgSubfolder && org.Length > 0 ? Path.Combine(folder, org) : folder;
-        }
-    }
-
-    /// <summary>Example final path for one repository, e.g. C:\src\acme\my-repo.</summary>
-    public string TargetPreview
-    {
-        get
-        {
-            string root = EffectiveTargetRoot;
-            return root.Length == 0 ? "" : Path.Combine(root, _sampleRepoName ?? "my-repo");
-        }
-    }
-
-    partial void OnTargetFolderChanged(string value) => NotifyTargetPathChanged();
-
-    partial void OnOrganizationChanged(string value)
-    {
-        NotifyTargetPathChanged();
-        OnPropertyChanged(nameof(IsTableStale));
-        OnPropertyChanged(nameof(StaleTableMessage));
-        SyncCommand.NotifyCanExecuteChanged();
-    }
-
-    /// <summary>Records a failed load or lookup on the error surface (and the live region).</summary>
-    private void ShowLoadError(string title, string message)
-    {
-        StatusText = message;
-        LoadErrorTitle = title;
-        LoadErrorMessage = message;
-        LoadErrorOpen = true;
-    }
-
-    partial void OnCreateOrgSubfolderChanged(bool value) => NotifyTargetPathChanged();
-
-    private void NotifyTargetPathChanged()
-    {
-        OnPropertyChanged(nameof(EffectiveTargetRoot));
-        OnPropertyChanged(nameof(TargetPreview));
-    }
-
-    // Runs on the UI thread (Token is only set from UI handlers), so the async
-    // continuations below stay on the UI thread and may touch Organizations directly.
-    partial void OnTokenChanged(string value)
-    {
-        // The value itself never reaches the log; its length is enough to tell a
-        // paste from a cleared box when reading back a session (#40). Construction
-        // seeds the property (empty, or the vault token) and is not a user action.
-        if (_constructed)
-        {
-            _log.Info(value.Length == 0
-                ? $"Token cleared in workspace '{DisplayName}'."
-                : $"Token entered in workspace '{DisplayName}' ({value.Length} characters).");
-        }
-        _ = RefreshOrganizationsAsync();
-    }
-
-    /// <summary>Records that the user opened the target folder from the results bar (#40).</summary>
-    public void NoteFolderOpened() => _log.Info($"Opened folder '{EffectiveTargetRoot}'.");
-
-    /// <summary>Asks every row to re-evaluate its theme-dependent presentation (see <see cref="RepoItemViewModel.RefreshPresentation"/>).</summary>
-    public void RefreshPresentation()
-    {
-        foreach (RepoItemViewModel item in Repos)
-        {
-            item.RefreshPresentation();
-        }
-    }
-
-    private bool _disposed;
-
-    /// <summary>
-    /// Stops the in-flight org lookup and path recovery, if any. Idempotent: the shell
-    /// disposes workspaces on eviction and again on window close, and a second call
-    /// used to throw ObjectDisposedException from the lifetime token source (#31).
-    /// </summary>
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-        _disposed = true;
-        _orgLoadCts?.Cancel();
-        _orgLoadCts?.Dispose();
-        _orgLoadCts = null;
-        _lifetimeCts.Cancel();
-        _lifetimeCts.Dispose();
-    }
-
-    /// <summary>Debounced: each token edit cancels the previous lookup.</summary>
-    private async Task RefreshOrganizationsAsync()
-    {
-        _orgLoadCts?.Cancel();
-        _orgLoadCts?.Dispose();
-        var cts = _orgLoadCts = new CancellationTokenSource();
-        // Captured before any successor can dispose cts; used everywhere below.
-        CancellationToken lookupToken = cts.Token;
-
-        string token = Token.Trim();
-        if (token.Length < 10)
-        {
-            Organizations.Clear();
-            // The newest invocation owns the flag: a canceled predecessor deliberately
-            // leaves it alone, so an early return must clear any spinner it left behind.
+   private readonly IRepositoryLister _lister;
+
+   private readonly IGitClient _git;
+
+   private readonly IWslCloner _wsl;
+
+   /// <summary>Result of the one-time WSL probe; null until the first path recovery asks for it.</summary>
+   private WslAvailability? _wslAvailability;
+
+   private readonly IOrganizationLister _orgLister;
+
+   private readonly Func<Action<RepoProgress>, IProgress<RepoProgress>> _progressFactory;
+
+   private readonly TimeSpan _orgLookupDebounce;
+
+   private readonly IActivityLog _log;
+
+   private readonly Account? _account;
+
+   private readonly AccountsStore? _accountsStore;
+
+   private readonly Dictionary<string, RepoItemViewModel> _itemsByName = new(StringComparer.OrdinalIgnoreCase);
+
+   private CancellationTokenSource? _orgLoadCts;
+
+   /// <summary>
+   /// Position of every row in <see cref="Repos"/>; rebuilt on load and sort. Lets
+   /// progress-driven membership changes find a row's slot in <see cref="FilteredRepos"/>
+   /// by binary search instead of rebuilding the whole bound list (#30).
+   /// </summary>
+   private readonly Dictionary<RepoItemViewModel, int> _reposIndex = new();
+
+   /// <summary>Mirror of <see cref="FilteredRepos"/> for O(1) membership checks.</summary>
+   private readonly HashSet<RepoItemViewModel> _filteredSet = new();
+
+   /// <summary>Canceled on dispose so an in-flight path recovery dies with the workspace.</summary>
+   private readonly CancellationTokenSource _lifetimeCts = new();
+
+   /// <summary>
+   /// Runs one sync pass; the real <see cref="OrgSyncEngine"/> by default. A test seam:
+   /// the engine swallows cancellation into a summary, so the only way to exercise the
+   /// view model's own <see cref="OperationCanceledException"/> handling is to inject a
+   /// runner that throws it.
+   /// </summary>
+   internal Func<SyncRequest, IReadOnlyList<RepoDescriptor>, IProgress<RepoProgress>, CancellationToken, Task<SyncSummary>>? SyncRunner
+   {
+      get;
+      set;
+   }
+
+   /// <summary>Breaks the AllSelected &lt;-&gt; item.IsSelected feedback loop while one side updates the other.</summary>
+   private bool _syncingSelection;
+
+   /// <summary>False until the constructor finished seeding properties; gates user-action logging.</summary>
+   private readonly bool _constructed;
+
+   /// <summary>First repository name from the last load; makes <see cref="TargetPreview"/> concrete.</summary>
+   private string? _sampleRepoName;
+
+   /// <summary>
+   /// Rows captured for the in-flight (or most recent) sync run. Progress is scoped to
+   /// this set (#22): <see cref="TotalCount"/>/<see cref="CompletedCount"/> describe the
+   /// run, not the whole table. Empty until the first run and reset by each load.
+   /// </summary>
+   private IReadOnlyList<RepoItemViewModel> _runSet = [];
+
+
+
+   /// <summary>
+   /// Production dependencies by default; pass fakes for testing. The default progress
+   /// factory is <see cref="Progress{T}"/>, which marshals via the SynchronizationContext
+   /// captured at construction (the UI thread in the app); tests inject a synchronous one.
+   /// A non-null <paramref name="account"/> seeds the workspace from that profile — its
+   /// organization, target folder, subfolder preference, and concurrency — and pulls the
+   /// token from <paramref name="tokenVault"/> (the Token setter's org lookup fires
+   /// naturally); finished syncs are then recorded on <paramref name="accountsStore"/>.
+   /// </summary>
+   public WorkspaceViewModel(
+       IRepositoryLister? lister = null,
+       IGitClient? git = null,
+       IOrganizationLister? orgLister = null,
+       Func<Action<RepoProgress>, IProgress<RepoProgress>>? progressFactory = null,
+       TimeSpan? orgLookupDebounce = null,
+       IActivityLog? log = null,
+       Account? account = null,
+       ITokenVault? tokenVault = null,
+       AccountsStore? accountsStore = null,
+       IWslCloner? wsl = null)
+   {
+      _lister = lister ?? new GitHubRepositoryLister();
+      _git = git ?? new LibGit2GitClient();
+      _wsl = wsl ?? new WslCloner();
+      _orgLister = orgLister ?? new GitHubOrganizationLister();
+      _progressFactory = progressFactory ?? (handler => new Progress<RepoProgress>(handler));
+      _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
+      _log = log ?? new FileActivityLog();
+      _account = account;
+      _accountsStore = accountsStore;
+      Organization = "";
+      Token = "";
+      TargetFolder = "";
+      NameFilter = "";
+      BranchFilter = "";
+      MaxConcurrency = AppSettings.DefaultConcurrency;
+      StatusText = "";
+      ResultMessage = "";
+      LoadErrorTitle = "";
+      LoadErrorMessage = "";
+      AllSelected = true;
+      CanEditInputs = true;
+
+      if(account is not null)
+      {
+         Organization = account.Organization;
+         TargetFolder = account.TargetRoot;
+         CreateOrgSubfolder = account.CreateOrgSubfolder;
+         MaxConcurrency = account.MaxConcurrency;
+         // The Token setter's existing org lookup fires naturally with the vault token.
+         Token = tokenVault?.TryRetrieve(account.Id) ?? "";
+      }
+      _constructed = true;
+   }
+
+
+
+   /// <summary>Id of the account this workspace was created for, or null for Quick Sync.</summary>
+   public Guid? AccountId => _account?.Id;
+
+
+
+   /// <summary>Name shown for this workspace in navigation: the account's name, or "Quick Sync".</summary>
+   public string DisplayName => _account?.Name ?? "Quick Sync";
+
+
+
+   public ObservableCollection<RepoItemViewModel> Repos { get; } = new();
+
+   /// <summary>
+   /// The rows the table shows: the subset of <see cref="Repos"/> matching
+   /// <see cref="Filter"/>, in the table's current sort order. Rebuilt when the filter
+   /// changes, a load completes, a run starts or ends, and on terminal row transitions.
+   /// </summary>
+   public ObservableCollection<RepoItemViewModel> FilteredRepos { get; } = new();
+
+   /// <summary>
+   /// Rows with a git operation in flight right now; feeds the pinned active strip.
+   /// Maintained incrementally from progress reports, so its size is bounded by
+   /// <see cref="MaxConcurrency"/>. Cleared when a run starts and again when it ends.
+   /// </summary>
+   public ObservableCollection<RepoItemViewModel> ActiveRepos { get; } = new();
+
+   /// <summary>Organizations discovered from the current token; feeds the org dropdown.</summary>
+   public ObservableCollection<string> Organizations { get; } = new();
+
+   [ObservableProperty]
+   [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
+   public partial string Organization { get; set; }
+
+   [ObservableProperty]
+   [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
+   public partial string Token { get; set; }
+
+   [ObservableProperty]
+   [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
+   public partial string TargetFolder { get; set; }
+
+   [ObservableProperty]
+   public partial int MaxConcurrency { get; set; }
+
+   [ObservableProperty]
+   [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
+   [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
+   [NotifyCanExecuteChangedFor(nameof(RetryFailedCommand))]
+   [NotifyCanExecuteChangedFor(nameof(ResolvePathsCommand))]
+   public partial bool IsRunning { get; set; }
+
+   [ObservableProperty]
+   public partial string StatusText { get; set; }
+
+   [ObservableProperty]
+   public partial int CompletedCount { get; set; }
+
+   [ObservableProperty]
+   public partial int TotalCount { get; set; }
+
+   [ObservableProperty]
+   public partial bool IsLoadingOrgs { get; set; }
+
+   /// <summary>True while <see cref="LoadReposCommand"/> is listing repositories.</summary>
+   [ObservableProperty]
+   [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
+   [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
+   [NotifyCanExecuteChangedFor(nameof(RetryFailedCommand))]
+   public partial bool IsLoadingRepos { get; set; }
+
+   /// <summary>
+   /// True while a path-recovery checkout runs. Recovery writes a repository's working
+   /// tree outside a sync run, so every other git entry point is locked out for its
+   /// duration — two concurrent operations on one directory corrupt it.
+   /// </summary>
+   [ObservableProperty]
+   [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
+   [NotifyCanExecuteChangedFor(nameof(SyncCommand))]
+   [NotifyCanExecuteChangedFor(nameof(RetryFailedCommand))]
+   [NotifyCanExecuteChangedFor(nameof(ResolvePathsCommand))]
+   public partial bool IsResolvingPaths { get; set; }
+
+   /// <summary>When set, repositories are placed under TargetFolder\Organization.</summary>
+   [ObservableProperty]
+   public partial bool CreateOrgSubfolder { get; set; }
+
+   /// <summary>
+   /// Header checkbox state: setting it checks or unchecks every VISIBLE row (the rows
+   /// in <see cref="FilteredRepos"/>), and it reads true when every visible row is
+   /// selected. With no filter active that is every row; with a filter it makes
+   /// "filter, then select what you see" the subset workflow (#30). Hidden rows keep
+   /// their selection and still sync.
+   /// </summary>
+   [ObservableProperty]
+   public partial bool AllSelected { get; set; }
+
+   /// <summary>
+   /// Organization whose repositories the table currently holds (trimmed, as loaded);
+   /// null before the first successful load.
+   /// </summary>
+   [ObservableProperty]
+   [NotifyPropertyChangedFor(nameof(IsTableStale))]
+   [NotifyPropertyChangedFor(nameof(StaleTableMessage))]
+   public partial string? LoadedOrganization { get; set; }
+
+
+
+   /// <summary>
+   /// True when <see cref="Organization"/> was edited after a load: the table still
+   /// shows the previous organization's rows while the chip and target path describe
+   /// the new one. Sync is blocked until a reload replaces the rows (#30).
+   /// </summary>
+   public bool IsTableStale
+       => LoadedOrganization is not null
+           && !string.Equals(Organization.Trim(), LoadedOrganization, StringComparison.OrdinalIgnoreCase);
+
+
+
+   /// <summary>One-line explanation shown while <see cref="IsTableStale"/>; empty otherwise.</summary>
+   public string StaleTableMessage
+       => IsTableStale
+           ? $"The table still shows '{LoadedOrganization}'. Reload to list '{Organization.Trim()}' before syncing."
+           : "";
+
+
+
+   /// <summary>Title of the error surface for a failed load or organization lookup.</summary>
+   [ObservableProperty]
+   public partial string LoadErrorTitle { get; set; }
+
+   /// <summary>Message of the most recent failed load or organization lookup; empty when none.</summary>
+   [ObservableProperty]
+   public partial string LoadErrorMessage { get; set; }
+
+   /// <summary>
+   /// True while the load-error surface is showing. Set by a failed load or
+   /// organization lookup, cleared when the next load starts or a lookup succeeds; the
+   /// page two-way binds it so the user can dismiss the bar (#30).
+   /// </summary>
+   [ObservableProperty]
+   public partial bool LoadErrorOpen { get; set; }
+
+   /// <summary>True once a sync run has finished (successfully, canceled, or faulted).</summary>
+   [ObservableProperty]
+   public partial bool HasCompletedRun { get; set; }
+
+   /// <summary>True while any row is in the Failed state; drives the navigation badge.</summary>
+   [ObservableProperty]
+   public partial bool HasFailedRepos { get; set; }
+
+   /// <summary>Column the table is currently sorted by, or null for load order.</summary>
+   [ObservableProperty]
+   public partial string? SortColumn { get; set; }
+
+   [ObservableProperty]
+   public partial bool SortDescending { get; set; }
+
+   /// <summary>Which rows the repository table shows; defaults to <see cref="RepoFilter.All"/>.</summary>
+   [ObservableProperty]
+   public partial RepoFilter Filter { get; set; }
+
+   /// <summary>
+   /// Column filter: case-insensitive substring the repository name must contain.
+   /// Empty (the default) matches everything. Composes with <see cref="Filter"/>
+   /// and the other column filters; selection state is unaffected — hidden rows
+   /// stay selected and still sync.
+   /// </summary>
+   [ObservableProperty]
+   public partial string NameFilter { get; set; }
+
+   /// <summary>Column filter: case-insensitive substring the branch name must contain.</summary>
+   [ObservableProperty]
+   public partial string BranchFilter { get; set; }
+
+   /// <summary>Column filter: null shows all, true only archived, false only unarchived.</summary>
+   [ObservableProperty]
+   public partial bool? ArchivedFilter { get; set; }
+
+   /// <summary>Number of rows currently selected for the next sync.</summary>
+   [ObservableProperty]
+   public partial int SelectedCount { get; set; }
+
+
+
+   /// <summary>Caption for the primary sync button, pluralized for the current selection.</summary>
+   public string SyncButtonLabel => SelectedCount == 1 ? "Sync 1 repo" : $"Sync {SelectedCount} repos";
+
+
+
+   /// <summary>True when the connect inputs may be edited: no load and no run in flight.</summary>
+   [ObservableProperty]
+   public partial bool CanEditInputs { get; set; }
+
+   /// <summary>
+   /// True once this workspace has completed its first successful repository load;
+   /// drives the connect-card vs workspace visibility switch. Never reset.
+   /// </summary>
+   [ObservableProperty]
+   public partial bool HasLoadedRepos { get; set; }
+
+   /// <summary>Outcome of the most recent run; maps to the results InfoBar's severity.</summary>
+   [ObservableProperty]
+   public partial RunResultKind ResultKind { get; set; }
+
+   /// <summary>Summary or error line of the most recent run, shown in the results InfoBar.</summary>
+   [ObservableProperty]
+   public partial string ResultMessage { get; set; }
+
+   /// <summary>
+   /// True while the results InfoBar is showing: set when a run ends, cleared when the
+   /// next run or load starts. The page two-way binds it so the user can dismiss the bar.
+   /// </summary>
+   [ObservableProperty]
+   public partial bool ResultOpen { get; set; }
+
+
+
+   partial void OnFilterChanged(RepoFilter value) => RebuildFilteredRepos();
+
+
+
+   partial void OnNameFilterChanged(string value) => RebuildFilteredRepos();
+
+
+
+   partial void OnBranchFilterChanged(string value) => RebuildFilteredRepos();
+
+
+
+   partial void OnArchivedFilterChanged(bool? value) => RebuildFilteredRepos();
+
+
+
+   partial void OnSelectedCountChanged(int value) => OnPropertyChanged(nameof(SyncButtonLabel));
+
+
+
+   partial void OnIsRunningChanged(bool value) => UpdateCanEditInputs();
+
+
+
+   partial void OnIsLoadingReposChanged(bool value) => UpdateCanEditInputs();
+
+
+
+   partial void OnIsResolvingPathsChanged(bool value) => UpdateCanEditInputs();
+
+
+
+   private void UpdateCanEditInputs()
+       => CanEditInputs = !IsRunning && !IsLoadingRepos && !IsResolvingPaths;
+
+
+
+   /// <summary>Clears the previous run's result surface; called when a new run or load starts.</summary>
+   private void ResetRunResult()
+   {
+      ResultOpen = false;
+      ResultKind = RunResultKind.None;
+      ResultMessage = "";
+   }
+
+
+
+   /// <summary>Root folder repositories are placed under: TargetFolder, or TargetFolder\Organization.</summary>
+   public string EffectiveTargetRoot
+   {
+      get
+      {
+         string folder = TargetFolder.Trim();
+         if(folder.Length == 0)
+         {
+            return "";
+         }
+         string org = Organization.Trim();
+         return CreateOrgSubfolder && org.Length > 0 ? Path.Combine(folder, org) : folder;
+      }
+   }
+
+
+
+   /// <summary>Example final path for one repository, e.g. C:\src\acme\my-repo.</summary>
+   public string TargetPreview
+   {
+      get
+      {
+         string root = EffectiveTargetRoot;
+         return root.Length == 0 ? "" : Path.Combine(root, _sampleRepoName ?? "my-repo");
+      }
+   }
+
+
+
+   partial void OnTargetFolderChanged(string value) => NotifyTargetPathChanged();
+
+
+
+   partial void OnOrganizationChanged(string value)
+   {
+      NotifyTargetPathChanged();
+      OnPropertyChanged(nameof(IsTableStale));
+      OnPropertyChanged(nameof(StaleTableMessage));
+      SyncCommand.NotifyCanExecuteChanged();
+   }
+
+
+
+   /// <summary>Records a failed load or lookup on the error surface (and the live region).</summary>
+   private void ShowLoadError(string title, string message)
+   {
+      StatusText = message;
+      LoadErrorTitle = title;
+      LoadErrorMessage = message;
+      LoadErrorOpen = true;
+   }
+
+
+
+   partial void OnCreateOrgSubfolderChanged(bool value) => NotifyTargetPathChanged();
+
+
+
+   private void NotifyTargetPathChanged()
+   {
+      OnPropertyChanged(nameof(EffectiveTargetRoot));
+      OnPropertyChanged(nameof(TargetPreview));
+   }
+
+
+
+   // Runs on the UI thread (Token is only set from UI handlers), so the async
+   // continuations below stay on the UI thread and may touch Organizations directly.
+   partial void OnTokenChanged(string value)
+   {
+      // The value itself never reaches the log; its length is enough to tell a
+      // paste from a cleared box when reading back a session (#40). Construction
+      // seeds the property (empty, or the vault token) and is not a user action.
+      if(_constructed)
+      {
+         _log.Info(value.Length == 0
+             ? $"Token cleared in workspace '{DisplayName}'."
+             : $"Token entered in workspace '{DisplayName}' ({value.Length} characters).");
+      }
+      _ = RefreshOrganizationsAsync();
+   }
+
+
+
+   /// <summary>Records that the user opened the target folder from the results bar (#40).</summary>
+   public void NoteFolderOpened() => _log.Info($"Opened folder '{EffectiveTargetRoot}'.");
+
+
+
+   /// <summary>Asks every row to re-evaluate its theme-dependent presentation (see <see cref="RepoItemViewModel.RefreshPresentation"/>).</summary>
+   public void RefreshPresentation()
+   {
+      foreach(RepoItemViewModel item in Repos)
+      {
+         item.RefreshPresentation();
+      }
+   }
+
+
+
+   private bool _disposed;
+
+
+
+   /// <summary>
+   /// Stops the in-flight org lookup and path recovery, if any. Idempotent: the shell
+   /// disposes workspaces on eviction and again on window close, and a second call
+   /// used to throw ObjectDisposedException from the lifetime token source (#31).
+   /// </summary>
+   public void Dispose()
+   {
+      if(_disposed)
+      {
+         return;
+      }
+      _disposed = true;
+      _orgLoadCts?.Cancel();
+      _orgLoadCts?.Dispose();
+      _orgLoadCts = null;
+      _lifetimeCts.Cancel();
+      _lifetimeCts.Dispose();
+   }
+
+
+
+   /// <summary>Debounced: each token edit cancels the previous lookup.</summary>
+   private async Task RefreshOrganizationsAsync()
+   {
+      _orgLoadCts?.Cancel();
+      _orgLoadCts?.Dispose();
+      CancellationTokenSource cts = _orgLoadCts = new CancellationTokenSource();
+      // Captured before any successor can dispose cts; used everywhere below.
+      CancellationToken lookupToken = cts.Token;
+
+      string token = Token.Trim();
+      if(token.Length < 10)
+      {
+         Organizations.Clear();
+         // The newest invocation owns the flag: a canceled predecessor deliberately
+         // leaves it alone, so an early return must clear any spinner it left behind.
+         IsLoadingOrgs = false;
+         return; // not plausibly a complete PAT yet
+      }
+
+      try
+      {
+         await Task.Delay(_orgLookupDebounce, lookupToken); // debounce keystrokes / rapid pastes
+         IsLoadingOrgs = true;
+         _log.Info("Organization lookup started.");
+         IReadOnlyList<string> orgs = await _orgLister.ListOrganizationsAsync(token, lookupToken);
+         lookupToken.ThrowIfCancellationRequested();
+         _log.Info($"Organization lookup finished: {orgs.Count} organizations and accounts visible.");
+
+         // An editable ComboBox resets its Text when its ItemsSource is mutated,
+         // and the TwoWay binding would wipe a value that was already set — an
+         // account workspace seeds Organization in the constructor, and this
+         // refresh lands ~a second later. Capture, restore, and force a binding
+         // resync so the seeded (or typed) organization survives the refresh.
+         string organizationBeforeRefresh = Organization;
+         Organizations.Clear();
+         foreach(string org in orgs)
+         {
+            Organizations.Add(org);
+         }
+         Organization = organizationBeforeRefresh;
+         OnPropertyChanged(nameof(Organization));
+         LoadErrorOpen = false; // a lookup that works clears a stale lookup failure
+                                // The production lister always lists the token's own account first, so a
+                                // single entry means no organizations were visible.
+         StatusText = orgs.Count <= 1
+             ? "Only your personal account is visible — add read:org (classic) for organizations, or type an org name manually."
+             : $"Found {orgs.Count} organizations and accounts.";
+      }
+      catch(OperationCanceledException)
+      {
+         // superseded by a newer token edit
+      }
+      catch(Exception ex)
+      {
+         if(_orgLoadCts == cts)
+         {
+            _log.Error($"Organization lookup failed: {ex.Message}", ex);
+            ShowLoadError("Could not list organizations", ex.Message);
+         }
+      }
+      finally
+      {
+         if(_orgLoadCts == cts)
+         {
             IsLoadingOrgs = false;
-            return; // not plausibly a complete PAT yet
-        }
+         }
+      }
+   }
 
-        try
-        {
-            await Task.Delay(_orgLookupDebounce, lookupToken); // debounce keystrokes / rapid pastes
-            IsLoadingOrgs = true;
-            _log.Info("Organization lookup started.");
-            var orgs = await _orgLister.ListOrganizationsAsync(token, lookupToken);
-            lookupToken.ThrowIfCancellationRequested();
-            _log.Info($"Organization lookup finished: {orgs.Count} organizations and accounts visible.");
 
-            // An editable ComboBox resets its Text when its ItemsSource is mutated,
-            // and the TwoWay binding would wipe a value that was already set — an
-            // account workspace seeds Organization in the constructor, and this
-            // refresh lands ~a second later. Capture, restore, and force a binding
-            // resync so the seeded (or typed) organization survives the refresh.
-            string organizationBeforeRefresh = Organization;
-            Organizations.Clear();
-            foreach (string org in orgs)
-            {
-                Organizations.Add(org);
-            }
-            Organization = organizationBeforeRefresh;
-            OnPropertyChanged(nameof(Organization));
-            LoadErrorOpen = false; // a lookup that works clears a stale lookup failure
-            // The production lister always lists the token's own account first, so a
-            // single entry means no organizations were visible.
-            StatusText = orgs.Count <= 1
-                ? "Only your personal account is visible — add read:org (classic) for organizations, or type an org name manually."
-                : $"Found {orgs.Count} organizations and accounts.";
-        }
-        catch (OperationCanceledException)
-        {
-            // superseded by a newer token edit
-        }
-        catch (Exception ex)
-        {
-            if (_orgLoadCts == cts)
-            {
-                _log.Error($"Organization lookup failed: {ex.Message}", ex);
-                ShowLoadError("Could not list organizations", ex.Message);
-            }
-        }
-        finally
-        {
-            if (_orgLoadCts == cts)
-            {
-                IsLoadingOrgs = false;
-            }
-        }
-    }
 
-    /// <summary>
-    /// Double-typed view of <see cref="MaxConcurrency"/> for NumberBox.Value, which binds a double.
-    /// </summary>
-    public double MaxConcurrencyValue
-    {
-        get => MaxConcurrency;
-        set
-        {
-            int clamped = double.IsNaN(value)
-                ? AppSettings.DefaultConcurrency
-                : (int)Math.Clamp(Math.Round(value), AppSettings.MinConcurrency, AppSettings.MaxConcurrency);
-            if (MaxConcurrency != clamped)
-            {
-                MaxConcurrency = clamped; // OnMaxConcurrencyChanged notifies MaxConcurrencyValue too
-            }
-            else
-            {
-                // The int did not change (e.g. the box was cleared to NaN): push the
-                // canonical value back so the control redisplays it.
-                OnPropertyChanged(nameof(MaxConcurrencyValue));
-            }
-        }
-    }
+   /// <summary>
+   /// Double-typed view of <see cref="MaxConcurrency"/> for NumberBox.Value, which binds a double.
+   /// </summary>
+   public double MaxConcurrencyValue
+   {
+      get => MaxConcurrency;
+      set
+      {
+         int clamped = double.IsNaN(value)
+             ? AppSettings.DefaultConcurrency
+             : (int)Math.Clamp(Math.Round(value), AppSettings.MinConcurrency, AppSettings.MaxConcurrency);
+         if(MaxConcurrency != clamped)
+         {
+            MaxConcurrency = clamped; // OnMaxConcurrencyChanged notifies MaxConcurrencyValue too
+         }
+         else
+         {
+            // The int did not change (e.g. the box was cleared to NaN): push the
+            // canonical value back so the control redisplays it.
+            OnPropertyChanged(nameof(MaxConcurrencyValue));
+         }
+      }
+   }
 
-    partial void OnMaxConcurrencyChanged(int value) => OnPropertyChanged(nameof(MaxConcurrencyValue));
 
-    // ---------------------------------------------------------------- selection
 
-    /// <summary>Applies a header-checkbox change to every row.</summary>
-    partial void OnAllSelectedChanged(bool value)
-    {
-        if (_syncingSelection)
-        {
-            return; // being recomputed from an item change; do not push back down
-        }
+   partial void OnMaxConcurrencyChanged(int value) => OnPropertyChanged(nameof(MaxConcurrencyValue));
 
-        _syncingSelection = true;
-        try
-        {
-            foreach (RepoItemViewModel item in FilteredRepos)
-            {
-                item.IsSelected = value;
-            }
-        }
-        finally
-        {
+
+
+   // ---------------------------------------------------------------- selection
+
+   /// <summary>Applies a header-checkbox change to every row.</summary>
+   partial void OnAllSelectedChanged(bool value)
+   {
+      if(_syncingSelection)
+      {
+         return; // being recomputed from an item change; do not push back down
+      }
+
+      _syncingSelection = true;
+      try
+      {
+         foreach(RepoItemViewModel item in FilteredRepos)
+         {
+            item.IsSelected = value;
+         }
+      }
+      finally
+      {
+         _syncingSelection = false;
+      }
+      RecomputeSelectedCount();
+      SyncCommand.NotifyCanExecuteChanged();
+   }
+
+
+
+   private void OnItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+   {
+      if(string.Equals(e.PropertyName, nameof(RepoItemViewModel.HasPathIssue), StringComparison.Ordinal))
+      {
+         // Parameterized command: the row's 'Resolve...' button re-queries CanExecute.
+         ResolvePathsCommand.NotifyCanExecuteChanged();
+         return;
+      }
+      if(!string.Equals(e.PropertyName, nameof(RepoItemViewModel.IsSelected), StringComparison.Ordinal))
+      {
+         return;
+      }
+      if(!_syncingSelection)
+      {
+         // A header push (or any other batch) recomputes once after its loop
+         // instead of per row — including the command re-query, whose CanSync
+         // scans every row (#30).
+         RecomputeSelectedCount();
+         UpdateAllSelectedFromItems();
+         SyncCommand.NotifyCanExecuteChanged();
+      }
+   }
+
+
+
+   private void RecomputeSelectedCount() => SelectedCount = Repos.Count(r => r.IsSelected);
+
+
+
+   /// <summary>Header state follows the VISIBLE rows; see <see cref="AllSelected"/>.</summary>
+   private void UpdateAllSelectedFromItems()
+   {
+      bool all = FilteredRepos.All(r => r.IsSelected);
+      if(AllSelected != all)
+      {
+         _syncingSelection = true;
+         try
+         {
+            AllSelected = all;
+         }
+         finally
+         {
             _syncingSelection = false;
-        }
-        RecomputeSelectedCount();
-        SyncCommand.NotifyCanExecuteChanged();
-    }
+         }
+      }
+   }
 
-    private void OnItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(RepoItemViewModel.HasPathIssue))
-        {
-            // Parameterized command: the row's 'Resolve...' button re-queries CanExecute.
-            ResolvePathsCommand.NotifyCanExecuteChanged();
-            return;
-        }
-        if (e.PropertyName != nameof(RepoItemViewModel.IsSelected))
-        {
-            return;
-        }
-        if (!_syncingSelection)
-        {
-            // A header push (or any other batch) recomputes once after its loop
-            // instead of per row — including the command re-query, whose CanSync
-            // scans every row (#30).
-            RecomputeSelectedCount();
-            UpdateAllSelectedFromItems();
-            SyncCommand.NotifyCanExecuteChanged();
-        }
-    }
 
-    private void RecomputeSelectedCount() => SelectedCount = Repos.Count(r => r.IsSelected);
 
-    /// <summary>Header state follows the VISIBLE rows; see <see cref="AllSelected"/>.</summary>
-    private void UpdateAllSelectedFromItems()
-    {
-        bool all = FilteredRepos.All(r => r.IsSelected);
-        if (AllSelected != all)
-        {
-            _syncingSelection = true;
+   // ---------------------------------------------------------------- load
+
+   private bool CanLoadRepos() =>
+       !IsRunning
+       && !IsLoadingRepos
+       && !IsResolvingPaths
+       && !string.IsNullOrWhiteSpace(Organization)
+       && !string.IsNullOrWhiteSpace(Token);
+
+
+
+   /// <summary>Phase one: lists the organization's repositories and fills the table, all selected.</summary>
+   [RelayCommand(CanExecute = nameof(CanLoadRepos))]
+   private async Task LoadReposAsync()
+   {
+      IsLoadingRepos = true;
+      ResetRunResult();
+      LoadErrorOpen = false;
+      try
+      {
+         string organization = Organization.Trim();
+         StatusText = "Loading repositories...";
+         _log.Info($"Loading repositories for organization '{organization}'.");
+
+         var descriptors = (await _lister
+             .ListOrganizationRepositoriesAsync(organization, Token.Trim()))
+             // Names key the row dictionary; a duplicate (possible from pagination
+             // shifts) must not produce two rows fighting over one folder.
+             .DistinctBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+             .ToList();
+
+         foreach(RepoItemViewModel existing in Repos)
+         {
+            existing.PropertyChanged -= OnItemPropertyChanged;
+         }
+         Repos.Clear();
+         _itemsByName.Clear();
+
+         foreach(RepoDescriptor descriptor in descriptors)
+         {
+            var item = new RepoItemViewModel(descriptor);
+            item.PropertyChanged += OnItemPropertyChanged;
+            _itemsByName[descriptor.Name] = item;
+            Repos.Add(item);
+         }
+
+         TotalCount = Repos.Count;
+         CompletedCount = 0;
+         _runSet = []; // progress is table-scoped again until the next run
+         SortColumn = null;
+         SortDescending = false;
+         _sampleRepoName = Repos.Count > 0 ? Repos[0].Name : null;
+         RebuildReposIndex();
+         LoadedOrganization = organization;
+         HasLoadedRepos = true;
+         StatusText = $"{Repos.Count} repositories loaded.";
+         _log.Info($"Loaded {Repos.Count} repositories for organization '{organization}'.");
+      }
+      catch(Exception ex)
+      {
+         // The message is good (the listers translate 401/404/rate limits); the
+         // surface must be too — an InfoBar with Retry, not caption text at the
+         // bottom of the window (#30).
+         ShowLoadError("Could not load repositories", ex.Message);
+         _log.Error($"Loading repositories failed: {ex.Message}", ex);
+      }
+      finally
+      {
+         IsLoadingRepos = false;
+         NotifyTargetPathChanged();
+         RecomputeSelectedCount();
+         RebuildFilteredRepos(); // also re-derives AllSelected from the visible rows
+         SyncCommand.NotifyCanExecuteChanged();
+         RetryFailedCommand.NotifyCanExecuteChanged();
+         RecomputeHasFailedRepos();
+      }
+   }
+
+
+
+   // ---------------------------------------------------------------- sync
+
+   private bool CanSync() =>
+       !IsRunning
+       && !IsLoadingRepos
+       && !IsResolvingPaths
+       && !IsTableStale
+       && !string.IsNullOrWhiteSpace(TargetFolder)
+       && Repos.Any(r => r.IsSelected);
+
+
+
+   /// <summary>Phase two: clones or updates the selected repositories.</summary>
+   [RelayCommand(CanExecute = nameof(CanSync), IncludeCancelCommand = true)]
+   private async Task SyncAsync(CancellationToken cancellationToken)
+   {
+      IsRunning = true;
+      ResetRunResult();
+      ActiveRepos.Clear();
+      try
+      {
+         var selected = Repos.Where(r => r.IsSelected).ToList();
+         foreach(RepoItemViewModel item in selected)
+         {
+            item.Status = SyncStatus.Queued;
+            item.Error = null;
+            item.Percent = null;
+            item.InvalidPaths = null;
+         }
+         // Progress is run-scoped (#22): the bar and 'N of M' describe this run's
+         // selection, not the whole table; TotalCount keeps the run size afterwards.
+         _runSet = selected;
+         TotalCount = selected.Count;
+         RecomputeCompletedCount();
+         RebuildFilteredRepos(); // every selected row just went back to Queued
+
+         string targetRoot = EffectiveTargetRoot;
+         StatusText = $"Syncing {selected.Count} repositories...";
+         _log.Info($"Sync started: {selected.Count} repositories into '{targetRoot}'.");
+
+         // Constructed on the UI thread: Progress<T> captures the WinUI
+         // SynchronizationContext, so HandleProgress always runs on the UI thread.
+         // Failure logging is layered in front of it so the per-entry file I/O
+         // happens on the engine's worker thread, never on the dispatcher (#30).
+         var progress = new FailureLoggingProgress(_progressFactory(HandleProgress), _log);
+
+         var request = new SyncRequest(
+             Organization.Trim(), Token.Trim(), targetRoot, MaxConcurrency);
+         IReadOnlyList<RepoDescriptor> descriptors = selected.Select(r => r.Descriptor).ToList();
+
+         Func<SyncRequest, IReadOnlyList<RepoDescriptor>, IProgress<RepoProgress>, CancellationToken, Task<SyncSummary>> run =
+             SyncRunner ?? ((req, descs, prog, ct) => new OrgSyncEngine(_lister, _git).SyncAsync(req, descs, prog, ct));
+         SyncSummary summary = await run(request, descriptors, progress, cancellationToken);
+
+         string summaryText = (summary.WasCanceled ? "Canceled" : "Finished")
+             + $": {summary.Cloned} cloned, {summary.Updated} updated, "
+             + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.";
+         StatusText = summaryText;
+         _log.Info(summaryText);
+
+         ResultKind = summary.WasCanceled ? RunResultKind.Canceled
+             : summary.Failed > 0 ? RunResultKind.PartialFailure
+             : RunResultKind.Success;
+         ResultMessage = summaryText;
+
+         if(_account is not null && _accountsStore is not null)
+         {
             try
             {
-                AllSelected = all;
+               _accountsStore.RecordSyncResult(_account.Id, DateTimeOffset.UtcNow, summaryText);
             }
-            finally
+            catch(Exception ex)
             {
-                _syncingSelection = false;
+               // Bookkeeping only: failing to stamp the account must not turn a
+               // completed sync into an error.
+               _log.Error(
+                   $"Failed to record the sync result for account '{_account.Name}': {ex.Message}", ex);
             }
-        }
-    }
+         }
+      }
+      catch(OperationCanceledException)
+      {
+         StatusText = "Canceled";
+         ResultKind = RunResultKind.Canceled;
+         ResultMessage = "Canceled";
+         _log.Info("Sync canceled.");
+      }
+      catch(Exception ex)
+      {
+         StatusText = ex.Message;
+         ResultKind = RunResultKind.Error;
+         ResultMessage = ex.Message;
+         _log.Error($"Sync failed: {ex.Message}", ex);
+      }
+      finally
+      {
+         HasCompletedRun = true;
+         IsRunning = false;
+         ActiveRepos.Clear();
+         RebuildFilteredRepos();
+         ResultOpen = true;
+      }
+   }
 
-    // ---------------------------------------------------------------- load
 
-    private bool CanLoadRepos() =>
-        !IsRunning
-        && !IsLoadingRepos
-        && !IsResolvingPaths
-        && !string.IsNullOrWhiteSpace(Organization)
-        && !string.IsNullOrWhiteSpace(Token);
 
-    /// <summary>Phase one: lists the organization's repositories and fills the table, all selected.</summary>
-    [RelayCommand(CanExecute = nameof(CanLoadRepos))]
-    private async Task LoadReposAsync()
-    {
-        IsLoadingRepos = true;
-        ResetRunResult();
-        LoadErrorOpen = false;
-        try
-        {
-            string organization = Organization.Trim();
-            StatusText = "Loading repositories...";
-            _log.Info($"Loading repositories for organization '{organization}'.");
+   // ---------------------------------------------------------------- retry
 
-            var descriptors = (await _lister
-                .ListOrganizationRepositoriesAsync(organization, Token.Trim()))
-                // Names key the row dictionary; a duplicate (possible from pagination
-                // shifts) must not produce two rows fighting over one folder.
-                .DistinctBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+   private bool CanRetryFailed() =>
+       !IsRunning
+       && !IsLoadingRepos
+       && !IsResolvingPaths
+       && Repos.Any(r => r.Status == SyncStatus.Failed);
 
-            foreach (RepoItemViewModel existing in Repos)
-            {
-                existing.PropertyChanged -= OnItemPropertyChanged;
-            }
-            Repos.Clear();
-            _itemsByName.Clear();
 
-            foreach (RepoDescriptor descriptor in descriptors)
-            {
-                var item = new RepoItemViewModel(descriptor);
-                item.PropertyChanged += OnItemPropertyChanged;
-                _itemsByName[descriptor.Name] = item;
-                Repos.Add(item);
-            }
 
-            TotalCount = Repos.Count;
-            CompletedCount = 0;
-            _runSet = []; // progress is table-scoped again until the next run
-            SortColumn = null;
-            SortDescending = false;
-            _sampleRepoName = Repos.Count > 0 ? Repos[0].Name : null;
-            RebuildReposIndex();
-            LoadedOrganization = organization;
-            HasLoadedRepos = true;
-            StatusText = $"{Repos.Count} repositories loaded.";
-            _log.Info($"Loaded {Repos.Count} repositories for organization '{organization}'.");
-        }
-        catch (Exception ex)
-        {
-            // The message is good (the listers translate 401/404/rate limits); the
-            // surface must be too — an InfoBar with Retry, not caption text at the
-            // bottom of the window (#30).
-            ShowLoadError("Could not load repositories", ex.Message);
-            _log.Error($"Loading repositories failed: {ex.Message}", ex);
-        }
-        finally
-        {
-            IsLoadingRepos = false;
-            NotifyTargetPathChanged();
-            RecomputeSelectedCount();
-            RebuildFilteredRepos(); // also re-derives AllSelected from the visible rows
-            SyncCommand.NotifyCanExecuteChanged();
-            RetryFailedCommand.NotifyCanExecuteChanged();
-            RecomputeHasFailedRepos();
-        }
-    }
+   /// <summary>Selects exactly the failed repositories and runs the same sync path again.</summary>
+   [RelayCommand(CanExecute = nameof(CanRetryFailed))]
+   private async Task RetryFailedAsync()
+   {
+      _log.Info($"Retrying {Repos.Count(r => r.Status == SyncStatus.Failed)} failed repositories.");
+      // One batch: per-row recounts and command re-queries would be O(n^2) (#30).
+      _syncingSelection = true;
+      try
+      {
+         foreach(RepoItemViewModel item in Repos)
+         {
+            item.IsSelected = item.Status == SyncStatus.Failed;
+         }
+      }
+      finally
+      {
+         _syncingSelection = false;
+      }
+      RecomputeSelectedCount();
+      UpdateAllSelectedFromItems();
+      SyncCommand.NotifyCanExecuteChanged();
 
-    // ---------------------------------------------------------------- sync
+      // Executing SyncCommand itself keeps SyncCancelCommand working for retry runs.
+      await SyncCommand.ExecuteAsync(null);
+   }
 
-    private bool CanSync() =>
-        !IsRunning
-        && !IsLoadingRepos
-        && !IsResolvingPaths
-        && !IsTableStale
-        && !string.IsNullOrWhiteSpace(TargetFolder)
-        && Repos.Any(r => r.IsSelected);
 
-    /// <summary>Phase two: clones or updates the selected repositories.</summary>
-    [RelayCommand(CanExecute = nameof(CanSync), IncludeCancelCommand = true)]
-    private async Task SyncAsync(CancellationToken cancellationToken)
-    {
-        IsRunning = true;
-        ResetRunResult();
-        ActiveRepos.Clear();
-        try
-        {
-            var selected = Repos.Where(r => r.IsSelected).ToList();
-            foreach (RepoItemViewModel item in selected)
-            {
-                item.Status = SyncStatus.Queued;
-                item.Error = null;
-                item.Percent = null;
-                item.InvalidPaths = null;
-            }
-            // Progress is run-scoped (#22): the bar and 'N of M' describe this run's
-            // selection, not the whole table; TotalCount keeps the run size afterwards.
-            _runSet = selected;
-            TotalCount = selected.Count;
-            RecomputeCompletedCount();
-            RebuildFilteredRepos(); // every selected row just went back to Queued
 
-            string targetRoot = EffectiveTargetRoot;
-            StatusText = $"Syncing {selected.Count} repositories...";
-            _log.Info($"Sync started: {selected.Count} repositories into '{targetRoot}'.");
+   // ---------------------------------------------------------------- path recovery
 
-            // Constructed on the UI thread: Progress<T> captures the WinUI
-            // SynchronizationContext, so HandleProgress always runs on the UI thread.
-            // Failure logging is layered in front of it so the per-entry file I/O
-            // happens on the engine's worker thread, never on the dispatcher (#30).
-            var progress = new FailureLoggingProgress(_progressFactory(HandleProgress), _log);
+   /// <summary>
+   /// Raised when the user asks to resolve a row's Windows-invalid paths. The view
+   /// subscribes and shows recovery UI (the VM stays UI-free), returning the user's
+   /// decision, or null when they cancel. With no subscriber the command does nothing.
+   /// <see cref="IsWslCloneAvailable"/> is settled before the interaction runs, so the
+   /// view can decide whether to offer "Clone in WSL instead".
+   /// </summary>
+   public Func<RepoItemViewModel, Task<PathRecoveryDecision?>>? RecoveryInteraction { get; set; }
 
-            var request = new SyncRequest(
-                Organization.Trim(), Token.Trim(), targetRoot, MaxConcurrency);
-            IReadOnlyList<RepoDescriptor> descriptors = selected.Select(r => r.Descriptor).ToList();
+   /// <summary>
+   /// True when a clone into WSL can be offered as a recovery (#8): wsl.exe exists, the
+   /// default distribution starts, and git runs inside it. Probed once, lazily, the
+   /// first time path recovery is requested; false until then.
+   /// </summary>
+   [ObservableProperty]
+   public partial bool IsWslCloneAvailable { get; private set; }
 
-            Func<SyncRequest, IReadOnlyList<RepoDescriptor>, IProgress<RepoProgress>, CancellationToken, Task<SyncSummary>> run =
-                SyncRunner ?? ((req, descs, prog, ct) => new OrgSyncEngine(_lister, _git).SyncAsync(req, descs, prog, ct));
-            SyncSummary summary = await run(request, descriptors, progress, cancellationToken);
 
-            string summaryText = (summary.WasCanceled ? "Canceled" : "Finished")
-                + $": {summary.Cloned} cloned, {summary.Updated} updated, "
-                + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.";
-            StatusText = summaryText;
-            _log.Info(summaryText);
 
-            ResultKind = summary.WasCanceled ? RunResultKind.Canceled
-                : summary.Failed > 0 ? RunResultKind.PartialFailure
-                : RunResultKind.Success;
-            ResultMessage = summaryText;
+   /// <summary>Why <see cref="IsWslCloneAvailable"/> is false (or the git version when true), for the log and the dialog.</summary>
+   public string WslAvailabilityDetail => _wslAvailability?.Detail ?? "";
 
-            if (_account is not null && _accountsStore is not null)
-            {
-                try
-                {
-                    _accountsStore.RecordSyncResult(_account.Id, DateTimeOffset.UtcNow, summaryText);
-                }
-                catch (Exception ex)
-                {
-                    // Bookkeeping only: failing to stamp the account must not turn a
-                    // completed sync into an error.
-                    _log.Error(
-                        $"Failed to record the sync result for account '{_account.Name}': {ex.Message}", ex);
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            StatusText = "Canceled";
-            ResultKind = RunResultKind.Canceled;
-            ResultMessage = "Canceled";
-            _log.Info("Sync canceled.");
-        }
-        catch (Exception ex)
-        {
-            StatusText = ex.Message;
-            ResultKind = RunResultKind.Error;
-            ResultMessage = ex.Message;
-            _log.Error($"Sync failed: {ex.Message}", ex);
-        }
-        finally
-        {
-            HasCompletedRun = true;
-            IsRunning = false;
-            ActiveRepos.Clear();
-            RebuildFilteredRepos();
-            ResultOpen = true;
-        }
-    }
 
-    // ---------------------------------------------------------------- retry
 
-    private bool CanRetryFailed() =>
-        !IsRunning
-        && !IsLoadingRepos
-        && !IsResolvingPaths
-        && Repos.Any(r => r.Status == SyncStatus.Failed);
+   private async Task EnsureWslProbedAsync(CancellationToken cancellationToken)
+   {
+      if(_wslAvailability is not null)
+      {
+         return;
+      }
+      WslAvailability availability = await _wsl.ProbeAsync(cancellationToken);
+      _wslAvailability = availability;
+      IsWslCloneAvailable = availability.Available;
+      _log.Info(availability.Available
+          ? $"WSL clone available ({availability.Detail})."
+          : $"WSL clone not available: {availability.Detail}");
+   }
 
-    /// <summary>Selects exactly the failed repositories and runs the same sync path again.</summary>
-    [RelayCommand(CanExecute = nameof(CanRetryFailed))]
-    private async Task RetryFailedAsync()
-    {
-        _log.Info($"Retrying {Repos.Count(r => r.Status == SyncStatus.Failed)} failed repositories.");
-        // One batch: per-row recounts and command re-queries would be O(n^2) (#30).
-        _syncingSelection = true;
-        try
-        {
-            foreach (RepoItemViewModel item in Repos)
-            {
-                item.IsSelected = item.Status == SyncStatus.Failed;
-            }
-        }
-        finally
-        {
-            _syncingSelection = false;
-        }
-        RecomputeSelectedCount();
-        UpdateAllSelectedFromItems();
-        SyncCommand.NotifyCanExecuteChanged();
 
-        // Executing SyncCommand itself keeps SyncCancelCommand working for retry runs.
-        await SyncCommand.ExecuteAsync(null);
-    }
 
-    // ---------------------------------------------------------------- path recovery
+   private bool CanResolvePaths(RepoItemViewModel item)
+       => item is not null && item.HasPathIssue && !IsRunning && !IsResolvingPaths;
 
-    /// <summary>
-    /// Raised when the user asks to resolve a row's Windows-invalid paths. The view
-    /// subscribes and shows recovery UI (the VM stays UI-free), returning the user's
-    /// decision, or null when they cancel. With no subscriber the command does nothing.
-    /// <see cref="IsWslCloneAvailable"/> is settled before the interaction runs, so the
-    /// view can decide whether to offer "Clone in WSL instead".
-    /// </summary>
-    public Func<RepoItemViewModel, Task<PathRecoveryDecision?>>? RecoveryInteraction { get; set; }
 
-    /// <summary>
-    /// True when a clone into WSL can be offered as a recovery (#8): wsl.exe exists, the
-    /// default distribution starts, and git runs inside it. Probed once, lazily, the
-    /// first time path recovery is requested; false until then.
-    /// </summary>
-    [ObservableProperty]
-    public partial bool IsWslCloneAvailable { get; private set; }
 
-    /// <summary>Why <see cref="IsWslCloneAvailable"/> is false (or the git version when true), for the log and the dialog.</summary>
-    public string WslAvailabilityDetail => _wslAvailability?.Detail ?? "";
+   /// <summary>
+   /// Asks the view (via <see cref="RecoveryInteraction"/>) how to rename or skip the
+   /// row's invalid paths, then applies that recovery and checks the repository out.
+   /// </summary>
+   [RelayCommand(CanExecute = nameof(CanResolvePaths))]
+   private async Task ResolvePathsAsync(RepoItemViewModel item)
+   {
+      if(item is null || RecoveryInteraction is not { } interaction)
+      {
+         return;
+      }
 
-    private async Task EnsureWslProbedAsync(CancellationToken cancellationToken)
-    {
-        if (_wslAvailability is not null)
-        {
-            return;
-        }
-        WslAvailability availability = await _wsl.ProbeAsync(cancellationToken);
-        _wslAvailability = availability;
-        IsWslCloneAvailable = availability.Available;
-        _log.Info(availability.Available
-            ? $"WSL clone available ({availability.Detail})."
-            : $"WSL clone not available: {availability.Detail}");
-    }
+      _log.Info($"{item.Name}: path recovery requested ({item.InvalidPaths?.Count ?? 0} invalid paths).");
+      await EnsureWslProbedAsync(_lifetimeCts.Token);
+      PathRecoveryDecision? decision = await interaction(item);
+      if(decision is null)
+      {
+         _log.Info($"{item.Name}: path recovery canceled; the repository stays failed.");
+         return; // user canceled; the row keeps its Failed state and payload
+      }
 
-    private bool CanResolvePaths(RepoItemViewModel item)
-        => item is not null && item.HasPathIssue && !IsRunning && !IsResolvingPaths;
+      IsResolvingPaths = true;
+      try
+      {
+         if(decision is PathRecoveryDecision.CloneInWsl)
+         {
+            await CloneInWslAsync(item);
+         }
+         else
+         {
+            await ApplyRecoveryAsync(item, ((PathRecoveryDecision.Apply)decision).Recovery);
+         }
+      }
+      finally
+      {
+         IsResolvingPaths = false;
+      }
+      RecomputeCompletedCount();
+      UpdateFilteredMembership(item);
+      RetryFailedCommand.NotifyCanExecuteChanged();
+   }
 
-    /// <summary>
-    /// Asks the view (via <see cref="RecoveryInteraction"/>) how to rename or skip the
-    /// row's invalid paths, then applies that recovery and checks the repository out.
-    /// </summary>
-    [RelayCommand(CanExecute = nameof(CanResolvePaths))]
-    private async Task ResolvePathsAsync(RepoItemViewModel item)
-    {
-        if (item is null || RecoveryInteraction is not { } interaction)
-        {
-            return;
-        }
 
-        _log.Info($"{item.Name}: path recovery requested ({item.InvalidPaths?.Count ?? 0} invalid paths).");
-        await EnsureWslProbedAsync(_lifetimeCts.Token);
-        PathRecoveryDecision? decision = await interaction(item);
-        if (decision is null)
-        {
-            _log.Info($"{item.Name}: path recovery canceled; the repository stays failed.");
-            return; // user canceled; the row keeps its Failed state and payload
-        }
 
-        IsResolvingPaths = true;
-        try
-        {
-            if (decision is PathRecoveryDecision.CloneInWsl)
-            {
-                await CloneInWslAsync(item);
-            }
-            else
-            {
-                await ApplyRecoveryAsync(item, ((PathRecoveryDecision.Apply)decision).Recovery);
-            }
-        }
-        finally
-        {
-            IsResolvingPaths = false;
-        }
-        RecomputeCompletedCount();
-        UpdateFilteredMembership(item);
-        RetryFailedCommand.NotifyCanExecuteChanged();
-    }
+   private async Task ApplyRecoveryAsync(RepoItemViewModel item, PathRecovery recovery)
+   {
+      string path = Path.Combine(EffectiveTargetRoot, item.Name);
+      try
+      {
+         _log.Info($"{item.Name}: applying path recovery "
+             + $"({recovery.SegmentRenames.Count} renamed, {recovery.SkippedPaths.Count} skipped).");
+         // Pulling shows the row's indeterminate bar while the checkout runs.
+         item.Status = SyncStatus.Pulling;
+         await _git.ApplyRecoveryAsync(path, recovery, _lifetimeCts.Token);
 
-    private async Task ApplyRecoveryAsync(RepoItemViewModel item, PathRecovery recovery)
-    {
-        string path = Path.Combine(EffectiveTargetRoot, item.Name);
-        try
-        {
-            _log.Info($"{item.Name}: applying path recovery "
-                + $"({recovery.SegmentRenames.Count} renamed, {recovery.SkippedPaths.Count} skipped).");
-            // Pulling shows the row's indeterminate bar while the checkout runs.
-            item.Status = SyncStatus.Pulling;
-            await _git.ApplyRecoveryAsync(path, recovery, _lifetimeCts.Token);
+         item.Status = SyncStatus.Done;
+         item.Error = null;
+         item.InvalidPaths = null;
+         _log.Info($"{item.Name}: path recovery applied; repository checked out.");
+      }
+      catch(Exception ex)
+      {
+         item.Status = SyncStatus.Failed;
+         item.Error = ex.Message;
+         // A still-invalid or colliding mapping keeps the row resolvable with the
+         // fresh path list; any other failure clears the payload (renaming again
+         // would not help).
+         item.InvalidPaths = (ex as InvalidRepositoryPathsException)?.Paths;
+         _log.Error($"{item.Name}: path recovery failed: {ex.Message}", ex);
+      }
+   }
 
-            item.Status = SyncStatus.Done;
-            item.Error = null;
-            item.InvalidPaths = null;
-            _log.Info($"{item.Name}: path recovery applied; repository checked out.");
-        }
-        catch (Exception ex)
-        {
-            item.Status = SyncStatus.Failed;
-            item.Error = ex.Message;
-            // A still-invalid or colliding mapping keeps the row resolvable with the
-            // fresh path list; any other failure clears the payload (renaming again
-            // would not help).
-            item.InvalidPaths = (ex as InvalidRepositoryPathsException)?.Paths;
-            _log.Error($"{item.Name}: path recovery failed: {ex.Message}", ex);
-        }
-    }
 
-    /// <summary>
-    /// The "Clone in WSL instead" recovery (#8): the repository is cloned by the default
-    /// WSL distribution's git into ~/gclo/&lt;org&gt;/&lt;repo&gt;, where its paths are
-    /// legal. The fetched-but-unchecked-out Windows copy is left as it is (a later
-    /// Windows sync reports the same invalid paths again, by design: nothing on the
-    /// Windows side changed). On failure the row keeps its payload so the user can pick
-    /// the other recovery.
-    /// </summary>
-    private async Task CloneInWslAsync(RepoItemViewModel item)
-    {
-        try
-        {
-            _log.Info($"{item.Name}: cloning in WSL instead.");
-            item.Status = SyncStatus.Pulling; // indeterminate bar; git in WSL reports no percentage here
-            WslCloneResult result = await _wsl.CloneAsync(
-                item.Descriptor.CloneUrl, Organization.Trim(), item.Name, Token.Trim(), _lifetimeCts.Token);
 
-            item.Status = SyncStatus.Done;
-            item.Error = null;
-            item.InvalidPaths = null;
-            item.Note = $"Cloned in WSL ({result.Distribution}): {result.WindowsPath}";
-            _log.Info($"{item.Name}: cloned in WSL ({result.Distribution}) at {result.LinuxPath}.");
-        }
-        catch (Exception ex)
-        {
-            item.Status = SyncStatus.Failed;
-            item.Error = ex.Message;
-            _log.Error($"{item.Name}: clone in WSL failed: {ex.Message}", ex);
-        }
-    }
+   /// <summary>
+   /// The "Clone in WSL instead" recovery (#8): the repository is cloned by the default
+   /// WSL distribution's git into ~/gclo/&lt;org&gt;/&lt;repo&gt;, where its paths are
+   /// legal. The fetched-but-unchecked-out Windows copy is left as it is (a later
+   /// Windows sync reports the same invalid paths again, by design: nothing on the
+   /// Windows side changed). On failure the row keeps its payload so the user can pick
+   /// the other recovery.
+   /// </summary>
+   private async Task CloneInWslAsync(RepoItemViewModel item)
+   {
+      try
+      {
+         _log.Info($"{item.Name}: cloning in WSL instead.");
+         item.Status = SyncStatus.Pulling; // indeterminate bar; git in WSL reports no percentage here
+         WslCloneResult result = await _wsl.CloneAsync(
+             item.Descriptor.CloneUrl, Organization.Trim(), item.Name, Token.Trim(), _lifetimeCts.Token);
 
-    // ---------------------------------------------------------------- sorting
+         item.Status = SyncStatus.Done;
+         item.Error = null;
+         item.InvalidPaths = null;
+         item.Note = $"Cloned in WSL ({result.Distribution}): {result.WindowsPath}";
+         _log.Info($"{item.Name}: cloned in WSL ({result.Distribution}) at {result.LinuxPath}.");
+      }
+      catch(Exception ex)
+      {
+         item.Status = SyncStatus.Failed;
+         item.Error = ex.Message;
+         _log.Error($"{item.Name}: clone in WSL failed: {ex.Message}", ex);
+      }
+   }
 
-    /// <summary>
-    /// Sorts the table by a column ("Name", "Status", "Branch", or "Archived"); a second
-    /// click on the same column flips the direction. The re-order is stable and in place.
-    /// </summary>
-    [RelayCommand]
-    private void Sort(string column)
-    {
-        if (column is not ("Name" or "Status" or "Branch" or "Archived"))
-        {
-            return;
-        }
 
-        if (SortColumn == column)
-        {
-            SortDescending = !SortDescending;
-        }
-        else
-        {
-            SortColumn = column;
-            SortDescending = false;
-        }
 
-        List<RepoItemViewModel> sorted = column switch
-        {
-            "Name" => OrderRepos(r => r.Name, StringComparer.OrdinalIgnoreCase),
-            "Status" => OrderRepos(r => r.Status, Comparer<SyncStatus>.Default),
-            "Branch" => OrderRepos(r => r.BranchText, StringComparer.OrdinalIgnoreCase),
-            _ => OrderRepos(r => r.IsArchived, Comparer<bool>.Default),
-        };
+   // ---------------------------------------------------------------- sorting
 
-        // Nothing binds Repos (the table binds FilteredRepos), so a plain reorder is
-        // enough: O(n) adds instead of the O(n^2) IndexOf/Move choreography that
-        // used to run here, and the one rebuild below refreshes the bound list (#30).
-        Repos.Clear();
-        foreach (RepoItemViewModel item in sorted)
-        {
-            Repos.Add(item);
-        }
-        RebuildReposIndex();
+   /// <summary>
+   /// Sorts the table by a column ("Name", "Status", "Branch", or "Archived"); a second
+   /// click on the same column flips the direction. The re-order is stable and in place.
+   /// </summary>
+   [RelayCommand]
+   private void Sort(string column)
+   {
+      if(column is not ("Name" or "Status" or "Branch" or "Archived"))
+      {
+         return;
+      }
 
-        RebuildFilteredRepos(); // the table binds FilteredRepos, which mirrors Repos' order
-    }
+      if(string.Equals(SortColumn, column, StringComparison.Ordinal))
+      {
+         SortDescending = !SortDescending;
+      }
+      else
+      {
+         SortColumn = column;
+         SortDescending = false;
+      }
 
-    /// <summary>OrderBy/OrderByDescending are both stable: equal keys keep their current order.</summary>
-    private List<RepoItemViewModel> OrderRepos<TKey>(Func<RepoItemViewModel, TKey> key, IComparer<TKey> comparer)
-        => SortDescending
-            ? Repos.OrderByDescending(key, comparer).ToList()
-            : Repos.OrderBy(key, comparer).ToList();
+      List<RepoItemViewModel> sorted = column switch
+      {
+         "Name" => OrderRepos(r => r.Name, StringComparer.OrdinalIgnoreCase),
+         "Status" => OrderRepos(r => r.Status, Comparer<SyncStatus>.Default),
+         "Branch" => OrderRepos(r => r.BranchText, StringComparer.OrdinalIgnoreCase),
+         _ => OrderRepos(r => r.IsArchived, Comparer<bool>.Default),
+      };
 
-    // ---------------------------------------------------------------- progress
+      // Nothing binds Repos (the table binds FilteredRepos), so a plain reorder is
+      // enough: O(n) adds instead of the O(n^2) IndexOf/Move choreography that
+      // used to run here, and the one rebuild below refreshes the bound list (#30).
+      Repos.Clear();
+      foreach(RepoItemViewModel item in sorted)
+      {
+         Repos.Add(item);
+      }
+      RebuildReposIndex();
 
-    /// <summary>
-    /// Raised with a message that assistive technology should announce. Per-repo
-    /// failures use this channel; run summaries land in <see cref="StatusText"/>,
-    /// whose live region already announces changes. Raised on the UI thread.
-    /// </summary>
-    public event Action<string>? AnnouncementRequested;
+      RebuildFilteredRepos(); // the table binds FilteredRepos, which mirrors Repos' order
+   }
 
-    /// <summary>Applies one engine progress report to the table. Runs on the UI thread.</summary>
-    private void HandleProgress(RepoProgress report)
-    {
-        if (!_itemsByName.TryGetValue(report.RepoName, out RepoItemViewModel? item))
-        {
-            return; // rows are created at load time; ignore anything unknown
-        }
 
-        SyncStatus statusBefore = item.Status;
-        if (report.Status != SyncStatus.Queued)
-        {
-            item.Status = report.Status;
-            item.Error = report.Error;
-            item.Percent = report.Percent;
-            item.InvalidPaths = report.InvalidPaths;
-        }
 
-        // Active-strip membership is maintained incrementally: a full rescan per report
-        // would cost O(rows) on every progress tick. Contains/Remove stay cheap because
-        // the collection is bounded by MaxConcurrency.
-        bool isActive = item.Status is SyncStatus.Cloning or SyncStatus.Pulling;
-        if (isActive)
-        {
-            if (!ActiveRepos.Contains(item))
-            {
-                ActiveRepos.Add(item);
-            }
-        }
-        else
-        {
-            ActiveRepos.Remove(item);
-        }
+   /// <summary>OrderBy/OrderByDescending are both stable: equal keys keep their current order.</summary>
+   private List<RepoItemViewModel> OrderRepos<TKey>(Func<RepoItemViewModel, TKey> key, IComparer<TKey> comparer)
+       => SortDescending
+           ? Repos.OrderByDescending(key, comparer).ToList()
+           : Repos.OrderBy(key, comparer).ToList();
 
-        if (report.Status == SyncStatus.Failed)
-        {
-            // Logged already by FailureLoggingProgress on the worker thread. Failures
-            // never reach StatusText (which has a live region), so assistive
-            // technology hears them only through this explicit channel.
-            AnnouncementRequested?.Invoke($"{report.RepoName} failed. {report.Error}");
-        }
 
-        if (report.Status is SyncStatus.Done or SyncStatus.Failed or SyncStatus.Canceled)
-        {
-            RecomputeCompletedCount();
-        }
 
-        if (statusBefore != item.Status)
-        {
-            // Status-dependent filters follow every transition (a row entering Cloning
-            // leaves Pending and joins Active immediately). Only this one row can have
-            // changed membership, so it is inserted or removed in place — no O(n)
-            // rebuild, no Reset notification, no scroll jump (#30).
-            UpdateFilteredMembership(item);
-        }
-    }
+   // ---------------------------------------------------------------- progress
 
-    /// <summary>
-    /// Logs failed reports on the thread that produced them (the engine's worker), then
-    /// forwards every report to the UI-marshaled progress. FileActivityLog opens,
-    /// appends, and closes the file per entry; a mass failure (revoked PAT, dropped
-    /// network) used to put a thousand of those on the UI thread (#30).
-    /// </summary>
-    private sealed class FailureLoggingProgress(IProgress<RepoProgress> inner, IActivityLog log)
-        : IProgress<RepoProgress>
-    {
-        public void Report(RepoProgress value)
-        {
-            if (value.Status == SyncStatus.Failed)
-            {
-                log.Error($"{value.RepoName} failed: {value.Error}");
-            }
-            inner.Report(value);
-        }
-    }
+   /// <summary>
+   /// Raised with a message that assistive technology should announce. Per-repo
+   /// failures use this channel; run summaries land in <see cref="StatusText"/>,
+   /// whose live region already announces changes. Raised on the UI thread.
+   /// </summary>
+   public event EventHandler<AnnouncementEventArgs>? AnnouncementRequested;
 
-    /// <summary>
-    /// Recounts terminal rows within the captured run set (#22) — before the first run
-    /// the set is empty and the count stays 0. Also refreshes the failed-rows flag.
-    /// </summary>
-    private void RecomputeCompletedCount()
-    {
-        int completed = 0;
-        foreach (RepoItemViewModel repo in _runSet)
-        {
-            if (repo.Status is SyncStatus.Done or SyncStatus.Failed or SyncStatus.Canceled)
-            {
-                completed++;
-            }
-        }
-        CompletedCount = completed;
-        RecomputeHasFailedRepos();
-    }
 
-    private void RecomputeHasFailedRepos()
-        => HasFailedRepos = Repos.Any(r => r.Status == SyncStatus.Failed);
 
-    // ---------------------------------------------------------------- filtering
+   /// <summary>Applies one engine progress report to the table. Runs on the UI thread.</summary>
+   private void HandleProgress(RepoProgress report)
+   {
+      if(!_itemsByName.TryGetValue(report.RepoName, out RepoItemViewModel? item))
+      {
+         return; // rows are created at load time; ignore anything unknown
+      }
 
-    /// <summary>Refreshes the row -> position map after <see cref="Repos"/> was reloaded or reordered.</summary>
-    private void RebuildReposIndex()
-    {
-        _reposIndex.Clear();
-        for (int i = 0; i < Repos.Count; i++)
-        {
-            _reposIndex[Repos[i]] = i;
-        }
-    }
+      SyncStatus statusBefore = item.Status;
+      if(report.Status != SyncStatus.Queued)
+      {
+         item.Status = report.Status;
+         item.Error = report.Error;
+         item.Percent = report.Percent;
+         item.InvalidPaths = report.InvalidPaths;
+      }
 
-    /// <summary>
-    /// Rebuilds <see cref="FilteredRepos"/> from <see cref="Repos"/>, preserving the
-    /// table's current sort order, then re-derives the header checkbox from the
-    /// visible rows. Used when the filter, the table contents, or the sort order
-    /// change; single-row status transitions go through
-    /// <see cref="UpdateFilteredMembership"/> instead. A no-op when the visible set
-    /// is already correct, so list controls keep their scroll position.
-    /// </summary>
-    private void RebuildFilteredRepos()
-    {
-        List<RepoItemViewModel> desired = Repos.Where(MatchesFilter).ToList();
-        if (!desired.SequenceEqual(FilteredRepos))
-        {
-            FilteredRepos.Clear();
-            _filteredSet.Clear();
-            foreach (RepoItemViewModel repo in desired)
-            {
-                FilteredRepos.Add(repo);
-                _filteredSet.Add(repo);
-            }
-        }
-        UpdateAllSelectedFromItems();
-    }
+      // Active-strip membership is maintained incrementally: a full rescan per report
+      // would cost O(rows) on every progress tick. Contains/Remove stay cheap because
+      // the collection is bounded by MaxConcurrency.
+      bool isActive = item.Status is SyncStatus.Cloning or SyncStatus.Pulling;
+      if(isActive)
+      {
+         if(!ActiveRepos.Contains(item))
+         {
+            ActiveRepos.Add(item);
+         }
+      }
+      else
+      {
+         ActiveRepos.Remove(item);
+      }
 
-    /// <summary>
-    /// Applies one row's current filter match to <see cref="FilteredRepos"/>: inserts it
-    /// at its table position (binary search on <see cref="_reposIndex"/>) when it became
-    /// visible, removes it when it became hidden, and does nothing when its membership
-    /// did not change. O(log n) instead of the former O(n) rebuild per progress report.
-    /// </summary>
-    private void UpdateFilteredMembership(RepoItemViewModel item)
-    {
-        bool visible = MatchesFilter(item);
-        bool wasVisible = _filteredSet.Contains(item);
-        if (visible == wasVisible)
-        {
-            return;
-        }
+      if(report.Status == SyncStatus.Failed)
+      {
+         // Logged already by FailureLoggingProgress on the worker thread. Failures
+         // never reach StatusText (which has a live region), so assistive
+         // technology hears them only through this explicit channel.
+         AnnouncementRequested?.Invoke(this, new AnnouncementEventArgs($"{report.RepoName} failed. {report.Error}"));
+      }
 
-        int slot = FindFilteredSlot(item);
-        if (visible)
-        {
-            FilteredRepos.Insert(slot, item);
-            _filteredSet.Add(item);
-        }
-        else
-        {
-            FilteredRepos.RemoveAt(slot);
-            _filteredSet.Remove(item);
-        }
-        UpdateAllSelectedFromItems();
-    }
+      if(report.Status is SyncStatus.Done or SyncStatus.Failed or SyncStatus.Canceled)
+      {
+         RecomputeCompletedCount();
+      }
 
-    /// <summary>
-    /// Index in <see cref="FilteredRepos"/> where <paramref name="item"/> sits (when
-    /// present) or belongs (when absent), by its position in <see cref="Repos"/>.
-    /// </summary>
-    private int FindFilteredSlot(RepoItemViewModel item)
-    {
-        int position = _reposIndex[item];
-        int low = 0;
-        int high = FilteredRepos.Count;
-        while (low < high)
-        {
-            int mid = (low + high) / 2;
-            if (_reposIndex[FilteredRepos[mid]] < position)
-            {
-                low = mid + 1;
-            }
-            else
-            {
-                high = mid;
-            }
-        }
-        return low;
-    }
+      if(statusBefore != item.Status)
+      {
+         // Status-dependent filters follow every transition (a row entering Cloning
+         // leaves Pending and joins Active immediately). Only this one row can have
+         // changed membership, so it is inserted or removed in place — no O(n)
+         // rebuild, no Reset notification, no scroll jump (#30).
+         UpdateFilteredMembership(item);
+      }
+   }
 
-    private bool MatchesFilter(RepoItemViewModel repo)
-        => MatchesStatusFilter(repo)
-            && (NameFilter.Length == 0
-                || repo.Name.Contains(NameFilter.Trim(), StringComparison.OrdinalIgnoreCase))
-            && (BranchFilter.Length == 0
-                || repo.BranchText.Contains(BranchFilter.Trim(), StringComparison.OrdinalIgnoreCase))
-            && (ArchivedFilter is not { } archived || repo.IsArchived == archived);
 
-    private bool MatchesStatusFilter(RepoItemViewModel repo) => Filter switch
-    {
-        RepoFilter.Active => repo.Status is SyncStatus.Cloning or SyncStatus.Pulling,
-        RepoFilter.Failed => repo.Status == SyncStatus.Failed,
-        RepoFilter.Pending => repo.Status == SyncStatus.Queued,
-        _ => true,
-    };
+
+   /// <summary>
+   /// Logs failed reports on the thread that produced them (the engine's worker), then
+   /// forwards every report to the UI-marshaled progress. FileActivityLog opens,
+   /// appends, and closes the file per entry; a mass failure (revoked PAT, dropped
+   /// network) used to put a thousand of those on the UI thread (#30).
+   /// </summary>
+   private sealed class FailureLoggingProgress(IProgress<RepoProgress> inner, IActivityLog log)
+       : IProgress<RepoProgress>
+   {
+      public void Report(RepoProgress value)
+      {
+         if(value.Status == SyncStatus.Failed)
+         {
+            log.Error($"{value.RepoName} failed: {value.Error}");
+         }
+         inner.Report(value);
+      }
+   }
+
+
+
+   /// <summary>
+   /// Recounts terminal rows within the captured run set (#22) — before the first run
+   /// the set is empty and the count stays 0. Also refreshes the failed-rows flag.
+   /// </summary>
+   private void RecomputeCompletedCount()
+   {
+      int completed = 0;
+      foreach(RepoItemViewModel repo in _runSet)
+      {
+         if(repo.Status is SyncStatus.Done or SyncStatus.Failed or SyncStatus.Canceled)
+         {
+            completed++;
+         }
+      }
+      CompletedCount = completed;
+      RecomputeHasFailedRepos();
+   }
+
+
+
+   private void RecomputeHasFailedRepos()
+       => HasFailedRepos = Repos.Any(r => r.Status == SyncStatus.Failed);
+
+
+
+   // ---------------------------------------------------------------- filtering
+
+   /// <summary>Refreshes the row -> position map after <see cref="Repos"/> was reloaded or reordered.</summary>
+   private void RebuildReposIndex()
+   {
+      _reposIndex.Clear();
+      for(int i = 0; i < Repos.Count; i++)
+      {
+         _reposIndex[Repos[i]] = i;
+      }
+   }
+
+
+
+   /// <summary>
+   /// Rebuilds <see cref="FilteredRepos"/> from <see cref="Repos"/>, preserving the
+   /// table's current sort order, then re-derives the header checkbox from the
+   /// visible rows. Used when the filter, the table contents, or the sort order
+   /// change; single-row status transitions go through
+   /// <see cref="UpdateFilteredMembership"/> instead. A no-op when the visible set
+   /// is already correct, so list controls keep their scroll position.
+   /// </summary>
+   private void RebuildFilteredRepos()
+   {
+      var desired = Repos.Where(MatchesFilter).ToList();
+      if(!desired.SequenceEqual(FilteredRepos))
+      {
+         FilteredRepos.Clear();
+         _filteredSet.Clear();
+         foreach(RepoItemViewModel repo in desired)
+         {
+            FilteredRepos.Add(repo);
+            _filteredSet.Add(repo);
+         }
+      }
+      UpdateAllSelectedFromItems();
+   }
+
+
+
+   /// <summary>
+   /// Applies one row's current filter match to <see cref="FilteredRepos"/>: inserts it
+   /// at its table position (binary search on <see cref="_reposIndex"/>) when it became
+   /// visible, removes it when it became hidden, and does nothing when its membership
+   /// did not change. O(log n) instead of the former O(n) rebuild per progress report.
+   /// </summary>
+   private void UpdateFilteredMembership(RepoItemViewModel item)
+   {
+      bool visible = MatchesFilter(item);
+      bool wasVisible = _filteredSet.Contains(item);
+      if(visible == wasVisible)
+      {
+         return;
+      }
+
+      int slot = FindFilteredSlot(item);
+      if(visible)
+      {
+         FilteredRepos.Insert(slot, item);
+         _filteredSet.Add(item);
+      }
+      else
+      {
+         FilteredRepos.RemoveAt(slot);
+         _filteredSet.Remove(item);
+      }
+      UpdateAllSelectedFromItems();
+   }
+
+
+
+   /// <summary>
+   /// Index in <see cref="FilteredRepos"/> where <paramref name="item"/> sits (when
+   /// present) or belongs (when absent), by its position in <see cref="Repos"/>.
+   /// </summary>
+   private int FindFilteredSlot(RepoItemViewModel item)
+   {
+      int position = _reposIndex[item];
+      int low = 0;
+      int high = FilteredRepos.Count;
+      while(low < high)
+      {
+         int mid = (low + high) / 2;
+         if(_reposIndex[FilteredRepos[mid]] < position)
+         {
+            low = mid + 1;
+         }
+         else
+         {
+            high = mid;
+         }
+      }
+      return low;
+   }
+
+
+
+   private bool MatchesFilter(RepoItemViewModel repo)
+       => MatchesStatusFilter(repo)
+           && (NameFilter.Length == 0
+               || repo.Name.Contains(NameFilter.Trim(), StringComparison.OrdinalIgnoreCase))
+           && (BranchFilter.Length == 0
+               || repo.BranchText.Contains(BranchFilter.Trim(), StringComparison.OrdinalIgnoreCase))
+           && (ArchivedFilter is not { } archived || repo.IsArchived == archived);
+
+
+
+   private bool MatchesStatusFilter(RepoItemViewModel repo) => Filter switch
+   {
+      RepoFilter.Active => repo.Status is SyncStatus.Cloning or SyncStatus.Pulling,
+      RepoFilter.Failed => repo.Status == SyncStatus.Failed,
+      RepoFilter.Pending => repo.Status == SyncStatus.Queued,
+      _ => true,
+   };
 }

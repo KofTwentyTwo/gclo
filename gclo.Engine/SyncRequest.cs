@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.Engine;
+
 
 /// <summary>Inputs for an organization sync.</summary>
 /// <param name="Organization">GitHub organization login name.</param>
@@ -7,12 +13,12 @@ namespace gclo.Engine;
 /// <param name="MaxConcurrency">Upper bound on simultaneous git operations.</param>
 public sealed record SyncRequest(string Organization, string Token, string TargetRoot, int MaxConcurrency = 8)
 {
-    /// <summary>
-    /// Redacts the token: the record-generated ToString would print every positional
-    /// member, and this type ships publicly on NuGet where any log or exception
-    /// interpolation of a request would otherwise leak the PAT.
-    /// </summary>
-    public override string ToString() =>
-        $"SyncRequest {{ Organization = {Organization}, Token = [redacted], "
-        + $"TargetRoot = {TargetRoot}, MaxConcurrency = {MaxConcurrency} }}";
+   /// <summary>
+   /// Redacts the token: the record-generated ToString would print every positional
+   /// member, and this type ships publicly on NuGet where any log or exception
+   /// interpolation of a request would otherwise leak the PAT.
+   /// </summary>
+   public override string ToString() =>
+       $"SyncRequest {{ Organization = {Organization}, Token = [redacted], "
+       + $"TargetRoot = {TargetRoot}, MaxConcurrency = {MaxConcurrency} }}";
 }

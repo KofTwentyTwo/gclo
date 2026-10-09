@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.Engine.Tests;
+
 
 /// <summary>
 /// Pins the security contract of <see cref="SyncRequest"/>: the record ships on
@@ -7,15 +13,15 @@ namespace gclo.Engine.Tests;
 /// </summary>
 public sealed class SyncRequestTests
 {
-    [Fact]
-    public void ToString_NeverContainsTheToken()
-    {
-        var request = new SyncRequest("acme", "ghp_super_secret_token", @"C:\src", 8);
+   [Fact]
+   public void ToString_NeverContainsTheToken()
+   {
+      var request = new SyncRequest("acme", "ghp_super_secret_token", @"C:\src", 8);
 
-        string text = request.ToString();
+      string text = request.ToString();
 
-        Assert.DoesNotContain("ghp_super_secret_token", text);
-        Assert.Contains("[redacted]", text);
-        Assert.Contains("acme", text); // everything else stays diagnosable
-    }
+      Assert.DoesNotContain("ghp_super_secret_token", text);
+      Assert.Contains("[redacted]", text);
+      Assert.Contains("acme", text); // everything else stays diagnosable
+   }
 }

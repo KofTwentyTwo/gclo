@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.Engine;
+
 
 /// <summary>One repository path that cannot be created on a Windows file system.</summary>
 /// <param name="RepoPath">Path inside the repository, forward-slash separated.</param>

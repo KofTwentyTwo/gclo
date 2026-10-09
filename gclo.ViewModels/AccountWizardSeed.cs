@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.ViewModels;
+
 
 /// <summary>
 /// The connection values a Quick Sync workspace hands to the account wizard so a
@@ -17,8 +23,8 @@ public sealed record AccountWizardSeed(
     bool CreateOrgSubfolder,
     int MaxConcurrency)
 {
-    /// <summary>Redacts the token: this record must never print it.</summary>
-    public override string ToString() =>
-        $"AccountWizardSeed {{ Token = [redacted], Organization = {Organization}, TargetRoot = {TargetRoot}, "
-        + $"CreateOrgSubfolder = {CreateOrgSubfolder}, MaxConcurrency = {MaxConcurrency} }}";
+   /// <summary>Redacts the token: this record must never print it.</summary>
+   public override string ToString() =>
+       $"AccountWizardSeed {{ Token = [redacted], Organization = {Organization}, TargetRoot = {TargetRoot}, "
+       + $"CreateOrgSubfolder = {CreateOrgSubfolder}, MaxConcurrency = {MaxConcurrency} }}";
 }

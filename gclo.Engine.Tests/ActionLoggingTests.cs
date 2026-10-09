@@ -1,8 +1,14 @@
-using gclo.Engine;
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using gclo.ViewModels;
 using static gclo.Engine.Tests.GitTestHelpers;
 
+
 namespace gclo.Engine.Tests;
+
 
 /// <summary>
 /// Pins the activity-log contract of #40: every user- or app-initiated action in the
@@ -12,184 +18,212 @@ namespace gclo.Engine.Tests;
 /// </summary>
 public sealed class ActionLoggingTests : IDisposable
 {
-    private const string Token = "ghp_SECRET_TOKEN_VALUE_1234";
+   private const string Token = "ghp_SECRET_TOKEN_VALUE_1234";
 
-    private readonly string _root =
-        Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
-    private readonly RecordingActivityLog _log = new();
-    private readonly FakeRepositoryLister _lister = new();
-    private readonly FakeGitClient _git = new();
-    private readonly FakeOrganizationLister _orgs = new();
+   private readonly string _root =
+       Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
 
-    public void Dispose() => TryDeleteDirectory(_root);
+   private readonly RecordingActivityLog _log = new();
 
-    private sealed class SyncProgress(Action<RepoProgress> handler) : IProgress<RepoProgress>
-    {
-        public void Report(RepoProgress value) => handler(value);
-    }
+   private readonly FakeRepositoryLister _lister = new();
 
-    private readonly FakeWslCloner _wsl = new();
+   private readonly FakeGitClient _git = new();
 
-    private WorkspaceViewModel CreateViewModel()
-        => new(_lister, _git, _orgs, handler => new SyncProgress(handler), TimeSpan.FromMilliseconds(1), _log, wsl: _wsl);
+   private readonly FakeOrganizationLister _orgs = new();
 
-    private void AssertNoTokenLogged()
-        => Assert.All(_log.Messages, m => Assert.DoesNotContain(Token, m));
 
-    // ---------------------------------------------------------------- workspace
 
-    [Fact]
-    public async Task Workspace_TokenEntry_AndOrganizationLookup_AreLogged_WithoutTheToken()
-    {
-        _orgs.Handler = (_, _) => Task.FromResult<IReadOnlyList<string>>(["me", "acme"]);
-        var vm = CreateViewModel();
+   public void Dispose() => TryDeleteDirectory(_root);
 
-        vm.Token = Token;
-        await WaitUntilAsync(() => vm.Organizations.Count == 2, "lookup to finish");
 
-        Assert.Contains(_log.Messages, m => m == $"Token entered in workspace 'Quick Sync' ({Token.Length} characters).");
-        Assert.Contains("Organization lookup started.", _log.Messages);
-        Assert.Contains("Organization lookup finished: 2 organizations and accounts visible.", _log.Messages);
-        AssertNoTokenLogged();
 
-        vm.Token = "";
-        Assert.Contains("Token cleared in workspace 'Quick Sync'.", _log.Messages);
-    }
+   private sealed class SyncProgress(Action<RepoProgress> handler) : IProgress<RepoProgress>
+   {
+      public void Report(RepoProgress value) => handler(value);
+   }
 
-    [Fact]
-    public async Task Workspace_OrganizationLookupFailure_IsLoggedAsAnError()
-    {
-        _orgs.Handler = (_, _) => Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("401"));
-        var vm = CreateViewModel();
 
-        vm.Token = Token;
-        await WaitUntilAsync(() => vm.LoadErrorOpen, "lookup failure to surface");
 
-        Assert.Contains(_log.Entries, e => e.Level == "ERROR" && e.Message == "Organization lookup failed: 401");
-        AssertNoTokenLogged();
-    }
+   private readonly FakeWslCloner _wsl = new();
 
-    [Fact]
-    public async Task Workspace_RetryFailed_PathRecovery_AndFolderOpened_AreLogged()
-    {
-        _lister.Repositories = Repos("alpha");
-        var vm = CreateViewModel();
-        vm.Organization = "acme";
-        vm.Token = Token;
-        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
-        vm.TargetFolder = _root;
-        await vm.LoadReposCommand.ExecuteAsync(null);
-        var invalid = new List<InvalidPathInfo> { new("bad:name.txt", "invalid on Windows", "bad_name.txt") };
-        _git.CloneHandler = (_, _, _, _, _) => Task.FromException(new InvalidRepositoryPathsException(invalid));
-        await vm.SyncCommand.ExecuteAsync(null);
-        Assert.True(vm.RetryFailedCommand.CanExecute(null));
 
-        await vm.RetryFailedCommand.ExecuteAsync(null);
-        Assert.Contains("Retrying 1 failed repositories.", _log.Messages);
 
-        // The user opens recovery and cancels it.
-        _wsl.Availability = new WslAvailability(false, "wsl.exe is not installed");
-        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(null);
-        await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
-        Assert.Contains("alpha: path recovery requested (1 invalid paths).", _log.Messages);
-        Assert.Contains("WSL clone not available: wsl.exe is not installed", _log.Messages);
-        Assert.Contains("alpha: path recovery canceled; the repository stays failed.", _log.Messages);
+   private WorkspaceViewModel CreateViewModel()
+       => new(_lister, _git, _orgs, handler => new SyncProgress(handler), TimeSpan.FromMilliseconds(1), _log, wsl: _wsl);
 
-        vm.NoteFolderOpened();
-        Assert.Contains($"Opened folder '{vm.EffectiveTargetRoot}'.", _log.Messages);
-        AssertNoTokenLogged();
-    }
 
-    [Fact]
-    public async Task Workspace_CloneInWsl_IsLogged_WithoutTheToken()
-    {
-        _lister.Repositories = Repos("alpha");
-        var vm = CreateViewModel();
-        vm.Organization = "acme";
-        vm.Token = Token;
-        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
-        vm.TargetFolder = _root;
-        await vm.LoadReposCommand.ExecuteAsync(null);
-        var invalid = new List<InvalidPathInfo> { new("bad:name.txt", "invalid on Windows", "bad_name.txt") };
-        _git.CloneHandler = (_, _, _, _, _) => Task.FromException(new InvalidRepositoryPathsException(invalid));
-        await vm.SyncCommand.ExecuteAsync(null);
-        _wsl.Availability = new WslAvailability(true, "git version 2.53.0");
-        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.CloneInWsl());
 
-        await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
-        Assert.Contains("WSL clone available (git version 2.53.0).", _log.Messages);
-        Assert.Contains("alpha: cloning in WSL instead.", _log.Messages);
-        Assert.Contains("alpha: cloned in WSL (Ubuntu) at /home/me/gclo/acme/alpha.", _log.Messages);
+   private void AssertNoTokenLogged()
+       => Assert.All(_log.Messages, m => Assert.DoesNotContain(Token, m));
 
-        _wsl.CloneHandler = (_, _) => Task.FromException<WslCloneResult>(new WslCloneException("Clone in WSL failed: boom"));
-        vm.Repos[0].InvalidPaths = invalid;
-        vm.Repos[0].Status = SyncStatus.Failed;
-        await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
-        Assert.Contains("alpha: clone in WSL failed: Clone in WSL failed: boom", _log.Messages);
-        AssertNoTokenLogged();
-    }
 
-    // ---------------------------------------------------------------- accounts
 
-    [Fact]
-    public void AccountsStore_SaveUpdateDelete_AndSyncResult_AreLogged_WithoutTheToken()
-    {
-        var store = new AccountsStore(new InMemoryVault(), _root, _log);
-        var account = new Account { Id = Guid.NewGuid(), Name = "Work", Organization = "acme", TargetRoot = @"C:\r" };
+   // ---------------------------------------------------------------- workspace
 
-        store.Save(account, Token);
-        Assert.Contains("Account 'Work' added with a new token.", _log.Messages);
+   [Fact]
+   public async Task Workspace_TokenEntry_AndOrganizationLookup_AreLogged_WithoutTheToken()
+   {
+      _orgs.Handler = (_, _) => Task.FromResult<IReadOnlyList<string>>(["me", "acme"]);
+      WorkspaceViewModel vm = CreateViewModel();
 
-        store.Save(account with { Description = "edited" }, null);
-        Assert.Contains("Account 'Work' updated (token unchanged).", _log.Messages);
+      vm.Token = Token;
+      await WaitUntilAsync(() => vm.Organizations.Count == 2, "lookup to finish");
 
-        store.RecordSyncResult(account.Id, DateTimeOffset.UtcNow, "1 cloned");
-        Assert.Contains("Account 'Work': sync result recorded (1 cloned).", _log.Messages);
+      Assert.Contains(_log.Messages, m => string.Equals(m, $"Token entered in workspace 'Quick Sync' ({Token.Length} characters).", StringComparison.Ordinal));
+      Assert.Contains("Organization lookup started.", _log.Messages, StringComparer.Ordinal);
+      Assert.Contains("Organization lookup finished: 2 organizations and accounts visible.", _log.Messages, StringComparer.Ordinal);
+      AssertNoTokenLogged();
 
-        store.Delete(account.Id);
-        Assert.Contains("Account 'Work' deleted along with its token.", _log.Messages);
+      vm.Token = "";
+      Assert.Contains("Token cleared in workspace 'Quick Sync'.", _log.Messages, StringComparer.Ordinal);
+   }
 
-        var tokenless = new Account { Id = Guid.NewGuid(), Name = "Bare", Organization = "acme", TargetRoot = @"C:\r" };
-        store.Save(tokenless, null);
-        store.Delete(tokenless.Id);
-        Assert.Contains("Account 'Bare' deleted (it had no token).", _log.Messages);
-        AssertNoTokenLogged();
-    }
 
-    // ---------------------------------------------------------------- wizard
 
-    [Fact]
-    public async Task Wizard_TokenValidation_IsLogged_WithoutTheToken()
-    {
-        var store = new AccountsStore(new InMemoryVault(), _root, _log);
-        var defaults = new AppSettings();
-        _orgs.Handler = (_, _) => Task.FromResult<IReadOnlyList<string>>(["me", "acme", "labs"]);
-        var wizard = new AccountWizardViewModel(store, _orgs, defaults, log: _log) { Name = "Work", Token = Token };
-        Assert.True(await wizard.TryAdvanceAsync());
+   [Fact]
+   public async Task Workspace_OrganizationLookupFailure_IsLoggedAsAnError()
+   {
+      _orgs.Handler = (_, _) => Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("401"));
+      WorkspaceViewModel vm = CreateViewModel();
 
-        Assert.True(await wizard.TryAdvanceAsync());
-        Assert.Contains("Account wizard: validating the token.", _log.Messages);
-        Assert.Contains("Account wizard: token accepted; 3 organizations and accounts visible.", _log.Messages);
+      vm.Token = Token;
+      await WaitUntilAsync(() => vm.LoadErrorOpen, "lookup failure to surface");
 
-        _orgs.Handler = (_, _) => Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("nope"));
-        var rejected = new AccountWizardViewModel(store, _orgs, new AccountWizardSeed(Token, "acme", @"C:\r", false, 4), _log) { Name = "Other" };
-        Assert.True(await rejected.TryAdvanceAsync());
-        Assert.False(await rejected.TryAdvanceAsync());
-        Assert.Contains(_log.Entries, e => e.Level == "ERROR" && e.Message == "Account wizard: token rejected: nope");
-        AssertNoTokenLogged();
-    }
+      Assert.Contains(_log.Entries, e => string.Equals(e.Level, "ERROR", StringComparison.Ordinal) && string.Equals(e.Message, "Organization lookup failed: 401", StringComparison.Ordinal));
+      AssertNoTokenLogged();
+   }
 
-    // ---------------------------------------------------------------- sync all
 
-    [Fact]
-    public async Task SyncAll_QueueIsLogged()
-    {
-        var coordinator = new SyncAllCoordinator(_log);
-        var a = CreateViewModel();
-        var b = CreateViewModel();
 
-        await coordinator.RunAsync([a, b], CancellationToken.None);
+   [Fact]
+   public async Task Workspace_RetryFailed_PathRecovery_AndFolderOpened_AreLogged()
+   {
+      _lister.Repositories = Repos("alpha");
+      WorkspaceViewModel vm = CreateViewModel();
+      vm.Organization = "acme";
+      vm.Token = Token;
+      await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+      vm.TargetFolder = _root;
+      await vm.LoadReposCommand.ExecuteAsync(null);
+      var invalid = new List<InvalidPathInfo> { new("bad:name.txt", "invalid on Windows", "bad_name.txt") };
+      _git.CloneHandler = (_, _, _, _, _) => Task.FromException(new InvalidRepositoryPathsException(invalid));
+      await vm.SyncCommand.ExecuteAsync(null);
+      Assert.True(vm.RetryFailedCommand.CanExecute(null));
 
-        Assert.Contains("Sync all: queued 2 accounts: 'Quick Sync', 'Quick Sync'.", _log.Messages);
-    }
+      await vm.RetryFailedCommand.ExecuteAsync(null);
+      Assert.Contains("Retrying 1 failed repositories.", _log.Messages, StringComparer.Ordinal);
+
+      // The user opens recovery and cancels it.
+      _wsl.Availability = new WslAvailability(false, "wsl.exe is not installed");
+      vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(null);
+      await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+      Assert.Contains("alpha: path recovery requested (1 invalid paths).", _log.Messages, StringComparer.Ordinal);
+      Assert.Contains("WSL clone not available: wsl.exe is not installed", _log.Messages, StringComparer.Ordinal);
+      Assert.Contains("alpha: path recovery canceled; the repository stays failed.", _log.Messages, StringComparer.Ordinal);
+
+      vm.NoteFolderOpened();
+      Assert.Contains($"Opened folder '{vm.EffectiveTargetRoot}'.", _log.Messages, StringComparer.Ordinal);
+      AssertNoTokenLogged();
+   }
+
+
+
+   [Fact]
+   public async Task Workspace_CloneInWsl_IsLogged_WithoutTheToken()
+   {
+      _lister.Repositories = Repos("alpha");
+      WorkspaceViewModel vm = CreateViewModel();
+      vm.Organization = "acme";
+      vm.Token = Token;
+      await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+      vm.TargetFolder = _root;
+      await vm.LoadReposCommand.ExecuteAsync(null);
+      var invalid = new List<InvalidPathInfo> { new("bad:name.txt", "invalid on Windows", "bad_name.txt") };
+      _git.CloneHandler = (_, _, _, _, _) => Task.FromException(new InvalidRepositoryPathsException(invalid));
+      await vm.SyncCommand.ExecuteAsync(null);
+      _wsl.Availability = new WslAvailability(true, "git version 2.53.0");
+      vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.CloneInWsl());
+
+      await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+      Assert.Contains("WSL clone available (git version 2.53.0).", _log.Messages, StringComparer.Ordinal);
+      Assert.Contains("alpha: cloning in WSL instead.", _log.Messages, StringComparer.Ordinal);
+      Assert.Contains("alpha: cloned in WSL (Ubuntu) at /home/me/gclo/acme/alpha.", _log.Messages, StringComparer.Ordinal);
+
+      _wsl.CloneHandler = (_, _) => Task.FromException<WslCloneResult>(new WslCloneException("Clone in WSL failed: boom"));
+      vm.Repos[0].InvalidPaths = invalid;
+      vm.Repos[0].Status = SyncStatus.Failed;
+      await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+      Assert.Contains("alpha: clone in WSL failed: Clone in WSL failed: boom", _log.Messages, StringComparer.Ordinal);
+      AssertNoTokenLogged();
+   }
+
+
+
+   // ---------------------------------------------------------------- accounts
+
+   [Fact]
+   public void AccountsStore_SaveUpdateDelete_AndSyncResult_AreLogged_WithoutTheToken()
+   {
+      var store = new AccountsStore(new InMemoryVault(), _root, _log);
+      var account = new Account { Id = Guid.NewGuid(), Name = "Work", Organization = "acme", TargetRoot = @"C:\r" };
+
+      store.Save(account, Token);
+      Assert.Contains("Account 'Work' added with a new token.", _log.Messages, StringComparer.Ordinal);
+
+      store.Save(account with { Description = "edited" }, null);
+      Assert.Contains("Account 'Work' updated (token unchanged).", _log.Messages, StringComparer.Ordinal);
+
+      store.RecordSyncResult(account.Id, DateTimeOffset.UtcNow, "1 cloned");
+      Assert.Contains("Account 'Work': sync result recorded (1 cloned).", _log.Messages, StringComparer.Ordinal);
+
+      store.Delete(account.Id);
+      Assert.Contains("Account 'Work' deleted along with its token.", _log.Messages, StringComparer.Ordinal);
+
+      var tokenless = new Account { Id = Guid.NewGuid(), Name = "Bare", Organization = "acme", TargetRoot = @"C:\r" };
+      store.Save(tokenless, null);
+      store.Delete(tokenless.Id);
+      Assert.Contains("Account 'Bare' deleted (it had no token).", _log.Messages, StringComparer.Ordinal);
+      AssertNoTokenLogged();
+   }
+
+
+
+   // ---------------------------------------------------------------- wizard
+
+   [Fact]
+   public async Task Wizard_TokenValidation_IsLogged_WithoutTheToken()
+   {
+      var store = new AccountsStore(new InMemoryVault(), _root, _log);
+      var defaults = new AppSettings();
+      _orgs.Handler = (_, _) => Task.FromResult<IReadOnlyList<string>>(["me", "acme", "labs"]);
+      var wizard = new AccountWizardViewModel(store, _orgs, defaults, log: _log) { Name = "Work", Token = Token };
+      Assert.True(await wizard.TryAdvanceAsync());
+
+      Assert.True(await wizard.TryAdvanceAsync());
+      Assert.Contains("Account wizard: validating the token.", _log.Messages, StringComparer.Ordinal);
+      Assert.Contains("Account wizard: token accepted; 3 organizations and accounts visible.", _log.Messages, StringComparer.Ordinal);
+
+      _orgs.Handler = (_, _) => Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("nope"));
+      var rejected = new AccountWizardViewModel(store, _orgs, new AccountWizardSeed(Token, "acme", @"C:\r", false, 4), _log) { Name = "Other" };
+      Assert.True(await rejected.TryAdvanceAsync());
+      Assert.False(await rejected.TryAdvanceAsync());
+      Assert.Contains(_log.Entries, e => string.Equals(e.Level, "ERROR", StringComparison.Ordinal) && string.Equals(e.Message, "Account wizard: token rejected: nope", StringComparison.Ordinal));
+      AssertNoTokenLogged();
+   }
+
+
+
+   // ---------------------------------------------------------------- sync all
+
+   [Fact]
+   public async Task SyncAll_QueueIsLogged()
+   {
+      var coordinator = new SyncAllCoordinator(_log);
+      WorkspaceViewModel a = CreateViewModel();
+      WorkspaceViewModel b = CreateViewModel();
+
+      await coordinator.RunAsync([a, b], CancellationToken.None);
+
+      Assert.Contains("Sync all: queued 2 accounts: 'Quick Sync', 'Quick Sync'.", _log.Messages, StringComparer.Ordinal);
+   }
 }

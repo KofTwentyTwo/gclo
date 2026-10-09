@@ -1,8 +1,15 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using gclo.Engine;
 
+
 namespace gclo.ViewModels;
+
 
 /// <summary>
 /// Drives the four-step add/edit account wizard: identity (name + description), token
@@ -13,309 +20,340 @@ namespace gclo.ViewModels;
 /// </summary>
 public sealed partial class AccountWizardViewModel : ObservableObject
 {
-    private readonly AccountsStore _store;
-    private readonly IOrganizationLister _orgLister;
-    private readonly IActivityLog _log;
-    private readonly Account? _existing;
+   private readonly AccountsStore _store;
 
-    /// <summary>
-    /// For edits: fetches the account's stored token from the vault, called only when
-    /// a step actually needs to transmit it (validating on step 2 with the box left
-    /// empty). The token is never copied into <see cref="Token"/>, so the dialog never
-    /// holds or shows it; an empty box means "keep the stored token" (#32).
-    /// </summary>
-    private readonly Func<string?>? _storedToken;
+   private readonly IOrganizationLister _orgLister;
 
-    /// <summary>
-    /// A wizard for a new account seeded from <paramref name="defaults"/>, or — when
-    /// <paramref name="existing"/> is given — an edit wizard seeded from that account.
-    /// <paramref name="storedToken"/> fetches the vault's current token on demand for
-    /// an edit (null, or returning null, when the vault has no entry).
-    /// </summary>
-    public AccountWizardViewModel(
-        AccountsStore store,
-        IOrganizationLister orgLister,
-        AppSettings defaults,
-        Account? existing = null,
-        Func<string?>? storedToken = null,
-        IActivityLog? log = null)
-        : this(store, orgLister, existing, storedToken, log)
-    {
-        ArgumentNullException.ThrowIfNull(defaults);
+   private readonly IActivityLog _log;
 
-        if (existing is null)
-        {
-            Name = "";
-            Description = "";
-            Organization = "";
-            TargetRoot = defaults.DefaultTargetFolder;
-            CreateOrgSubfolder = false;
-            MaxConcurrency = defaults.DefaultMaxConcurrency;
-        }
-        else
-        {
-            Name = existing.Name;
-            Description = existing.Description;
-            Organization = existing.Organization;
-            TargetRoot = existing.TargetRoot;
-            CreateOrgSubfolder = existing.CreateOrgSubfolder;
-            MaxConcurrency = existing.MaxConcurrency;
-        }
-    }
+   private readonly Account? _existing;
 
-    /// <summary>
-    /// A wizard for a NEW account seeded from a working Quick Sync connection
-    /// (<paramref name="seed"/>): token, organization, folder, subfolder preference,
-    /// and parallelism are carried over so "save this connection as an account" is a
-    /// matter of naming it (#30). The token is treated as freshly typed, so it is
-    /// always written to the vault on save.
-    /// </summary>
-    public AccountWizardViewModel(
-        AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed, IActivityLog? log = null)
-        : this(store, orgLister, existing: null, storedToken: null, log)
-    {
-        ArgumentNullException.ThrowIfNull(seed);
-        Name = "";
-        Description = "";
-        Token = seed.Token;
-        Organization = seed.Organization;
-        TargetRoot = seed.TargetRoot;
-        CreateOrgSubfolder = seed.CreateOrgSubfolder;
-        MaxConcurrency = seed.MaxConcurrency;
-    }
+   /// <summary>
+   /// For edits: fetches the account's stored token from the vault, called only when
+   /// a step actually needs to transmit it (validating on step 2 with the box left
+   /// empty). The token is never copied into <see cref="Token"/>, so the dialog never
+   /// holds or shows it; an empty box means "keep the stored token" (#32).
+   /// </summary>
+   private readonly Func<string?>? _storedToken;
 
-    private AccountWizardViewModel(
-        AccountsStore store, IOrganizationLister orgLister, Account? existing, Func<string?>? storedToken, IActivityLog? log)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(orgLister);
-        _store = store;
-        _orgLister = orgLister;
-        _log = log ?? new NullActivityLog();
-        _existing = existing;
-        _storedToken = existing is null ? null : storedToken;
 
-        Step = 1;
-        NameError = "";
-        TokenError = "";
-        OrganizationError = "";
-        TargetError = "";
-        Token = "";
-        Name = "";
-        Description = "";
-        Organization = "";
-        TargetRoot = "";
-    }
 
-    /// <summary>Current wizard step, 1 (identity) through 4 (destination).</summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsFirstStep))]
-    [NotifyPropertyChangedFor(nameof(IsLastStep))]
-    public partial int Step { get; set; }
+   /// <summary>
+   /// A wizard for a new account seeded from <paramref name="defaults"/>, or — when
+   /// <paramref name="existing"/> is given — an edit wizard seeded from that account.
+   /// <paramref name="storedToken"/> fetches the vault's current token on demand for
+   /// an edit (null, or returning null, when the vault has no entry).
+   /// </summary>
+   public AccountWizardViewModel(
+       AccountsStore store,
+       IOrganizationLister orgLister,
+       AppSettings defaults,
+       Account? existing = null,
+       Func<string?>? storedToken = null,
+       IActivityLog? log = null)
+       : this(store, orgLister, existing, storedToken, log)
+   {
+      ArgumentNullException.ThrowIfNull(defaults);
 
-    /// <summary>Display name for the account; required and unique across accounts.</summary>
-    [ObservableProperty]
-    public partial string Name { get; set; }
+      if(existing is null)
+      {
+         Name = "";
+         Description = "";
+         Organization = "";
+         TargetRoot = defaults.DefaultTargetFolder;
+         CreateOrgSubfolder = false;
+         MaxConcurrency = defaults.DefaultMaxConcurrency;
+      }
+      else
+      {
+         Name = existing.Name;
+         Description = existing.Description;
+         Organization = existing.Organization;
+         TargetRoot = existing.TargetRoot;
+         CreateOrgSubfolder = existing.CreateOrgSubfolder;
+         MaxConcurrency = existing.MaxConcurrency;
+      }
+   }
 
-    /// <summary>Optional free-form note about what the account is for.</summary>
-    [ObservableProperty]
-    public partial string Description { get; set; }
 
-    /// <summary>
-    /// GitHub personal access token as typed; validated when leaving step 2. For an
-    /// edit it starts empty and stays empty unless the user types a replacement —
-    /// the stored token is never loaded into it.
-    /// </summary>
-    [ObservableProperty]
-    public partial string Token { get; set; }
 
-    /// <summary>Organization (or user) to sync; picked from <see cref="Organizations"/> or typed.</summary>
-    [ObservableProperty]
-    public partial string Organization { get; set; }
+   /// <summary>
+   /// A wizard for a NEW account seeded from a working Quick Sync connection
+   /// (<paramref name="seed"/>): token, organization, folder, subfolder preference,
+   /// and parallelism are carried over so "save this connection as an account" is a
+   /// matter of naming it (#30). The token is treated as freshly typed, so it is
+   /// always written to the vault on save.
+   /// </summary>
+   public AccountWizardViewModel(
+       AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed, IActivityLog? log = null)
+       : this(store, orgLister, existing: null, storedToken: null, log)
+   {
+      ArgumentNullException.ThrowIfNull(seed);
+      Name = "";
+      Description = "";
+      Token = seed.Token;
+      Organization = seed.Organization;
+      TargetRoot = seed.TargetRoot;
+      CreateOrgSubfolder = seed.CreateOrgSubfolder;
+      MaxConcurrency = seed.MaxConcurrency;
+   }
 
-    /// <summary>Folder the sync targets; see <see cref="CreateOrgSubfolder"/>.</summary>
-    [ObservableProperty]
-    public partial string TargetRoot { get; set; }
 
-    /// <summary>When set, clones land under TargetRoot\Organization rather than TargetRoot.</summary>
-    [ObservableProperty]
-    public partial bool CreateOrgSubfolder { get; set; }
 
-    /// <summary>Parallel clone/pull count; kept within the <see cref="AppSettings"/> range.</summary>
-    [ObservableProperty]
-    public partial int MaxConcurrency { get; set; }
+   private AccountWizardViewModel(
+       AccountsStore store, IOrganizationLister orgLister, Account? existing, Func<string?>? storedToken, IActivityLog? log)
+   {
+      ArgumentNullException.ThrowIfNull(store);
+      ArgumentNullException.ThrowIfNull(orgLister);
+      _store = store;
+      _orgLister = orgLister;
+      _log = log ?? new NullActivityLog();
+      _existing = existing;
+      _storedToken = existing is null ? null : storedToken;
 
-    /// <summary>True while step 2 is validating the token against the organization lister.</summary>
-    [ObservableProperty]
-    public partial bool IsValidatingToken { get; set; }
+      Step = 1;
+      NameError = "";
+      TokenError = "";
+      OrganizationError = "";
+      TargetError = "";
+      Token = "";
+      Name = "";
+      Description = "";
+      Organization = "";
+      TargetRoot = "";
+   }
 
-    /// <summary>Step 1's validation message; empty when the name is acceptable.</summary>
-    [ObservableProperty]
-    public partial string NameError { get; set; }
 
-    /// <summary>Step 2's validation message; empty when the token was accepted.</summary>
-    [ObservableProperty]
-    public partial string TokenError { get; set; }
 
-    /// <summary>Step 3's validation message; empty once an organization is chosen.</summary>
-    [ObservableProperty]
-    public partial string OrganizationError { get; set; }
+   /// <summary>Current wizard step, 1 (identity) through 4 (destination).</summary>
+   [ObservableProperty]
+   [NotifyPropertyChangedFor(nameof(IsFirstStep))]
+   [NotifyPropertyChangedFor(nameof(IsLastStep))]
+   public partial int Step { get; set; }
 
-    /// <summary>Step 4's validation message; empty once a target folder is chosen.</summary>
-    [ObservableProperty]
-    public partial string TargetError { get; set; }
+   /// <summary>Display name for the account; required and unique across accounts.</summary>
+   [ObservableProperty]
+   public partial string Name { get; set; }
 
-    /// <summary>Organizations the validated token can see; feeds step 3's editable dropdown.</summary>
-    public ObservableCollection<string> Organizations { get; } = new();
+   /// <summary>Optional free-form note about what the account is for.</summary>
+   [ObservableProperty]
+   public partial string Description { get; set; }
 
-    /// <summary>True on step 1, where there is no step to go back to.</summary>
-    public bool IsFirstStep => Step == 1;
+   /// <summary>
+   /// GitHub personal access token as typed; validated when leaving step 2. For an
+   /// edit it starts empty and stays empty unless the user types a replacement —
+   /// the stored token is never loaded into it.
+   /// </summary>
+   [ObservableProperty]
+   public partial string Token { get; set; }
 
-    /// <summary>True on step 4, where advancing means saving instead of moving on.</summary>
-    public bool IsLastStep => Step == 4;
+   /// <summary>Organization (or user) to sync; picked from <see cref="Organizations"/> or typed.</summary>
+   [ObservableProperty]
+   public partial string Organization { get; set; }
 
-    /// <summary>True when the wizard edits an existing account rather than creating one.</summary>
-    public bool IsEditing => _existing is not null;
+   /// <summary>Folder the sync targets; see <see cref="CreateOrgSubfolder"/>.</summary>
+   [ObservableProperty]
+   public partial string TargetRoot { get; set; }
 
-    /// <summary>Dialog title matching the wizard's mode.</summary>
-    public string Title => IsEditing ? "Edit account" : "Add account";
+   /// <summary>When set, clones land under TargetRoot\Organization rather than TargetRoot.</summary>
+   [ObservableProperty]
+   public partial bool CreateOrgSubfolder { get; set; }
 
-    partial void OnMaxConcurrencyChanged(int value)
-    {
-        int clamped = Math.Clamp(value, AppSettings.MinConcurrency, AppSettings.MaxConcurrency);
-        if (clamped != value)
-        {
-            MaxConcurrency = clamped;
-        }
-    }
+   /// <summary>Parallel clone/pull count; kept within the <see cref="AppSettings"/> range.</summary>
+   [ObservableProperty]
+   public partial int MaxConcurrency { get; set; }
 
-    /// <summary>
-    /// Validates the current step. Steps 1-3 advance and return true on success; step 4
-    /// returns true without advancing (the host then calls <see cref="SaveAsync"/>). On
-    /// failure the wizard stays put with the step's error message set
-    /// (<see cref="NameError"/>, <see cref="TokenError"/>, <see cref="OrganizationError"/>,
-    /// <see cref="TargetError"/>) — a silent no-op on Next reads as a broken button (#30).
-    /// </summary>
-    public async Task<bool> TryAdvanceAsync()
-    {
-        switch (Step)
-        {
-            case 1:
-                {
-                    string name = Name.Trim();
-                    if (name.Length == 0)
-                    {
-                        NameError = "Enter a name for this account.";
-                        return false;
-                    }
-                    Account? clash = _store.FindByName(name);
-                    if (clash is not null && clash.Id != _existing?.Id)
-                    {
-                        NameError = $"An account named '{clash.Name}' already exists.";
-                        return false;
-                    }
-                    NameError = "";
-                    Step = 2;
-                    return true;
-                }
-            case 2:
-                {
-                    // The lister is the validation: it fails on a rejected or rate-limited
-                    // token and returns the organizations the dropdown offers otherwise.
-                    // An edit with the box left empty validates the STORED token, fetched
-                    // here and used for this one call only.
-                    string candidate = Token.Trim();
-                    if (candidate.Length == 0 && IsEditing)
-                    {
-                        candidate = _storedToken?.Invoke()?.Trim() ?? "";
-                        if (candidate.Length == 0)
-                        {
-                            TokenError = "This account has no stored token. Enter one to continue.";
-                            return false;
-                        }
-                    }
+   /// <summary>True while step 2 is validating the token against the organization lister.</summary>
+   [ObservableProperty]
+   public partial bool IsValidatingToken { get; set; }
 
-                    IsValidatingToken = true;
-                    _log.Info("Account wizard: validating the token.");
-                    try
-                    {
-                        var organizations = await _orgLister.ListOrganizationsAsync(candidate);
-                        Organizations.Clear();
-                        foreach (string organization in organizations)
-                        {
-                            Organizations.Add(organization);
-                        }
-                        TokenError = "";
-                        _log.Info($"Account wizard: token accepted; {organizations.Count} organizations and accounts visible.");
-                    }
-                    catch (Exception ex)
-                    {
-                        TokenError = ex.Message;
-                        _log.Error($"Account wizard: token rejected: {ex.Message}", ex);
-                        return false;
-                    }
-                    finally
-                    {
-                        IsValidatingToken = false;
-                    }
-                    Step = 3;
-                    return true;
-                }
-            case 3:
-                if (string.IsNullOrWhiteSpace(Organization))
-                {
-                    // The dropdown allows free text, but not nothing.
-                    OrganizationError = "Choose an organization from the list, or type one.";
-                    return false;
-                }
-                OrganizationError = "";
-                Step = 4;
-                return true;
-            default:
-                // Step 4: valid means "ready to save"; the host closes via SaveAsync.
-                if (string.IsNullOrWhiteSpace(TargetRoot))
-                {
-                    TargetError = "Choose a target folder.";
-                    return false;
-                }
-                TargetError = "";
-                return true;
-        }
-    }
+   /// <summary>Step 1's validation message; empty when the name is acceptable.</summary>
+   [ObservableProperty]
+   public partial string NameError { get; set; }
 
-    /// <summary>Returns to the previous step; a no-op on the first step.</summary>
-    public void GoBack()
-    {
-        if (!IsFirstStep)
-        {
-            Step--;
-        }
-    }
+   /// <summary>Step 2's validation message; empty when the token was accepted.</summary>
+   [ObservableProperty]
+   public partial string TokenError { get; set; }
 
-    /// <summary>
-    /// Persists the wizard's account: a new account gets a fresh id and always writes
-    /// its token to the vault; an edit keeps the existing id and last-sync fields and
-    /// touches the vault only when the token was changed. All string inputs are trimmed.
-    /// </summary>
-    public Task SaveAsync()
-    {
-        _store.Save(BuildAccount(), TokenChanged ? Token.Trim() : null);
-        return Task.CompletedTask;
-    }
+   /// <summary>Step 3's validation message; empty once an organization is chosen.</summary>
+   [ObservableProperty]
+   public partial string OrganizationError { get; set; }
 
-    /// <summary>New accounts always persist their token; edits only when one was typed.</summary>
-    private bool TokenChanged => !IsEditing || Token.Trim().Length > 0;
+   /// <summary>Step 4's validation message; empty once a target folder is chosen.</summary>
+   [ObservableProperty]
+   public partial string TargetError { get; set; }
 
-    private Account BuildAccount() => new()
-    {
-        Id = _existing?.Id ?? Guid.NewGuid(),
-        Name = Name.Trim(),
-        Description = Description.Trim(),
-        Organization = Organization.Trim(),
-        TargetRoot = TargetRoot.Trim(),
-        CreateOrgSubfolder = CreateOrgSubfolder,
-        MaxConcurrency = Math.Clamp(MaxConcurrency, AppSettings.MinConcurrency, AppSettings.MaxConcurrency),
-        LastSyncUtc = _existing?.LastSyncUtc,
-        LastSyncSummary = _existing?.LastSyncSummary,
-    };
+   /// <summary>Organizations the validated token can see; feeds step 3's editable dropdown.</summary>
+   public ObservableCollection<string> Organizations { get; } = new();
+
+
+
+   /// <summary>True on step 1, where there is no step to go back to.</summary>
+   public bool IsFirstStep => Step == 1;
+
+
+
+   /// <summary>True on step 4, where advancing means saving instead of moving on.</summary>
+   public bool IsLastStep => Step == 4;
+
+
+
+   /// <summary>True when the wizard edits an existing account rather than creating one.</summary>
+   public bool IsEditing => _existing is not null;
+
+
+
+   /// <summary>Dialog title matching the wizard's mode.</summary>
+   public string Title => IsEditing ? "Edit account" : "Add account";
+
+
+
+   partial void OnMaxConcurrencyChanged(int value)
+   {
+      int clamped = Math.Clamp(value, AppSettings.MinConcurrency, AppSettings.MaxConcurrency);
+      if(clamped != value)
+      {
+         MaxConcurrency = clamped;
+      }
+   }
+
+
+
+   /// <summary>
+   /// Validates the current step. Steps 1-3 advance and return true on success; step 4
+   /// returns true without advancing (the host then calls <see cref="SaveAsync"/>). On
+   /// failure the wizard stays put with the step's error message set
+   /// (<see cref="NameError"/>, <see cref="TokenError"/>, <see cref="OrganizationError"/>,
+   /// <see cref="TargetError"/>) — a silent no-op on Next reads as a broken button (#30).
+   /// </summary>
+   public async Task<bool> TryAdvanceAsync()
+   {
+      switch(Step)
+      {
+         case 1:
+            {
+               string name = Name.Trim();
+               if(name.Length == 0)
+               {
+                  NameError = "Enter a name for this account.";
+                  return false;
+               }
+               Account? clash = _store.FindByName(name);
+               if(clash is not null && clash.Id != _existing?.Id)
+               {
+                  NameError = $"An account named '{clash.Name}' already exists.";
+                  return false;
+               }
+               NameError = "";
+               Step = 2;
+               return true;
+            }
+         case 2:
+            {
+               // The lister is the validation: it fails on a rejected or rate-limited
+               // token and returns the organizations the dropdown offers otherwise.
+               // An edit with the box left empty validates the STORED token, fetched
+               // here and used for this one call only.
+               string candidate = Token.Trim();
+               if(candidate.Length == 0 && IsEditing)
+               {
+                  candidate = _storedToken?.Invoke()?.Trim() ?? "";
+                  if(candidate.Length == 0)
+                  {
+                     TokenError = "This account has no stored token. Enter one to continue.";
+                     return false;
+                  }
+               }
+
+               IsValidatingToken = true;
+               _log.Info("Account wizard: validating the token.");
+               try
+               {
+                  IReadOnlyList<string> organizations = await _orgLister.ListOrganizationsAsync(candidate);
+                  Organizations.Clear();
+                  foreach(string organization in organizations)
+                  {
+                     Organizations.Add(organization);
+                  }
+                  TokenError = "";
+                  _log.Info($"Account wizard: token accepted; {organizations.Count} organizations and accounts visible.");
+               }
+               catch(Exception ex)
+               {
+                  TokenError = ex.Message;
+                  _log.Error($"Account wizard: token rejected: {ex.Message}", ex);
+                  return false;
+               }
+               finally
+               {
+                  IsValidatingToken = false;
+               }
+               Step = 3;
+               return true;
+            }
+         case 3:
+            if(string.IsNullOrWhiteSpace(Organization))
+            {
+               // The dropdown allows free text, but not nothing.
+               OrganizationError = "Choose an organization from the list, or type one.";
+               return false;
+            }
+            OrganizationError = "";
+            Step = 4;
+            return true;
+         default:
+            // Step 4: valid means "ready to save"; the host closes via SaveAsync.
+            if(string.IsNullOrWhiteSpace(TargetRoot))
+            {
+               TargetError = "Choose a target folder.";
+               return false;
+            }
+            TargetError = "";
+            return true;
+      }
+   }
+
+
+
+   /// <summary>Returns to the previous step; a no-op on the first step.</summary>
+   public void GoBack()
+   {
+      if(!IsFirstStep)
+      {
+         Step--;
+      }
+   }
+
+
+
+   /// <summary>
+   /// Persists the wizard's account: a new account gets a fresh id and always writes
+   /// its token to the vault; an edit keeps the existing id and last-sync fields and
+   /// touches the vault only when the token was changed. All string inputs are trimmed.
+   /// </summary>
+   public Task SaveAsync()
+   {
+      _store.Save(BuildAccount(), TokenChanged ? Token.Trim() : null);
+      return Task.CompletedTask;
+   }
+
+
+
+   /// <summary>New accounts always persist their token; edits only when one was typed.</summary>
+   private bool TokenChanged => !IsEditing || Token.Trim().Length > 0;
+
+
+
+   private Account BuildAccount() => new()
+   {
+      Id = _existing?.Id ?? Guid.NewGuid(),
+      Name = Name.Trim(),
+      Description = Description.Trim(),
+      Organization = Organization.Trim(),
+      TargetRoot = TargetRoot.Trim(),
+      CreateOrgSubfolder = CreateOrgSubfolder,
+      MaxConcurrency = Math.Clamp(MaxConcurrency, AppSettings.MinConcurrency, AppSettings.MaxConcurrency),
+      LastSyncUtc = _existing?.LastSyncUtc,
+      LastSyncSummary = _existing?.LastSyncSummary,
+   };
 }

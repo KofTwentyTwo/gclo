@@ -1,12 +1,19 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Text.Json;
 using gclo.Engine;
 
+
 namespace gclo.Cli;
+
 
 /// <summary>'gclo orgs': list the account and organization logins a token can see.</summary>
 internal static class OrgsCommand
 {
-    private const string HelpText = """
+   private const string HelpText = """
         Usage: gclo orgs [options]
 
         Lists the logins the token can sync, one per line: the token's own account
@@ -35,85 +42,89 @@ internal static class OrgsCommand
           argument would leak. Use --token-env, --token-file, or --token-stdin.
         """;
 
-    /// <summary>Composition root: wires the real GitHub lister and file log.</summary>
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
-        Justification = "Wires the real network lister and file log; delegates to the covered core.")]
-    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
-        => RunAsync(args, new GitHubOrganizationLister(), new FileActivityLog(), cancellationToken);
 
-    internal static async Task<int> RunAsync(
-        string[] args, IOrganizationLister lister, IActivityLog log, CancellationToken cancellationToken)
-    {
-        bool json = false;
-        var tokenOptions = new TokenOptions();
 
-        var reader = new OptionReader(args);
-        while (reader.MoveNext())
-        {
-            if (tokenOptions.TryConsume(reader))
+   /// <summary>Composition root: wires the real GitHub lister and file log.</summary>
+   [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+       Justification = "Wires the real network lister and file log; delegates to the covered core.")]
+   public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+       => RunAsync(args, new GitHubOrganizationLister(), new FileActivityLog(), cancellationToken);
+
+
+
+   internal static async Task<int> RunAsync(
+       string[] args, IOrganizationLister lister, IActivityLog log, CancellationToken cancellationToken)
+   {
+      bool json = false;
+      var tokenOptions = new TokenOptions();
+
+      var reader = new OptionReader(args);
+      while(reader.MoveNext())
+      {
+         if(tokenOptions.TryConsume(reader))
+         {
+            continue;
+         }
+         switch(reader.Current)
+         {
+            case "--help" or "-h":
+               Console.Out.WriteLine(HelpText);
+               return ExitCodes.Success;
+            case "--json":
+               reader.RejectValue();
+               json = true;
+               break;
+            default:
+               throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo orgs'.");
+         }
+      }
+
+      log.Info($"orgs started: json={json}");
+
+      try
+      {
+         string token = tokenOptions.Resolve();
+
+         IReadOnlyList<string> logins;
+         try
+         {
+            logins = await lister
+                .ListOrganizationsAsync(token, cancellationToken)
+                .ConfigureAwait(false);
+         }
+         catch(InvalidOperationException ex)
+         {
+            // The lister translates auth failures and rate limiting; the kind
+            // picks the exit code (2/3/4).
+            throw CliErrorException.FromEngine(ex);
+         }
+
+         log.Info($"orgs finished: {logins.Count} login(s) listed.");
+
+         if(json)
+         {
+            Console.Out.WriteLine(JsonSerializer.Serialize(logins, CliJsonContext.Default.IReadOnlyListString));
+         }
+         else
+         {
+            foreach(string login in logins)
             {
-                continue;
+               Console.Out.WriteLine(login);
             }
-            switch (reader.Current)
-            {
-                case "--help" or "-h":
-                    Console.Out.WriteLine(HelpText);
-                    return ExitCodes.Success;
-                case "--json":
-                    reader.RejectValue();
-                    json = true;
-                    break;
-                default:
-                    throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo orgs'.");
-            }
-        }
-
-        log.Info($"orgs started: json={json}");
-
-        try
-        {
-            string token = tokenOptions.Resolve();
-
-            IReadOnlyList<string> logins;
-            try
-            {
-                logins = await lister
-                    .ListOrganizationsAsync(token, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (InvalidOperationException ex)
-            {
-                // The lister translates auth failures and rate limiting; the kind
-                // picks the exit code (2/3/4).
-                throw CliErrorException.FromEngine(ex);
-            }
-
-            log.Info($"orgs finished: {logins.Count} login(s) listed.");
-
-            if (json)
-            {
-                Console.Out.WriteLine(JsonSerializer.Serialize(logins, CliJsonContext.Default.IReadOnlyListString));
-            }
-            else
-            {
-                foreach (string login in logins)
-                {
-                    Console.Out.WriteLine(login);
-                }
-            }
-            return ExitCodes.Success;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            log.Info("orgs canceled.");
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Fatal path: missing or rejected token. Program prints the message;
-            // the log keeps it.
-            log.Error($"orgs failed: {ex.Message}", ex);
-            throw;
-        }
-    }
+         }
+         return ExitCodes.Success;
+      }
+      catch(OperationCanceledException) when(cancellationToken.IsCancellationRequested)
+      {
+         log.Info("orgs canceled.");
+         throw;
+      }
+      catch(Exception ex)
+      {
+         // Fatal path: missing or rejected token. Program prints the message;
+         // the log keeps it.
+         log.Error($"orgs failed: {ex.Message}", ex);
+         throw;
+      }
+   }
 }

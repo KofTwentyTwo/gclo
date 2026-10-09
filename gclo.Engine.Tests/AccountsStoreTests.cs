@@ -1,6 +1,13 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using gclo.ViewModels;
 
+
 namespace gclo.Engine.Tests;
+
 
 /// <summary>
 /// Tests for <see cref="AccountsStore"/>: JSON round-trips across store instances,
@@ -10,212 +17,245 @@ namespace gclo.Engine.Tests;
 /// </summary>
 public sealed class AccountsStoreTests : IDisposable
 {
-    private readonly string _root =
-        Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
-    private readonly InMemoryVault _vault = new();
+   private readonly string _root =
+       Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
 
-    public void Dispose() => GitTestHelpers.TryDeleteDirectory(_root);
+   private readonly InMemoryVault _vault = new();
 
-    private AccountsStore NewStore() => new(_vault, _root);
 
-    private static Account MakeAccount(string name) => new()
-    {
-        Id = Guid.NewGuid(),
-        Name = name,
-        Organization = "acme",
-        TargetRoot = @"C:\repos",
-    };
 
-    // ---------------------------------------------------------------- persistence
+   public void Dispose() => GitTestHelpers.TryDeleteDirectory(_root);
 
-    [Fact]
-    public void Crud_RoundTrips_AcrossStoreInstances()
-    {
-        var account = MakeAccount("Work") with
-        {
-            Description = "primary org",
-            CreateOrgSubfolder = true,
-            MaxConcurrency = 4,
-        };
 
-        NewStore().Save(account, token: null);
-        Assert.Equal(account, Assert.Single(NewStore().GetAll()));
 
-        var edited = account with { Name = "Work (new)", Organization = "acme-2" };
-        NewStore().Save(edited, token: null);
-        Assert.Equal(edited, Assert.Single(NewStore().GetAll()));
+   private AccountsStore NewStore() => new(_vault, _root);
 
-        NewStore().Delete(account.Id);
-        Assert.Empty(NewStore().GetAll());
-    }
 
-    [Fact]
-    public void FreshDirectory_YieldsEmptyList()
-    {
-        Assert.Empty(NewStore().GetAll());
-    }
 
-    // ---------------------------------------------------------------- queries
+   private static Account MakeAccount(string name) => new()
+   {
+      Id = Guid.NewGuid(),
+      Name = name,
+      Organization = "acme",
+      TargetRoot = @"C:\repos",
+   };
 
-    [Fact]
-    public void GetAll_SortsByName_CaseInsensitively()
-    {
-        var store = NewStore();
-        store.Save(MakeAccount("Charlie"), null);
-        store.Save(MakeAccount("beta"), null);
-        store.Save(MakeAccount("Alpha"), null);
 
-        // Ordinal (case-sensitive) order would be Alpha, Charlie, beta.
-        Assert.Equal(
-            new[] { "Alpha", "beta", "Charlie" },
-            store.GetAll().Select(a => a.Name));
-    }
 
-    [Fact]
-    public void FindByName_MatchesCaseInsensitively()
-    {
-        var store = NewStore();
-        var account = MakeAccount("Work");
-        store.Save(account, null);
+   // ---------------------------------------------------------------- persistence
 
-        Assert.Equal(account, store.FindByName("WORK"));
-        Assert.Equal(account, store.FindByName("work"));
-        Assert.Null(store.FindByName("missing"));
-    }
+   [Fact]
+   public void Crud_RoundTrips_AcrossStoreInstances()
+   {
+      Account account = MakeAccount("Work") with
+      {
+         Description = "primary org",
+         CreateOrgSubfolder = true,
+         MaxConcurrency = 4,
+      };
 
-    // ---------------------------------------------------------------- name uniqueness
+      NewStore().Save(account, token: null);
+      Assert.Equal(account, Assert.Single(NewStore().GetAll()));
 
-    [Theory]
-    [InlineData("Work")]
-    [InlineData("WORK")]
-    [InlineData("work")]
-    public void Save_DuplicateNameOnDifferentId_ThrowsAndPersistsNothing(string duplicateName)
-    {
-        NewStore().Save(MakeAccount("Work"), null);
-        var duplicate = MakeAccount(duplicateName);
+      Account edited = account with { Name = "Work (new)", Organization = "acme-2" };
+      NewStore().Save(edited, token: null);
+      Assert.Equal(edited, Assert.Single(NewStore().GetAll()));
 
-        Assert.Throws<ArgumentException>(() => NewStore().Save(duplicate, "secret"));
+      NewStore().Delete(account.Id);
+      Assert.Empty(NewStore().GetAll());
+   }
 
-        var survivor = Assert.Single(NewStore().GetAll());
-        Assert.Equal("Work", survivor.Name);
-        Assert.Null(_vault.TryRetrieve(duplicate.Id));
-    }
 
-    [Fact]
-    public void Save_SameIdWithSameName_IsAnUpdateNotADuplicate()
-    {
-        var account = MakeAccount("Work");
-        var store = NewStore();
-        store.Save(account, null);
 
-        store.Save(account with { Description = "edited" }, null);
+   [Fact]
+   public void FreshDirectory_YieldsEmptyList()
+   {
+      Assert.Empty(NewStore().GetAll());
+   }
 
-        Assert.Equal("edited", Assert.Single(store.GetAll()).Description);
-    }
 
-    // ---------------------------------------------------------------- vault coordination
 
-    [Fact]
-    public void Save_WithToken_StoresItInTheVault()
-    {
-        var account = MakeAccount("Work");
+   // ---------------------------------------------------------------- queries
 
-        NewStore().Save(account, "ghp_secret");
+   [Fact]
+   public void GetAll_SortsByName_CaseInsensitively()
+   {
+      AccountsStore store = NewStore();
+      store.Save(MakeAccount("Charlie"), null);
+      store.Save(MakeAccount("beta"), null);
+      store.Save(MakeAccount("Alpha"), null);
 
-        Assert.Equal("ghp_secret", _vault.TryRetrieve(account.Id));
-    }
+      // Ordinal (case-sensitive) order would be Alpha, Charlie, beta.
+      Assert.Equal(
+          new[] { "Alpha", "beta", "Charlie" },
+          store.GetAll().Select(a => a.Name), StringComparer.Ordinal);
+   }
 
-    [Fact]
-    public void Save_WithNullToken_LeavesVaultUntouched()
-    {
-        var account = MakeAccount("Work");
-        var store = NewStore();
-        store.Save(account, "original");
 
-        store.Save(account with { Description = "edited" }, null);
 
-        Assert.Equal("original", _vault.TryRetrieve(account.Id));
-    }
+   [Fact]
+   public void FindByName_MatchesCaseInsensitively()
+   {
+      AccountsStore store = NewStore();
+      Account account = MakeAccount("Work");
+      store.Save(account, null);
 
-    [Fact]
-    public void Delete_RemovesMetadataAndVaultEntry_AndIsIdempotent()
-    {
-        var account = MakeAccount("Work");
-        var store = NewStore();
-        store.Save(account, "secret");
+      Assert.Equal(account, store.FindByName("WORK"));
+      Assert.Equal(account, store.FindByName("work"));
+      Assert.Null(store.FindByName("missing"));
+   }
 
-        store.Delete(account.Id);
 
-        Assert.Empty(store.GetAll());
-        Assert.Empty(NewStore().GetAll());
-        Assert.Null(_vault.TryRetrieve(account.Id));
 
-        store.Delete(account.Id); // deleting again must not throw
-    }
+   // ---------------------------------------------------------------- name uniqueness
 
-    // ---------------------------------------------------------------- sync results
+   [Theory]
+   [InlineData("Work")]
+   [InlineData("WORK")]
+   [InlineData("work")]
+   public void Save_DuplicateNameOnDifferentId_ThrowsAndPersistsNothing(string duplicateName)
+   {
+      NewStore().Save(MakeAccount("Work"), null);
+      Account duplicate = MakeAccount(duplicateName);
 
-    [Fact]
-    public void RecordSyncResult_UpdatesOnlySyncFields_AndPersists()
-    {
-        var account = MakeAccount("Work") with { Description = "keep me", MaxConcurrency = 4 };
-        NewStore().Save(account, null);
-        var finished = new DateTimeOffset(2026, 7, 4, 12, 0, 0, TimeSpan.Zero);
+      Assert.Throws<ArgumentException>(() => NewStore().Save(duplicate, "secret"));
 
-        NewStore().RecordSyncResult(account.Id, finished, "12 cloned, 3 updated, 0 failed");
+      Account survivor = Assert.Single(NewStore().GetAll());
+      Assert.Equal("Work", survivor.Name);
+      Assert.Null(_vault.TryRetrieve(duplicate.Id));
+   }
 
-        var updated = Assert.Single(NewStore().GetAll());
-        Assert.Equal(
-            account with { LastSyncUtc = finished, LastSyncSummary = "12 cloned, 3 updated, 0 failed" },
-            updated);
-    }
 
-    // ---------------------------------------------------------------- load tolerance
 
-    [Fact]
-    public void CorruptFile_YieldsEmptyList_AndSubsequentSaveWorks()
-    {
-        Directory.CreateDirectory(_root);
-        File.WriteAllText(Path.Combine(_root, "accounts.json"), "{ this is not json !!");
+   [Fact]
+   public void Save_SameIdWithSameName_IsAnUpdateNotADuplicate()
+   {
+      Account account = MakeAccount("Work");
+      AccountsStore store = NewStore();
+      store.Save(account, null);
 
-        var store = NewStore();
-        Assert.Empty(store.GetAll());
+      store.Save(account with { Description = "edited" }, null);
 
-        var account = MakeAccount("Recovered");
-        store.Save(account, null);
-        Assert.Equal(account, Assert.Single(NewStore().GetAll()));
-    }
+      Assert.Equal("edited", Assert.Single(store.GetAll()).Description);
+   }
 
-    [Fact]
-    public void Load_CorruptFile_IsPreservedAside_SoSaveCannotClobberIt()
-    {
-        Directory.CreateDirectory(_root);
-        string path = Path.Combine(_root, "accounts.json");
-        File.WriteAllText(path, "{ not valid json");
 
-        var store = NewStore();
-        Assert.Empty(store.GetAll());
 
-        // The unreadable original must survive as evidence for token re-association.
-        string? preserved = Directory.GetFiles(_root, "accounts.json.corrupt-*").SingleOrDefault();
-        Assert.NotNull(preserved);
-        Assert.Equal("{ not valid json", File.ReadAllText(preserved));
+   // ---------------------------------------------------------------- vault coordination
 
-        store.Save(MakeAccount("Fresh"), null);
-        Assert.Equal("{ not valid json", File.ReadAllText(preserved)); // untouched
-    }
+   [Fact]
+   public void Save_WithToken_StoresItInTheVault()
+   {
+      Account account = MakeAccount("Work");
 
-    [Fact]
-    public void Persist_ReplacesAtomically_KeepingABackupOfThePreviousFile()
-    {
-        var store = NewStore();
-        store.Save(MakeAccount("First"), null);
-        store.Save(MakeAccount("Second"), null);
+      NewStore().Save(account, "ghp_secret");
 
-        // The atomic File.Replace keeps the prior generation as .bak, and no
-        // temp file is left behind.
-        Assert.True(File.Exists(Path.Combine(_root, "accounts.json.bak")));
-        Assert.False(File.Exists(Path.Combine(_root, "accounts.json.tmp")));
-        Assert.Equal(2, NewStore().GetAll().Count);
-    }
+      Assert.Equal("ghp_secret", _vault.TryRetrieve(account.Id));
+   }
+
+
+
+   [Fact]
+   public void Save_WithNullToken_LeavesVaultUntouched()
+   {
+      Account account = MakeAccount("Work");
+      AccountsStore store = NewStore();
+      store.Save(account, "original");
+
+      store.Save(account with { Description = "edited" }, null);
+
+      Assert.Equal("original", _vault.TryRetrieve(account.Id));
+   }
+
+
+
+   [Fact]
+   public void Delete_RemovesMetadataAndVaultEntry_AndIsIdempotent()
+   {
+      Account account = MakeAccount("Work");
+      AccountsStore store = NewStore();
+      store.Save(account, "secret");
+
+      store.Delete(account.Id);
+
+      Assert.Empty(store.GetAll());
+      Assert.Empty(NewStore().GetAll());
+      Assert.Null(_vault.TryRetrieve(account.Id));
+
+      store.Delete(account.Id); // deleting again must not throw
+   }
+
+
+
+   // ---------------------------------------------------------------- sync results
+
+   [Fact]
+   public void RecordSyncResult_UpdatesOnlySyncFields_AndPersists()
+   {
+      Account account = MakeAccount("Work") with { Description = "keep me", MaxConcurrency = 4 };
+      NewStore().Save(account, null);
+      var finished = new DateTimeOffset(2026, 7, 4, 12, 0, 0, TimeSpan.Zero);
+
+      NewStore().RecordSyncResult(account.Id, finished, "12 cloned, 3 updated, 0 failed");
+
+      Account updated = Assert.Single(NewStore().GetAll());
+      Assert.Equal(
+          account with { LastSyncUtc = finished, LastSyncSummary = "12 cloned, 3 updated, 0 failed" },
+          updated);
+   }
+
+
+
+   // ---------------------------------------------------------------- load tolerance
+
+   [Fact]
+   public void CorruptFile_YieldsEmptyList_AndSubsequentSaveWorks()
+   {
+      Directory.CreateDirectory(_root);
+      File.WriteAllText(Path.Combine(_root, "accounts.json"), "{ this is not json !!");
+
+      AccountsStore store = NewStore();
+      Assert.Empty(store.GetAll());
+
+      Account account = MakeAccount("Recovered");
+      store.Save(account, null);
+      Assert.Equal(account, Assert.Single(NewStore().GetAll()));
+   }
+
+
+
+   [Fact]
+   public void Load_CorruptFile_IsPreservedAside_SoSaveCannotClobberIt()
+   {
+      Directory.CreateDirectory(_root);
+      string path = Path.Combine(_root, "accounts.json");
+      File.WriteAllText(path, "{ not valid json");
+
+      AccountsStore store = NewStore();
+      Assert.Empty(store.GetAll());
+
+      // The unreadable original must survive as evidence for token re-association.
+      string? preserved = Directory.GetFiles(_root, "accounts.json.corrupt-*").SingleOrDefault();
+      Assert.NotNull(preserved);
+      Assert.Equal("{ not valid json", File.ReadAllText(preserved));
+
+      store.Save(MakeAccount("Fresh"), null);
+      Assert.Equal("{ not valid json", File.ReadAllText(preserved)); // untouched
+   }
+
+
+
+   [Fact]
+   public void Persist_ReplacesAtomically_KeepingABackupOfThePreviousFile()
+   {
+      AccountsStore store = NewStore();
+      store.Save(MakeAccount("First"), null);
+      store.Save(MakeAccount("Second"), null);
+
+      // The atomic File.Replace keeps the prior generation as .bak, and no
+      // temp file is left behind.
+      Assert.True(File.Exists(Path.Combine(_root, "accounts.json.bak")));
+      Assert.False(File.Exists(Path.Combine(_root, "accounts.json.tmp")));
+      Assert.Equal(2, NewStore().GetAll().Count);
+   }
 }

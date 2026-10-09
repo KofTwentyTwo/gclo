@@ -1,9 +1,16 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Globalization;
 using System.Text.Json;
 using gclo.Engine;
 using gclo.ViewModels;
 
+
 namespace gclo.Cli;
+
 
 /// <summary>
 /// 'gclo accounts': list, add, edit, and remove the saved accounts — the same
@@ -12,7 +19,7 @@ namespace gclo.Cli;
 /// </summary>
 internal static class AccountsCommand
 {
-    private const string HelpText = """
+   private const string HelpText = """
         Usage: gclo accounts [list] [--json]
                gclo accounts add --name <name> --org <name> --target <folder> [options] <token option>
                gclo accounts edit --name <name> [options] [token option]
@@ -64,374 +71,394 @@ internal static class AccountsCommand
              or not running on Windows
         """;
 
-    /// <summary>Composition root: wires the real Credential Manager store and file log.</summary>
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
-        Justification = "Wires the real Credential Manager and file log; delegates to the covered core.")]
-    public static int Run(string[] args) => Run(args, Open, new FileActivityLog());
 
-    internal static int Run(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
-    {
-        // The first argument names the subcommand unless it is an option, in which
-        // case it is 'list' (the original, option-only form of the command).
-        string subcommand = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : "list";
-        string[] rest = subcommand == "list" && (args.Length == 0 || args[0].StartsWith("--", StringComparison.Ordinal))
-            ? args
-            : args[1..];
 
-        return subcommand switch
-        {
-            "list" => List(rest, open, log),
-            "add" => Add(rest, open, log),
-            "edit" => Edit(rest, open, log),
-            "remove" => Remove(rest, open, log),
-            _ => throw new CliUsageException($"Unknown subcommand '{subcommand}' for 'gclo accounts' (use list, add, edit, or remove)."),
-        };
-    }
+   /// <summary>Composition root: wires the real Credential Manager store and file log.</summary>
+   [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+       Justification = "Wires the real Credential Manager and file log; delegates to the covered core.")]
+   public static int Run(string[] args) => Run(args, Open, new FileActivityLog());
 
-    // ---------------------------------------------------------------- list
 
-    private static int List(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
-    {
-        bool json = false;
 
-        var reader = new OptionReader(args);
-        while (reader.MoveNext())
-        {
-            switch (reader.Current)
-            {
-                case "--help" or "-h":
-                    Console.Out.WriteLine(HelpText);
-                    return ExitCodes.Success;
-                case "--json":
-                    reader.RejectValue();
-                    json = true;
-                    break;
-                default:
-                    throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo accounts'.");
-            }
-        }
+   internal static int Run(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
+   {
+      // The first argument names the subcommand unless it is an option, in which
+      // case it is 'list' (the original, option-only form of the command).
+      string subcommand = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : "list";
+      string[] rest = string.Equals(subcommand, "list", StringComparison.Ordinal) && (args.Length == 0 || args[0].StartsWith("--", StringComparison.Ordinal))
+          ? args
+          : args[1..];
 
-        log.Info($"accounts started: json={json}");
+      return subcommand switch
+      {
+         "list" => List(rest, open, log),
+         "add" => Add(rest, open, log),
+         "edit" => Edit(rest, open, log),
+         "remove" => Remove(rest, open, log),
+         _ => throw new CliUsageException($"Unknown subcommand '{subcommand}' for 'gclo accounts' (use list, add, edit, or remove)."),
+      };
+   }
 
-        try
-        {
-            (AccountsStore store, _) = open(log);
-            IReadOnlyList<Account> accounts = store.GetAll();
-            log.Info($"accounts finished: {accounts.Count} account(s) listed.");
 
-            if (json)
-            {
-                IReadOnlyList<AccountSummary> summaries = accounts
-                    .Select(a => new AccountSummary(
-                        a.Id.ToString("N"), a.Name, a.Description, a.Organization, a.TargetRoot,
-                        a.CreateOrgSubfolder, a.MaxConcurrency, a.LastSyncUtc, a.LastSyncSummary))
-                    .ToList();
-                Console.Out.WriteLine(JsonSerializer.Serialize(
-                    summaries, CliJsonContext.Default.IReadOnlyListAccountSummary));
-                return ExitCodes.Success;
-            }
 
-            if (accounts.Count == 0)
-            {
-                // Diagnostics go to stderr so redirected stdout stays clean (and empty).
-                Console.Error.WriteLine("No accounts yet. Create one with 'gclo accounts add' or in the gclo desktop app.");
-                return ExitCodes.Success;
-            }
+   // ---------------------------------------------------------------- list
 
-            int nameWidth = accounts.Max(a => a.Name.Length);
-            int orgWidth = accounts.Max(a => a.Organization.Length);
-            int targetWidth = accounts.Max(a => a.TargetRoot.Length);
-            foreach (Account account in accounts)
-            {
-                Console.Out.WriteLine(
-                    $"{account.Name.PadRight(nameWidth)}  {account.Organization.PadRight(orgWidth)}  "
-                    + $"{account.TargetRoot.PadRight(targetWidth)}  {FormatLastSync(account.LastSyncUtc)}");
-            }
+   private static int List(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
+   {
+      bool json = false;
+
+      var reader = new OptionReader(args);
+      while(reader.MoveNext())
+      {
+         switch(reader.Current)
+         {
+            case "--help" or "-h":
+               Console.Out.WriteLine(HelpText);
+               return ExitCodes.Success;
+            case "--json":
+               reader.RejectValue();
+               json = true;
+               break;
+            default:
+               throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo accounts'.");
+         }
+      }
+
+      log.Info($"accounts started: json={json}");
+
+      try
+      {
+         (AccountsStore store, _) = open(log);
+         IReadOnlyList<Account> accounts = store.GetAll();
+         log.Info($"accounts finished: {accounts.Count} account(s) listed.");
+
+         if(json)
+         {
+            IReadOnlyList<AccountSummary> summaries = accounts
+                .Select(a => new AccountSummary(
+                    a.Id.ToString("N"), a.Name, a.Description, a.Organization, a.TargetRoot,
+                    a.CreateOrgSubfolder, a.MaxConcurrency, a.LastSyncUtc, a.LastSyncSummary))
+                .ToList();
+            Console.Out.WriteLine(JsonSerializer.Serialize(
+                summaries, CliJsonContext.Default.IReadOnlyListAccountSummary));
             return ExitCodes.Success;
-        }
-        catch (Exception ex)
-        {
-            // Fatal path: unusable accounts store or non-Windows platform.
-            // Program prints the message; the log keeps it.
-            log.Error($"accounts failed: {ex.Message}", ex);
-            throw;
-        }
-    }
+         }
 
-    // ---------------------------------------------------------------- add
-
-    private static int Add(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
-    {
-        string? name = null;
-        string? org = null;
-        string? target = null;
-        string description = "";
-        int parallel = AppSettings.DefaultConcurrency;
-        bool orgSubfolder = false;
-        var tokenOptions = new TokenOptions();
-
-        var reader = new OptionReader(args);
-        while (reader.MoveNext())
-        {
-            if (tokenOptions.TryConsume(reader))
-            {
-                continue;
-            }
-            switch (reader.Current)
-            {
-                case "--help" or "-h":
-                    Console.Out.WriteLine(HelpText);
-                    return ExitCodes.Success;
-                case "--name":
-                    name = reader.RequireValue();
-                    break;
-                case "--org":
-                    org = reader.RequireValue();
-                    break;
-                case "--target":
-                    target = reader.RequireValue();
-                    break;
-                case "--description":
-                    description = reader.RequireValue();
-                    break;
-                case "--parallel":
-                    parallel = OptionReader.ParseParallel(reader.RequireValue());
-                    break;
-                case "--org-subfolder":
-                    reader.RejectValue();
-                    orgSubfolder = true;
-                    break;
-                default:
-                    throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo accounts add'.");
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new CliUsageException("--name is required.");
-        }
-        if (string.IsNullOrWhiteSpace(org))
-        {
-            throw new CliUsageException("--org is required.");
-        }
-        if (string.IsNullOrWhiteSpace(target))
-        {
-            throw new CliUsageException("--target is required.");
-        }
-
-        log.Info($"accounts add started: name='{name.Trim()}', org='{org.Trim()}'");
-        try
-        {
-            string token = tokenOptions.Resolve();
-            (AccountsStore store, _) = open(log);
-            var account = new Account
-            {
-                Id = Guid.NewGuid(),
-                Name = name.Trim(),
-                Description = description.Trim(),
-                Organization = org.Trim(),
-                TargetRoot = target.Trim(),
-                CreateOrgSubfolder = orgSubfolder,
-                MaxConcurrency = parallel,
-            };
-            SaveOrFail(store, account, token);
-            Console.Out.WriteLine($"Account '{account.Name}' added.");
+         if(accounts.Count == 0)
+         {
+            // Diagnostics go to stderr so redirected stdout stays clean (and empty).
+            Console.Error.WriteLine("No accounts yet. Create one with 'gclo accounts add' or in the gclo desktop app.");
             return ExitCodes.Success;
-        }
-        catch (Exception ex)
-        {
-            log.Error($"accounts add failed: {ex.Message}", ex);
-            throw;
-        }
-    }
+         }
 
-    // ---------------------------------------------------------------- edit
+         int nameWidth = accounts.Max(a => a.Name.Length);
+         int orgWidth = accounts.Max(a => a.Organization.Length);
+         int targetWidth = accounts.Max(a => a.TargetRoot.Length);
+         foreach(Account account in accounts)
+         {
+            Console.Out.WriteLine(
+                $"{account.Name.PadRight(nameWidth)}  {account.Organization.PadRight(orgWidth)}  "
+                + $"{account.TargetRoot.PadRight(targetWidth)}  {FormatLastSync(account.LastSyncUtc)}");
+         }
+         return ExitCodes.Success;
+      }
+      catch(Exception ex)
+      {
+         // Fatal path: unusable accounts store or non-Windows platform.
+         // Program prints the message; the log keeps it.
+         log.Error($"accounts failed: {ex.Message}", ex);
+         throw;
+      }
+   }
 
-    private static int Edit(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
-    {
-        string? name = null;
-        string? rename = null;
-        string? org = null;
-        string? target = null;
-        string? description = null;
-        int? parallel = null;
-        bool? orgSubfolder = null;
-        var tokenOptions = new TokenOptions();
 
-        var reader = new OptionReader(args);
-        while (reader.MoveNext())
-        {
-            if (tokenOptions.TryConsume(reader))
-            {
-                continue;
-            }
-            switch (reader.Current)
-            {
-                case "--help" or "-h":
-                    Console.Out.WriteLine(HelpText);
-                    return ExitCodes.Success;
-                case "--name":
-                    name = reader.RequireValue();
-                    break;
-                case "--rename":
-                    rename = reader.RequireValue();
-                    break;
-                case "--org":
-                    org = reader.RequireValue();
-                    break;
-                case "--target":
-                    target = reader.RequireValue();
-                    break;
-                case "--description":
-                    description = reader.RequireValue();
-                    break;
-                case "--parallel":
-                    parallel = OptionReader.ParseParallel(reader.RequireValue());
-                    break;
-                case "--org-subfolder":
-                    reader.RejectValue();
-                    orgSubfolder = true;
-                    break;
-                case "--no-org-subfolder":
-                    reader.RejectValue();
-                    orgSubfolder = false;
-                    break;
-                default:
-                    throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo accounts edit'.");
-            }
-        }
 
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new CliUsageException("--name is required.");
-        }
-        if (rename is null && org is null && target is null && description is null && parallel is null
-            && orgSubfolder is null && !tokenOptions.HasExplicitSource)
-        {
-            throw new CliUsageException("Nothing to change: give at least one of --rename, --org, --target, --parallel, "
-                + "--description, --org-subfolder/--no-org-subfolder, or a token option.");
-        }
+   // ---------------------------------------------------------------- add
 
-        log.Info($"accounts edit started: name='{name.Trim()}'");
-        try
-        {
-            (AccountsStore store, _) = open(log);
-            Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
-            string? token = tokenOptions.HasExplicitSource ? tokenOptions.Resolve() : null;
+   private static int Add(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
+   {
+      string? name = null;
+      string? org = null;
+      string? target = null;
+      string description = "";
+      int parallel = AppSettings.DefaultConcurrency;
+      bool orgSubfolder = false;
+      var tokenOptions = new TokenOptions();
 
-            Account updated = existing with
-            {
-                Name = rename?.Trim() ?? existing.Name,
-                Organization = org?.Trim() ?? existing.Organization,
-                TargetRoot = target?.Trim() ?? existing.TargetRoot,
-                Description = description?.Trim() ?? existing.Description,
-                MaxConcurrency = parallel ?? existing.MaxConcurrency,
-                CreateOrgSubfolder = orgSubfolder ?? existing.CreateOrgSubfolder,
-            };
-            SaveOrFail(store, updated, token);
-            Console.Out.WriteLine($"Account '{updated.Name}' updated" + (token is null ? "." : " (token replaced)."));
-            return ExitCodes.Success;
-        }
-        catch (Exception ex)
-        {
-            log.Error($"accounts edit failed: {ex.Message}", ex);
-            throw;
-        }
-    }
+      var reader = new OptionReader(args);
+      while(reader.MoveNext())
+      {
+         if(tokenOptions.TryConsume(reader))
+         {
+            continue;
+         }
+         switch(reader.Current)
+         {
+            case "--help" or "-h":
+               Console.Out.WriteLine(HelpText);
+               return ExitCodes.Success;
+            case "--name":
+               name = reader.RequireValue();
+               break;
+            case "--org":
+               org = reader.RequireValue();
+               break;
+            case "--target":
+               target = reader.RequireValue();
+               break;
+            case "--description":
+               description = reader.RequireValue();
+               break;
+            case "--parallel":
+               parallel = OptionReader.ParseParallel(reader.RequireValue());
+               break;
+            case "--org-subfolder":
+               reader.RejectValue();
+               orgSubfolder = true;
+               break;
+            default:
+               throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo accounts add'.");
+         }
+      }
 
-    // ---------------------------------------------------------------- remove
+      if(string.IsNullOrWhiteSpace(name))
+      {
+         throw new CliUsageException("--name is required.");
+      }
+      if(string.IsNullOrWhiteSpace(org))
+      {
+         throw new CliUsageException("--org is required.");
+      }
+      if(string.IsNullOrWhiteSpace(target))
+      {
+         throw new CliUsageException("--target is required.");
+      }
 
-    private static int Remove(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
-    {
-        string? name = null;
+      log.Info($"accounts add started: name='{name.Trim()}', org='{org.Trim()}'");
+      try
+      {
+         string token = tokenOptions.Resolve();
+         (AccountsStore store, _) = open(log);
+         var account = new Account
+         {
+            Id = Guid.NewGuid(),
+            Name = name.Trim(),
+            Description = description.Trim(),
+            Organization = org.Trim(),
+            TargetRoot = target.Trim(),
+            CreateOrgSubfolder = orgSubfolder,
+            MaxConcurrency = parallel,
+         };
+         SaveOrFail(store, account, token);
+         Console.Out.WriteLine($"Account '{account.Name}' added.");
+         return ExitCodes.Success;
+      }
+      catch(Exception ex)
+      {
+         log.Error($"accounts add failed: {ex.Message}", ex);
+         throw;
+      }
+   }
 
-        var reader = new OptionReader(args);
-        while (reader.MoveNext())
-        {
-            switch (reader.Current)
-            {
-                case "--help" or "-h":
-                    Console.Out.WriteLine(HelpText);
-                    return ExitCodes.Success;
-                case "--name":
-                    name = reader.RequireValue();
-                    break;
-                default:
-                    throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo accounts remove'.");
-            }
-        }
 
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new CliUsageException("--name is required.");
-        }
 
-        log.Info($"accounts remove started: name='{name.Trim()}'");
-        try
-        {
-            (AccountsStore store, _) = open(log);
-            Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
-            store.Delete(existing.Id); // the store logs the deletion
-            Console.Out.WriteLine($"Account '{existing.Name}' removed.");
-            return ExitCodes.Success;
-        }
-        catch (Exception ex)
-        {
-            log.Error($"accounts remove failed: {ex.Message}", ex);
-            throw;
-        }
-    }
+   // ---------------------------------------------------------------- edit
 
-    // ---------------------------------------------------------------- shared
+   private static int Edit(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
+   {
+      string? name = null;
+      string? rename = null;
+      string? org = null;
+      string? target = null;
+      string? description = null;
+      int? parallel = null;
+      bool? orgSubfolder = null;
+      var tokenOptions = new TokenOptions();
 
-    /// <summary>A duplicate name is the one validation the store itself enforces; everything else is fatal as is.</summary>
-    private static void SaveOrFail(AccountsStore store, Account account, string? token)
-    {
-        try
-        {
-            store.Save(account, token);
-        }
-        catch (ArgumentException ex)
-        {
-            throw new CliErrorException(ex.Message, ex);
-        }
-    }
+      var reader = new OptionReader(args);
+      while(reader.MoveNext())
+      {
+         if(tokenOptions.TryConsume(reader))
+         {
+            continue;
+         }
+         switch(reader.Current)
+         {
+            case "--help" or "-h":
+               Console.Out.WriteLine(HelpText);
+               return ExitCodes.Success;
+            case "--name":
+               name = reader.RequireValue();
+               break;
+            case "--rename":
+               rename = reader.RequireValue();
+               break;
+            case "--org":
+               org = reader.RequireValue();
+               break;
+            case "--target":
+               target = reader.RequireValue();
+               break;
+            case "--description":
+               description = reader.RequireValue();
+               break;
+            case "--parallel":
+               parallel = OptionReader.ParseParallel(reader.RequireValue());
+               break;
+            case "--org-subfolder":
+               reader.RejectValue();
+               orgSubfolder = true;
+               break;
+            case "--no-org-subfolder":
+               reader.RejectValue();
+               orgSubfolder = false;
+               break;
+            default:
+               throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo accounts edit'.");
+         }
+      }
 
-    private static CliErrorException UnknownAccount(string name, AccountsStore store)
-    {
-        IReadOnlyList<Account> all = store.GetAll();
-        string available = all.Count == 0
-            ? "No accounts exist yet."
-            : "Available accounts: " + string.Join(", ", all.Select(a => a.Name)) + ".";
-        return new CliErrorException($"No account named '{name}'. {available}");
-    }
+      if(string.IsNullOrWhiteSpace(name))
+      {
+         throw new CliUsageException("--name is required.");
+      }
+      if(rename is null && org is null && target is null && description is null && parallel is null
+          && orgSubfolder is null && !tokenOptions.HasExplicitSource)
+      {
+         throw new CliUsageException("Nothing to change: give at least one of --rename, --org, --target, --parallel, "
+             + "--description, --org-subfolder/--no-org-subfolder, or a token option.");
+      }
 
-    /// <summary>
-    /// Opens the accounts store backed by Windows Credential Manager. The vault is
-    /// returned alongside the store because token retrieval for 'gclo sync --account'
-    /// goes through the vault directly (the store only handles metadata).
-    /// Constructed lazily — only the account code paths call this — so plain
-    /// 'gclo sync' and 'gclo orgs' never touch the credential store.
-    /// </summary>
-    /// <exception cref="CliErrorException">The current OS is not Windows.</exception>
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
-        Justification = "Wires the real Credential Manager vault; its non-Windows guard mirrors the vault's own tested guard.")]
-    internal static (AccountsStore Store, ITokenVault Vault) Open(IActivityLog log)
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            throw new CliErrorException(
-                "Accounts require Windows credential storage; "
-                + "'gclo accounts' and 'gclo sync --account' only work on Windows.");
-        }
+      log.Info($"accounts edit started: name='{name.Trim()}'");
+      try
+      {
+         (AccountsStore store, _) = open(log);
+         Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
+         string? token = tokenOptions.HasExplicitSource ? tokenOptions.Resolve() : null;
 
-        ITokenVault vault = new CredentialManagerVault();
-        return (new AccountsStore(vault, log: log), vault);
-    }
+         Account updated = existing with
+         {
+            Name = rename?.Trim() ?? existing.Name,
+            Organization = org?.Trim() ?? existing.Organization,
+            TargetRoot = target?.Trim() ?? existing.TargetRoot,
+            Description = description?.Trim() ?? existing.Description,
+            MaxConcurrency = parallel ?? existing.MaxConcurrency,
+            CreateOrgSubfolder = orgSubfolder ?? existing.CreateOrgSubfolder,
+         };
+         SaveOrFail(store, updated, token);
+         Console.Out.WriteLine($"Account '{updated.Name}' updated" + (token is null ? "." : " (token replaced)."));
+         return ExitCodes.Success;
+      }
+      catch(Exception ex)
+      {
+         log.Error($"accounts edit failed: {ex.Message}", ex);
+         throw;
+      }
+   }
 
-    /// <summary>'never', or the local time of the last completed sync at minute precision.</summary>
-    private static string FormatLastSync(DateTimeOffset? lastSyncUtc)
-        => lastSyncUtc is null
-            ? "never"
-            : lastSyncUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+
+
+   // ---------------------------------------------------------------- remove
+
+   private static int Remove(string[] args, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> open, IActivityLog log)
+   {
+      string? name = null;
+
+      var reader = new OptionReader(args);
+      while(reader.MoveNext())
+      {
+         switch(reader.Current)
+         {
+            case "--help" or "-h":
+               Console.Out.WriteLine(HelpText);
+               return ExitCodes.Success;
+            case "--name":
+               name = reader.RequireValue();
+               break;
+            default:
+               throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo accounts remove'.");
+         }
+      }
+
+      if(string.IsNullOrWhiteSpace(name))
+      {
+         throw new CliUsageException("--name is required.");
+      }
+
+      log.Info($"accounts remove started: name='{name.Trim()}'");
+      try
+      {
+         (AccountsStore store, _) = open(log);
+         Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
+         store.Delete(existing.Id); // the store logs the deletion
+         Console.Out.WriteLine($"Account '{existing.Name}' removed.");
+         return ExitCodes.Success;
+      }
+      catch(Exception ex)
+      {
+         log.Error($"accounts remove failed: {ex.Message}", ex);
+         throw;
+      }
+   }
+
+
+
+   // ---------------------------------------------------------------- shared
+
+   /// <summary>A duplicate name is the one validation the store itself enforces; everything else is fatal as is.</summary>
+   private static void SaveOrFail(AccountsStore store, Account account, string? token)
+   {
+      try
+      {
+         store.Save(account, token);
+      }
+      catch(ArgumentException ex)
+      {
+         throw new CliErrorException(ex.Message, ex);
+      }
+   }
+
+
+
+   private static CliErrorException UnknownAccount(string name, AccountsStore store)
+   {
+      IReadOnlyList<Account> all = store.GetAll();
+      string available = all.Count == 0
+          ? "No accounts exist yet."
+          : "Available accounts: " + string.Join(", ", all.Select(a => a.Name)) + ".";
+      return new CliErrorException($"No account named '{name}'. {available}");
+   }
+
+
+
+   /// <summary>
+   /// Opens the accounts store backed by Windows Credential Manager. The vault is
+   /// returned alongside the store because token retrieval for 'gclo sync --account'
+   /// goes through the vault directly (the store only handles metadata).
+   /// Constructed lazily — only the account code paths call this — so plain
+   /// 'gclo sync' and 'gclo orgs' never touch the credential store.
+   /// </summary>
+   /// <exception cref="CliErrorException">The current OS is not Windows.</exception>
+   [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
+       Justification = "Wires the real Credential Manager vault; its non-Windows guard mirrors the vault's own tested guard.")]
+   internal static (AccountsStore Store, ITokenVault Vault) Open(IActivityLog log)
+   {
+      if(!OperatingSystem.IsWindows())
+      {
+         throw new CliErrorException(
+             "Accounts require Windows credential storage; "
+             + "'gclo accounts' and 'gclo sync --account' only work on Windows.");
+      }
+
+      ITokenVault vault = new CredentialManagerVault();
+      return (new AccountsStore(vault, log: log), vault);
+   }
+
+
+
+   /// <summary>'never', or the local time of the last completed sync at minute precision.</summary>
+   private static string FormatLastSync(DateTimeOffset? lastSyncUtc)
+       => lastSyncUtc is null
+           ? "never"
+           : lastSyncUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
 }

@@ -1,4 +1,10 @@
+/*
+ * Copyright (c) 2026 James Maes (KofTwentyTwo)
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace gclo.ViewModels;
+
 
 /// <summary>
 /// Secure storage for account access tokens, keyed by account id. Tokens must never
@@ -8,18 +14,22 @@ namespace gclo.ViewModels;
 /// </summary>
 public interface ITokenVault
 {
-    /// <summary>
-    /// Stores the token for an account, overwriting any existing entry. Throws on
-    /// failure — silently losing a token would leave the account unusable without
-    /// any warning to the user. A failed call must leave the vault as it was (the
-    /// previous entry, if any, still readable): <see cref="AccountsStore"/> relies on
-    /// that to keep an account's working credential when a replacement write fails.
-    /// </summary>
-    void Store(Guid accountId, string token);
+   /// <summary>
+   /// Stores the token for an account, overwriting any existing entry. Throws on
+   /// failure — silently losing a token would leave the account unusable without
+   /// any warning to the user. A failed call must leave the vault as it was (the
+   /// previous entry, if any, still readable): <see cref="AccountsStore"/> relies on
+   /// that to keep an account's working credential when a replacement write fails.
+   /// </summary>
+   void Store(Guid accountId, string token);
 
-    /// <summary>The stored token, or null when the vault has no entry for the account.</summary>
-    string? TryRetrieve(Guid accountId);
 
-    /// <summary>Removes the account's token. Deleting an absent entry is a no-op.</summary>
-    void Delete(Guid accountId);
+
+   /// <summary>The stored token, or null when the vault has no entry for the account.</summary>
+   string? TryRetrieve(Guid accountId);
+
+
+
+   /// <summary>Removes the account's token. Deleting an absent entry is a no-op.</summary>
+   void Delete(Guid accountId);
 }
