@@ -109,6 +109,50 @@ public sealed class LibGit2GitClientTests : IDisposable
     }
 
     [Fact]
+    public async Task Clone_CanceledAfterTheFetch_ThrowsOperationCanceled_AndRemovesTheTargetDirectory()
+    {
+        // The real cancellation contract: the objects arrived, the token was observed
+        // before checkout, and the half-made directory does not survive to be mistaken
+        // for a repository on the next run.
+        string source = CreateSourceRepo();
+        string target = NewPath("canceled-mid-clone");
+        using var cts = new CancellationTokenSource();
+        _client.AfterFetchForTesting = () =>
+        {
+            Assert.True(Directory.Exists(Path.Combine(target, ".git")), "the fetch had completed");
+            cts.Cancel();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => _client.CloneAsync(source, target, Token, null, cts.Token));
+
+        Assert.False(Directory.Exists(target));
+    }
+
+    [Fact]
+    public async Task FetchAndPull_CanceledAfterTheFetch_ThrowsOperationCanceled_AndMergesNothing()
+    {
+        string source = CreateSourceRepo();
+        string target = NewPath("clone");
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+        string tipBefore = HeadSha(target);
+        CommitFile(source, "update.txt", "new content", "second commit");
+        using var cts = new CancellationTokenSource();
+        _client.AfterFetchForTesting = cts.Cancel;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => _client.FetchAndPullAsync(target, Token, cts.Token));
+
+        Assert.Equal(tipBefore, HeadSha(target));
+        Assert.False(File.Exists(Path.Combine(target, "update.txt")));
+
+        // The fetch itself landed: a later uncanceled pull is a plain fast-forward.
+        _client.AfterFetchForTesting = null;
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+        Assert.True(File.Exists(Path.Combine(target, "update.txt")));
+    }
+
+    [Fact]
     public async Task Clone_TokenAlreadyCanceled_ThrowsOperationCanceledAndCreatesNothing()
     {
         string source = CreateSourceRepo();
@@ -265,8 +309,15 @@ public sealed class LibGit2GitClientTests : IDisposable
         CommitFile(source, "from-remote.txt", "remote change", "remote commit");
         CommitFile(target, "from-local.txt", "local change", "local commit");
 
-        await Assert.ThrowsAsync<NonFastForwardException>(
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+
+        // Actionable, not libgit2's "cannot fast-forward": names the branch, says what
+        // gclo refuses to do, and gives the three ways out (#30).
+        Assert.Contains("local commits that origin does not have", ex.Message);
+        Assert.Contains("never merges", ex.Message);
+        Assert.Contains("re-clone", ex.Message);
+        Assert.IsType<NonFastForwardException>(ex.InnerException);
     }
 
     [Fact]
@@ -286,6 +337,61 @@ public sealed class LibGit2GitClientTests : IDisposable
             () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
 
         Assert.Contains("detached", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Check out a branch", ex.Message);
+    }
+
+    [Fact]
+    public async Task FetchAndPull_UpstreamDefaultBranchRenamed_FollowsTheNewBranch()
+    {
+        // The routine master -> main migration: the tracked remote branch disappears,
+        // and a mirror must follow origin's new default instead of saying "up to
+        // date" forever against a pruned ref (#31).
+        string source = CreateSourceRepo();
+        string target = NewPath("clone");
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+        string oldName;
+        using (var src = new Repository(source))
+        {
+            oldName = src.Head.FriendlyName;
+            src.Branches.Rename(src.Head, "renamed-main");
+            src.Refs.UpdateTarget("HEAD", "refs/heads/renamed-main");
+        }
+        string newSha = CommitFile(source, "after-rename.txt", "after", "commit on the renamed branch");
+
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+
+        using var after = new Repository(target);
+        Assert.Equal("renamed-main", after.Head.FriendlyName);
+        Assert.Equal(newSha, after.Head.Tip.Sha);
+        Assert.Equal("origin/renamed-main", after.Head.TrackedBranch!.FriendlyName);
+        Assert.Equal("after", File.ReadAllText(Path.Combine(target, "after-rename.txt")));
+        Assert.Null(after.Branches[oldName]); // the orphaned local branch is gone
+        Assert.Null(after.Branches["origin/" + oldName]); // and so is its pruned tracking ref
+
+        // The next pull is an ordinary up-to-date pull on the new branch.
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+        Assert.Equal(newSha, HeadSha(target));
+    }
+
+    [Fact]
+    public async Task FetchAndPull_UpstreamBranchRenamed_ButLocalHasOwnCommits_RefusesToDiscardThem()
+    {
+        string source = CreateSourceRepo();
+        string target = NewPath("clone");
+        await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+        string localSha = CommitFile(target, "local.txt", "mine", "local work");
+        using (var src = new Repository(source))
+        {
+            src.Branches.Rename(src.Head, "renamed-main");
+            src.Refs.UpdateTarget("HEAD", "refs/heads/renamed-main");
+        }
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+
+        Assert.Contains("local commits", ex.Message);
+        Assert.Contains("never discards local work", ex.Message);
+        Assert.Equal(localSha, HeadSha(target)); // untouched
     }
 
     [Fact]

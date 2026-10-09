@@ -203,6 +203,91 @@ public sealed class PathRecoveryTests : IDisposable
         Assert.Contains("worse_new.txt", json);
     }
 
+    // ---------------------------------------------------------------- persistence hardening (#31)
+
+    [Fact]
+    public async Task FetchAndPull_UpstreamDeletedAFile_RemovesItFromTheMaterializedTree()
+    {
+        string source = CreateForgedRepo(_root, ("bad:file.txt", "bad"), ("gone.txt", "going"), ("keep.txt", "keep"));
+        string target = await CloneExpectingInvalidPathsAsync(source, "deletion-pass");
+        await _client.ApplyRecoveryAsync(target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
+        Assert.True(File.Exists(Path.Combine(target, "gone.txt")));
+
+        ReplaceForgedEntry(source, remove: "gone.txt", add: ("new/nested.txt", "new"));
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+
+        // A real checkout removes what left the tree; the materialization must too.
+        Assert.False(File.Exists(Path.Combine(target, "gone.txt")));
+        Assert.Equal("new", File.ReadAllText(Path.Combine(target, "new", "nested.txt")));
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(target, "keep.txt")));
+
+        // And a directory emptied by a later deletion is pruned too.
+        ReplaceForgedEntry(source, remove: "new/nested.txt", add: ("other.txt", "o"));
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+        Assert.False(Directory.Exists(Path.Combine(target, "new")));
+    }
+
+    [Fact]
+    public async Task FetchAndPull_RecoveryManagedRepoAlreadyAtTip_DoesNotRewriteTheTree()
+    {
+        string source = CreateForgedRepo(_root, ("bad:file.txt", "bad"), ("keep.txt", "keep"));
+        string target = await CloneExpectingInvalidPathsAsync(source, "no-rewrite");
+        await _client.ApplyRecoveryAsync(target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
+
+        // A local edit is the witness: an unchanged tip must leave the tree alone.
+        File.WriteAllText(Path.Combine(target, "keep.txt"), "locally edited");
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+        Assert.Equal("locally edited", File.ReadAllText(Path.Combine(target, "keep.txt")));
+
+        // A new upstream commit re-materializes through the mapping as before.
+        ReplaceForgedEntry(source, remove: "keep.txt", add: ("keep.txt", "upstream edit"));
+        await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+        Assert.Equal("upstream edit", File.ReadAllText(Path.Combine(target, "keep.txt")));
+    }
+
+    [Fact]
+    public async Task CorruptRecoveryFile_FailsWithAnActionableMessage_NotARawJsonError()
+    {
+        string source = CreateForgedRepo(_root, ("bad:file.txt", "bad"));
+        string target = await CloneExpectingInvalidPathsAsync(source, "corrupt-json");
+        await _client.ApplyRecoveryAsync(target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
+        string file = RecoveryFilePath(target);
+        File.WriteAllText(file, "{ \"SegmentRenames\": { truncated");
+
+        var pullError = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+        Assert.Contains("corrupt", pullError.Message);
+        Assert.Contains(file, pullError.Message);
+        Assert.Contains("Delete it", pullError.Message);
+
+        var applyError = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _client.ApplyRecoveryAsync(target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None));
+        Assert.Contains("corrupt", applyError.Message);
+
+        // "null" is a corrupt document too.
+        File.WriteAllText(file, "null");
+        var nullError = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+        Assert.Contains("empty", nullError.Message);
+    }
+
+    [Fact]
+    public async Task SaveRecovery_WritesAtomically_LeavingNoTempFile_AndRecordsManifestAndTip()
+    {
+        string source = CreateForgedRepo(_root, ("bad:file.txt", "bad"), ("dir/keep.txt", "k"));
+        string target = await CloneExpectingInvalidPathsAsync(source, "atomic");
+
+        await _client.ApplyRecoveryAsync(target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
+
+        string file = RecoveryFilePath(target);
+        Assert.False(File.Exists(file + ".tmp"));
+        string json = File.ReadAllText(file);
+        Assert.Contains("\"MaterializedPaths\"", json);
+        Assert.Contains("bad_file.txt", json);
+        Assert.Contains("dir/keep.txt", json);
+        Assert.Contains(HeadSha(target), json);
+    }
+
     // ---------------------------------------------------------------- pull semantics
 
     [Fact]

@@ -100,6 +100,14 @@ gclo orgs
 # Mirror an organization, 16 git operations at a time
 gclo sync --org contoso --target C:\src\contoso --parallel 16
 
+# Preview, then sync a subset (globs on the repository name; archived ones skipped)
+gclo repos --org contoso --include "platform-*" --skip-archived
+gclo sync --org contoso --target C:\src\contoso --include "platform-*" --skip-archived --dry-run
+
+# Save the connection as an account (token in Windows Credential Manager) and reuse it
+gh auth token | gclo accounts add --name work --org contoso --target C:\src\contoso --token-stdin
+gclo sync --account work
+
 # Pipe the token from a secret store — it never touches a command line or disk
 gh auth token | gclo sync --org contoso --target C:\src\contoso --token-stdin
 

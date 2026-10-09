@@ -81,6 +81,13 @@ public sealed partial class RepoItemViewModel : ObservableObject
         OnPropertyChanged(nameof(IsIndeterminate));
     }
 
+    /// <summary>
+    /// Re-raises the status change notification without a status change, so views
+    /// that derive theme-dependent values from <see cref="Status"/> (the row's status
+    /// brush) re-evaluate — used when the application theme changes mid-session.
+    /// </summary>
+    public void RefreshPresentation() => OnPropertyChanged(nameof(Status));
+
     partial void OnPercentChanged(double? value)
     {
         OnPropertyChanged(nameof(StatusText));

@@ -117,10 +117,12 @@ public sealed class AccountsStore
                 updated.Add(account);
             }
 
+            string verb = index >= 0 ? "updated" : "added";
             if (token is null)
             {
                 Persist(updated); // IO failures propagate; _accounts stays unchanged then.
                 _accounts = updated;
+                _log.Info($"Account '{account.Name}' {verb} (token unchanged).");
                 return;
             }
 
@@ -165,6 +167,7 @@ public sealed class AccountsStore
             }
 
             _accounts = updated;
+            _log.Info($"Account '{account.Name}' {verb} with a new token.");
         }
     }
 
@@ -184,6 +187,7 @@ public sealed class AccountsStore
             {
                 return;
             }
+            string name = _accounts.First(a => a.Id == id).Name;
 
             // Vault first: a failing Delete leaves both stores untouched. Keep the
             // token in memory only long enough to put it back if the file write fails.
@@ -220,6 +224,7 @@ public sealed class AccountsStore
             }
 
             _accounts = remaining;
+            _log.Info($"Account '{name}' deleted" + (removedToken is null ? " (it had no token)." : " along with its token."));
         }
     }
 
@@ -245,6 +250,7 @@ public sealed class AccountsStore
             };
             Persist(updated);
             _accounts = updated;
+            _log.Info($"Account '{updated[index].Name}': sync result recorded ({summary}).");
         }
     }
 

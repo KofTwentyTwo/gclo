@@ -15,36 +15,33 @@ public sealed partial class AccountWizardViewModel : ObservableObject
 {
     private readonly AccountsStore _store;
     private readonly IOrganizationLister _orgLister;
+    private readonly IActivityLog _log;
     private readonly Account? _existing;
 
-    /// <summary>What the token box was seeded with; unchanged means "leave the vault alone".</summary>
-    private readonly string _seededToken;
+    /// <summary>
+    /// For edits: fetches the account's stored token from the vault, called only when
+    /// a step actually needs to transmit it (validating on step 2 with the box left
+    /// empty). The token is never copied into <see cref="Token"/>, so the dialog never
+    /// holds or shows it; an empty box means "keep the stored token" (#32).
+    /// </summary>
+    private readonly Func<string?>? _storedToken;
 
     /// <summary>
     /// A wizard for a new account seeded from <paramref name="defaults"/>, or — when
-    /// <paramref name="existing"/> is given — an edit wizard seeded from that account
-    /// and <paramref name="existingToken"/> (the vault's current token, or null when
-    /// the vault has no entry for it).
+    /// <paramref name="existing"/> is given — an edit wizard seeded from that account.
+    /// <paramref name="storedToken"/> fetches the vault's current token on demand for
+    /// an edit (null, or returning null, when the vault has no entry).
     /// </summary>
     public AccountWizardViewModel(
         AccountsStore store,
         IOrganizationLister orgLister,
         AppSettings defaults,
         Account? existing = null,
-        string? existingToken = null)
+        Func<string?>? storedToken = null,
+        IActivityLog? log = null)
+        : this(store, orgLister, existing, storedToken, log)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(orgLister);
         ArgumentNullException.ThrowIfNull(defaults);
-        _store = store;
-        _orgLister = orgLister;
-        _existing = existing;
-        _seededToken = existingToken ?? "";
-
-        Step = 1;
-        NameError = "";
-        TokenError = "";
-        Token = _seededToken;
 
         if (existing is null)
         {
@@ -66,6 +63,50 @@ public sealed partial class AccountWizardViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// A wizard for a NEW account seeded from a working Quick Sync connection
+    /// (<paramref name="seed"/>): token, organization, folder, subfolder preference,
+    /// and parallelism are carried over so "save this connection as an account" is a
+    /// matter of naming it (#30). The token is treated as freshly typed, so it is
+    /// always written to the vault on save.
+    /// </summary>
+    public AccountWizardViewModel(
+        AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed, IActivityLog? log = null)
+        : this(store, orgLister, existing: null, storedToken: null, log)
+    {
+        ArgumentNullException.ThrowIfNull(seed);
+        Name = "";
+        Description = "";
+        Token = seed.Token;
+        Organization = seed.Organization;
+        TargetRoot = seed.TargetRoot;
+        CreateOrgSubfolder = seed.CreateOrgSubfolder;
+        MaxConcurrency = seed.MaxConcurrency;
+    }
+
+    private AccountWizardViewModel(
+        AccountsStore store, IOrganizationLister orgLister, Account? existing, Func<string?>? storedToken, IActivityLog? log)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(orgLister);
+        _store = store;
+        _orgLister = orgLister;
+        _log = log ?? new NullActivityLog();
+        _existing = existing;
+        _storedToken = existing is null ? null : storedToken;
+
+        Step = 1;
+        NameError = "";
+        TokenError = "";
+        OrganizationError = "";
+        TargetError = "";
+        Token = "";
+        Name = "";
+        Description = "";
+        Organization = "";
+        TargetRoot = "";
+    }
+
     /// <summary>Current wizard step, 1 (identity) through 4 (destination).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsFirstStep))]
@@ -80,7 +121,11 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     [ObservableProperty]
     public partial string Description { get; set; }
 
-    /// <summary>GitHub personal access token; validated when leaving step 2.</summary>
+    /// <summary>
+    /// GitHub personal access token as typed; validated when leaving step 2. For an
+    /// edit it starts empty and stays empty unless the user types a replacement —
+    /// the stored token is never loaded into it.
+    /// </summary>
     [ObservableProperty]
     public partial string Token { get; set; }
 
@@ -112,6 +157,14 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     [ObservableProperty]
     public partial string TokenError { get; set; }
 
+    /// <summary>Step 3's validation message; empty once an organization is chosen.</summary>
+    [ObservableProperty]
+    public partial string OrganizationError { get; set; }
+
+    /// <summary>Step 4's validation message; empty once a target folder is chosen.</summary>
+    [ObservableProperty]
+    public partial string TargetError { get; set; }
+
     /// <summary>Organizations the validated token can see; feeds step 3's editable dropdown.</summary>
     public ObservableCollection<string> Organizations { get; } = new();
 
@@ -139,8 +192,9 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     /// <summary>
     /// Validates the current step. Steps 1-3 advance and return true on success; step 4
     /// returns true without advancing (the host then calls <see cref="SaveAsync"/>). On
-    /// failure the wizard stays put, with the step's error message set where one exists
-    /// (<see cref="NameError"/> on step 1, <see cref="TokenError"/> on step 2).
+    /// failure the wizard stays put with the step's error message set
+    /// (<see cref="NameError"/>, <see cref="TokenError"/>, <see cref="OrganizationError"/>,
+    /// <see cref="TargetError"/>) — a silent no-op on Next reads as a broken button (#30).
     /// </summary>
     public async Task<bool> TryAdvanceAsync()
     {
@@ -168,20 +222,36 @@ public sealed partial class AccountWizardViewModel : ObservableObject
                 {
                     // The lister is the validation: it fails on a rejected or rate-limited
                     // token and returns the organizations the dropdown offers otherwise.
+                    // An edit with the box left empty validates the STORED token, fetched
+                    // here and used for this one call only.
+                    string candidate = Token.Trim();
+                    if (candidate.Length == 0 && IsEditing)
+                    {
+                        candidate = _storedToken?.Invoke()?.Trim() ?? "";
+                        if (candidate.Length == 0)
+                        {
+                            TokenError = "This account has no stored token. Enter one to continue.";
+                            return false;
+                        }
+                    }
+
                     IsValidatingToken = true;
+                    _log.Info("Account wizard: validating the token.");
                     try
                     {
-                        var organizations = await _orgLister.ListOrganizationsAsync(Token.Trim());
+                        var organizations = await _orgLister.ListOrganizationsAsync(candidate);
                         Organizations.Clear();
                         foreach (string organization in organizations)
                         {
                             Organizations.Add(organization);
                         }
                         TokenError = "";
+                        _log.Info($"Account wizard: token accepted; {organizations.Count} organizations and accounts visible.");
                     }
                     catch (Exception ex)
                     {
                         TokenError = ex.Message;
+                        _log.Error($"Account wizard: token rejected: {ex.Message}", ex);
                         return false;
                     }
                     finally
@@ -194,13 +264,22 @@ public sealed partial class AccountWizardViewModel : ObservableObject
             case 3:
                 if (string.IsNullOrWhiteSpace(Organization))
                 {
-                    return false; // the dropdown allows free text, but not nothing
+                    // The dropdown allows free text, but not nothing.
+                    OrganizationError = "Choose an organization from the list, or type one.";
+                    return false;
                 }
+                OrganizationError = "";
                 Step = 4;
                 return true;
             default:
                 // Step 4: valid means "ready to save"; the host closes via SaveAsync.
-                return !string.IsNullOrWhiteSpace(TargetRoot);
+                if (string.IsNullOrWhiteSpace(TargetRoot))
+                {
+                    TargetError = "Choose a target folder.";
+                    return false;
+                }
+                TargetError = "";
+                return true;
         }
     }
 
@@ -224,9 +303,8 @@ public sealed partial class AccountWizardViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
-    /// <summary>New accounts always persist their token; edits only when it was altered.</summary>
-    private bool TokenChanged
-        => !IsEditing || !string.Equals(Token, _seededToken, StringComparison.Ordinal);
+    /// <summary>New accounts always persist their token; edits only when one was typed.</summary>
+    private bool TokenChanged => !IsEditing || Token.Trim().Length > 0;
 
     private Account BuildAccount() => new()
     {

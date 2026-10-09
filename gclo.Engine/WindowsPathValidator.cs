@@ -31,6 +31,100 @@ public static class WindowsPathValidator
         => ValidatePaths(FlattenPaths(tree));
 
     /// <summary>
+    /// Validates only what a pull would introduce: the paths added, copied, renamed,
+    /// or type-changed between <paramref name="current"/> (the checked-out tree, which
+    /// was validated when it was materialized) and <paramref name="incoming"/>. The new
+    /// paths get the full segment and collision rules among themselves; case-only
+    /// collisions are additionally checked against everything that stays on disk
+    /// (the index minus deleted and renamed-away paths). Modified files keep their
+    /// already-valid paths and are not re-examined, so a one-file commit on a
+    /// 100K-file repository costs one diff, not a tree walk.
+    /// </summary>
+    public static IReadOnlyList<InvalidPathInfo> ValidateIncoming(Repository repo, Tree current, Tree incoming)
+    {
+        ArgumentNullException.ThrowIfNull(repo);
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(incoming);
+
+        var introduced = new List<string>();
+        var removed = new HashSet<string>(StringComparer.Ordinal);
+        using (TreeChanges changes = repo.Diff.Compare<TreeChanges>(
+            current, incoming, new CompareOptions { Similarity = SimilarityOptions.Renames }))
+        {
+            foreach (TreeEntryChanges change in changes)
+            {
+                if (change.Status == ChangeKind.Deleted)
+                {
+                    removed.Add(change.Path);
+                    continue;
+                }
+                if (change.Status == ChangeKind.Renamed)
+                {
+                    removed.Add(change.OldPath);
+                }
+                if (change.Status is ChangeKind.Added or ChangeKind.Copied or ChangeKind.Renamed or ChangeKind.TypeChanged)
+                {
+                    introduced.Add(change.Path);
+                }
+            }
+        }
+
+        if (introduced.Count == 0)
+        {
+            return [];
+        }
+
+        var invalid = new List<InvalidPathInfo>(ValidatePaths(introduced));
+
+        // Every path (and directory prefix) that remains on disk, case-insensitively,
+        // mapped to its exact spelling; a new path whose exact spelling is absent but
+        // whose casing matches an existing one cannot be created on Windows.
+        var remaining = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var remainingExact = new HashSet<string>(StringComparer.Ordinal);
+        foreach (IndexEntry entry in repo.Index)
+        {
+            if (!removed.Contains(entry.Path))
+            {
+                AddWithPrefixes(entry.Path, remaining, remainingExact);
+            }
+        }
+
+        var reported = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string path in introduced)
+        {
+            string[] segments = path.Split('/');
+            string prefix = "";
+            for (int i = 0; i < segments.Length; i++)
+            {
+                prefix = i == 0 ? segments[i] : $"{prefix}/{segments[i]}";
+                if (!remainingExact.Contains(prefix)
+                    && remaining.TryGetValue(prefix, out string? existing)
+                    && reported.Add(prefix))
+                {
+                    invalid.Add(new InvalidPathInfo(prefix, $"differs only by case from '{existing}'", null));
+                }
+            }
+        }
+
+        return invalid;
+    }
+
+    private static void AddWithPrefixes(
+        string path, Dictionary<string, string> byCase, HashSet<string> exact)
+    {
+        string[] segments = path.Split('/');
+        string prefix = "";
+        for (int i = 0; i < segments.Length; i++)
+        {
+            prefix = i == 0 ? segments[i] : $"{prefix}/{segments[i]}";
+            if (exact.Add(prefix))
+            {
+                byCase.TryAdd(prefix, prefix);
+            }
+        }
+    }
+
+    /// <summary>
     /// Depth-first flattening of <paramref name="tree"/> into leaf paths (blobs and
     /// submodule links). An empty subtree is emitted as its own path so its name is
     /// still validated.

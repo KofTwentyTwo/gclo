@@ -9,12 +9,13 @@
     mc:Ignorable="d"
     Title="gclo">
 
-    <Window.SystemBackdrop>
-        <MicaBackdrop />
-    </Window.SystemBackdrop>
-
-    <Grid>
+    <!-- The backdrop is chosen in code: Mica where supported (Windows 11), acrylic
+         where only that is, and a plain themed background on the Windows 10 floor the
+         app claims to support — a declared MicaBackdrop is silently ignored there and
+         the semi-transparent card brushes would sit on an unthemed surface (#31). -->
+    <Grid x:Name="RootGrid">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
@@ -30,7 +31,7 @@
             </MenuBarItem>
             <MenuBarItem Title="Help" AccessKey="H">
                 <MenuFlyoutItem Text="View on GitHub" AccessKey="G" Click="GitHubMenuItem_Click" />
-                <MenuFlyoutItem Text="Check for updates…" AccessKey="C" AutomationProperties.AutomationId="MenuCheckUpdates" Click="CheckForUpdatesMenuItem_Click" />
+                <MenuFlyoutItem x:Name="CheckUpdatesMenuItem" Text="Check for updates…" AccessKey="C" AutomationProperties.AutomationId="MenuCheckUpdates" Click="CheckForUpdatesMenuItem_Click" />
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem Text="About gclo…" AccessKey="A" AutomationProperties.AutomationId="MenuAbout" Click="AboutMenuItem_Click">
                     <MenuFlyoutItem.KeyboardAccelerators>
@@ -40,13 +41,30 @@
             </MenuBarItem>
         </MenuBar>
 
+        <!-- Update flow surface (#39): checking / downloading with a progress bar, and
+             the up-to-date / failure outcomes inline, instead of a silent wait followed by
+             a modal. Only the "update available" decision still uses a dialog. -->
+        <InfoBar
+            x:Name="UpdateBar"
+            AutomationProperties.AutomationId="UpdateBar"
+            Grid.Row="1"
+            Margin="12,8,12,0"
+            IsClosable="True"
+            Title="Updates">
+            <ProgressBar
+                x:Name="UpdateProgressBar"
+                Margin="0,0,0,8"
+                Maximum="100"
+                Visibility="Collapsed" />
+        </InfoBar>
+
         <!-- Workspace shell: Quick Sync is pinned first; one item per saved account is
              added below the separator in code-behind (the store is runtime data).
              Content hosts the selected workspace's cached WorkspacePage. -->
         <NavigationView
             x:Name="WorkspaceNav"
             AutomationProperties.AutomationId="WorkspaceNav"
-            Grid.Row="1"
+            Grid.Row="2"
             PaneDisplayMode="Left"
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="False"
@@ -93,6 +111,6 @@
         <local:SplashOverlay
             x:Name="StartupSplash"
             Grid.Row="0"
-            Grid.RowSpan="2" />
+            Grid.RowSpan="3" />
     </Grid>
 </Window>

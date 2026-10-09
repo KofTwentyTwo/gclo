@@ -65,6 +65,8 @@ public sealed class SyncAllCoordinator(IActivityLog log)
         {
             Announce(workspace, SyncAllAccountState.Queued);
         }
+        _log.Info($"Sync all: queued {accountWorkspaces.Count} accounts: "
+            + string.Join(", ", accountWorkspaces.Select(w => $"'{w.DisplayName}'")) + ".");
 
         int ran = 0;
         int skipped = 0;

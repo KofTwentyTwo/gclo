@@ -9,11 +9,26 @@ namespace gclo.Engine.Tests;
 /// (the production default, <see cref="Progress{T}"/>, posts asynchronously and would
 /// make assertions racy) and a near-zero org-lookup debounce.
 /// </summary>
-public sealed class WorkspaceViewModelTests
+public sealed class WorkspaceViewModelTests : IDisposable
 {
     private readonly FakeRepositoryLister _lister = new();
     private readonly FakeGitClient _git = new();
     private readonly FakeOrganizationLister _orgs = new();
+
+    /// <summary>Every view model the test created, disposed and cleaned up after it — pass or fail.</summary>
+    private readonly List<WorkspaceViewModel> _created = new();
+
+    public void Dispose()
+    {
+        foreach (WorkspaceViewModel vm in _created)
+        {
+            vm.Dispose();
+            if (vm.TargetFolder.Length > 0 && Path.IsPathRooted(vm.TargetFolder))
+            {
+                TryDeleteDirectory(vm.TargetFolder);
+            }
+        }
+    }
 
     /// <summary>Synchronous progress: handler runs inline on the reporting thread.</summary>
     private sealed class SyncProgress(Action<RepoProgress> handler) : IProgress<RepoProgress>
@@ -37,11 +52,17 @@ public sealed class WorkspaceViewModelTests
         Account? account = null,
         ITokenVault? vault = null,
         AccountsStore? store = null)
-        => new(_lister, _git, _orgs,
+        => Track(new WorkspaceViewModel(_lister, _git, _orgs,
                handler => new SyncProgress(handler),
                debounce ?? TimeSpan.FromMilliseconds(1),
                new NullActivityLog(),
-               account, vault, store);
+               account, vault, store));
+
+    private WorkspaceViewModel Track(WorkspaceViewModel vm)
+    {
+        _created.Add(vm);
+        return vm;
+    }
 
     /// <summary>
     /// A view model with valid inputs and the given repositories already loaded into the
@@ -138,6 +159,11 @@ public sealed class WorkspaceViewModelTests
         Assert.False(vm.IsLoadingRepos);
         Assert.True(vm.LoadReposCommand.CanExecute(null));
         Assert.False(vm.SyncCommand.CanExecute(null));
+        // The failure gets a real error surface, not just the caption live region (#30).
+        Assert.True(vm.LoadErrorOpen);
+        Assert.Equal("Could not load repositories", vm.LoadErrorTitle);
+        Assert.Equal("org not found", vm.LoadErrorMessage);
+        Assert.Null(vm.LoadedOrganization);
     }
 
     // ---------------------------------------------------------------- connect card state
@@ -198,7 +224,6 @@ public sealed class WorkspaceViewModelTests
         await run;
         Assert.True(vm.CanEditInputs);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- sync flow
@@ -224,7 +249,6 @@ public sealed class WorkspaceViewModelTests
         Assert.True(vm.HasCompletedRun);
         Assert.False(vm.IsRunning);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -250,7 +274,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Contains("1 updated", vm.StatusText);
         Assert.Contains("1 failed", vm.StatusText);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -272,7 +295,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Contains("failed", announcement);
         Assert.Contains("boom", announcement);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -286,7 +308,6 @@ public sealed class WorkspaceViewModelTests
 
         Assert.Empty(announcements);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -323,7 +344,6 @@ public sealed class WorkspaceViewModelTests
             r.Status is SyncStatus.Canceled or SyncStatus.Done or SyncStatus.Failed,
             $"{r.Name} left in non-terminal state {r.Status}"));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- run-scoped progress
@@ -346,7 +366,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(3, vm.TotalCount);
         Assert.Equal(0, vm.CompletedCount);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- active strip
@@ -384,7 +403,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Empty(vm.ActiveRepos); // cleared when the run ends
         Assert.All(vm.Repos, r => Assert.Equal(SyncStatus.Done, r.Status));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- retry failed
@@ -419,7 +437,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(1, vm.CompletedCount);
         Assert.False(vm.RetryFailedCommand.CanExecute(null)); // nothing failed anymore
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- run results
@@ -437,7 +454,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(RunResultKind.Success, vm.ResultKind);
         Assert.Contains("2 cloned", vm.ResultMessage);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -455,7 +471,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(RunResultKind.PartialFailure, vm.ResultKind);
         Assert.Contains("1 failed", vm.ResultMessage);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -482,7 +497,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(RunResultKind.Canceled, vm.ResultKind);
         Assert.StartsWith("Canceled", vm.ResultMessage);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -538,7 +552,6 @@ public sealed class WorkspaceViewModelTests
         Assert.True(vm.ResultOpen);
         Assert.Equal(RunResultKind.Success, vm.ResultKind);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -554,7 +567,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(RunResultKind.None, vm.ResultKind);
         Assert.Equal("", vm.ResultMessage);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- path recovery
@@ -592,7 +604,6 @@ public sealed class WorkspaceViewModelTests
         Assert.False(vm.ResolvePathsCommand.CanExecute(byName["bravo"])); // no path issue
         Assert.False(vm.ResolvePathsCommand.CanExecute(null));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -627,7 +638,6 @@ public sealed class WorkspaceViewModelTests
         Assert.False(vm.ResolvePathsCommand.CanExecute(row)); // nothing left to resolve
         Assert.False(vm.RetryFailedCommand.CanExecute(null)); // nothing failed anymore
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -655,7 +665,6 @@ public sealed class WorkspaceViewModelTests
 
         Assert.Equal(SyncStatus.Done, row.Status);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -674,7 +683,6 @@ public sealed class WorkspaceViewModelTests
         Assert.True(row.HasPathIssue); // payload kept for another attempt
         Assert.True(vm.ResolvePathsCommand.CanExecute(row));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -701,7 +709,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(stillInvalid, row.InvalidPaths); // the fresh list, ready for another round
         Assert.True(vm.ResolvePathsCommand.CanExecute(row));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -722,7 +729,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal("disk full", row.Error);
         Assert.False(row.HasPathIssue); // renaming again would not help
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -755,7 +761,6 @@ public sealed class WorkspaceViewModelTests
         await run;
         Assert.True(vm.ResolvePathsCommand.CanExecute(alpha)); // unlocked again
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -775,10 +780,131 @@ public sealed class WorkspaceViewModelTests
         Assert.False(row.HasPathIssue);
         Assert.False(vm.ResolvePathsCommand.CanExecute(row));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
+    }
+
+    // ---------------------------------------------------------------- load errors and stale tables (#30)
+
+    [Fact]
+    public async Task LoadRepos_StartingALoad_ClosesThePreviousLoadError()
+    {
+        _lister.ExceptionToThrow = new InvalidOperationException("boom");
+        var vm = CreateViewModel();
+        vm.Organization = "acme";
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+        await vm.LoadReposCommand.ExecuteAsync(null);
+        Assert.True(vm.LoadErrorOpen);
+
+        _lister.ExceptionToThrow = null;
+        _lister.Repositories = Repos("alpha");
+        await vm.LoadReposCommand.ExecuteAsync(null);
+
+        Assert.False(vm.LoadErrorOpen);
+        Assert.Equal("acme", vm.LoadedOrganization);
+        Assert.True(vm.HasLoadedRepos);
+    }
+
+    [Fact]
+    public async Task OrgLookupFailure_OpensTheErrorSurface_AndASuccessfulLookupClosesIt()
+    {
+        _orgs.Handler = (_, _) => Task.FromException<IReadOnlyList<string>>(
+            new InvalidOperationException("GitHub rejected the token (401). Check the PAT."));
+        var vm = CreateViewModel();
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.LoadErrorOpen, "lookup failure to surface");
+
+        Assert.Equal("Could not list organizations", vm.LoadErrorTitle);
+        Assert.Contains("401", vm.LoadErrorMessage);
+        Assert.Equal(vm.LoadErrorMessage, vm.StatusText);
+
+        _orgs.Handler = (_, _) => Task.FromResult<IReadOnlyList<string>>(["me", "acme"]);
+        vm.Token = "token-1234567890-fixed";
+        await WaitUntilAsync(() => vm.Organizations.Count == 2, "lookup to succeed");
+
+        Assert.False(vm.LoadErrorOpen);
+    }
+
+    [Fact]
+    public async Task EditingTheOrganizationAfterALoad_MarksTheTableStale_AndBlocksSync()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        Assert.False(vm.IsTableStale);
+        Assert.Equal("", vm.StaleTableMessage);
+        Assert.True(vm.SyncCommand.CanExecute(null));
+        var raised = new List<string?>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        vm.Organization = "acme-labs";
+
+        Assert.True(vm.IsTableStale);
+        Assert.Contains("'acme'", vm.StaleTableMessage);
+        Assert.Contains("'acme-labs'", vm.StaleTableMessage);
+        Assert.False(vm.SyncCommand.CanExecute(null), "syncing a stale table would clone the wrong org");
+        Assert.Contains(nameof(WorkspaceViewModel.IsTableStale), raised);
+        Assert.Contains(nameof(WorkspaceViewModel.StaleTableMessage), raised);
+
+        // Putting it back (case and whitespace are not a change) clears the state...
+        vm.Organization = " ACME ";
+        Assert.False(vm.IsTableStale);
+        Assert.True(vm.SyncCommand.CanExecute(null));
+
+        // ...and so does reloading under the new name.
+        vm.Organization = "acme-labs";
+        await vm.LoadReposCommand.ExecuteAsync(null);
+        Assert.Equal("acme-labs", vm.LoadedOrganization);
+        Assert.False(vm.IsTableStale);
+        Assert.True(vm.SyncCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void BeforeAnyLoad_TheTableIsNeverStale()
+    {
+        var vm = CreateViewModel();
+        vm.Organization = "anything";
+        Assert.False(vm.IsTableStale);
     }
 
     // ---------------------------------------------------------------- selection
+
+    [Fact]
+    public async Task AllSelected_ActsOnVisibleRowsOnly_AndReflectsThem()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
+        vm.NameFilter = "al"; // alpha only
+        Assert.Equal(["alpha"], vm.FilteredRepos.Select(r => r.Name));
+        Assert.True(vm.AllSelected);
+
+        vm.AllSelected = false;
+
+        // Only the visible row changed; hidden rows keep their selection and still sync.
+        Assert.False(vm.Repos[0].IsSelected);
+        Assert.True(vm.Repos[1].IsSelected);
+        Assert.True(vm.Repos[2].IsSelected);
+        Assert.Equal(2, vm.SelectedCount);
+        Assert.True(vm.SyncCommand.CanExecute(null));
+
+        // The header reflects the visible set as the filter changes.
+        vm.NameFilter = "";
+        Assert.False(vm.AllSelected);
+        vm.NameFilter = "br";
+        Assert.True(vm.AllSelected);
+
+        vm.AllSelected = true; // no-op on the visible row (already selected)
+        Assert.False(vm.Repos[0].IsSelected);
+    }
+
+    [Fact]
+    public async Task AllSelected_HeaderPush_ReQueriesSyncOncePerBatch()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"), Repo("delta"));
+        int canExecuteRaised = 0;
+        vm.SyncCommand.CanExecuteChanged += (_, _) => canExecuteRaised++;
+
+        vm.AllSelected = false;
+
+        // One notification for the whole batch, not one per row (#30).
+        Assert.Equal(1, canExecuteRaised);
+    }
 
     [Fact]
     public async Task AllSelected_TogglesEveryRow_AndFollowsItemChanges()
@@ -850,6 +976,26 @@ public sealed class WorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task Sort_KeepsFilteredReposInTheNewOrder_AndMembershipUpdatesStillLandInPlace()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("charlie"), Repo("alpha"), Repo("bravo"));
+        vm.SortCommand.Execute("Name");
+        Assert.Equal(["alpha", "bravo", "charlie"], vm.FilteredRepos.Select(r => r.Name));
+
+        // A progress-driven membership change after a sort must respect the sorted
+        // order (the position map is rebuilt by Sort).
+        vm.Filter = RepoFilter.Failed;
+        Assert.Empty(vm.FilteredRepos);
+        _git.CloneHandler = (_, path, _, _, _) =>
+            Path.GetFileName(path) is "charlie" or "alpha"
+                ? Task.FromException(new InvalidOperationException("boom"))
+                : Task.CompletedTask;
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.Equal(["alpha", "charlie"], vm.FilteredRepos.Select(r => r.Name));
+    }
+
+    [Fact]
     public async Task Sort_ByStatus_OrdersByLifecycle_AndIsStable()
     {
         var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"));
@@ -897,6 +1043,93 @@ public sealed class WorkspaceViewModelTests
 
         vm.Filter = RepoFilter.All;
         Assert.Equal(["alpha", "bravo", "charlie", "delta"], vm.FilteredRepos.Select(r => r.Name));
+    }
+
+    [Fact]
+    public async Task ProgressTransitions_UpdateFilteredReposInPlace_WithoutAReset()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"), Repo("delta"));
+        vm.Filter = RepoFilter.Pending;
+        Assert.Equal(4, vm.FilteredRepos.Count);
+        var actions = new List<System.Collections.Specialized.NotifyCollectionChangedAction>();
+        vm.FilteredRepos.CollectionChanged += (_, e) => actions.Add(e.Action);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _git.CloneHandler = async (_, path, _, _, _) =>
+        {
+            if (Path.GetFileName(path) == "bravo")
+            {
+                await gate.Task;
+            }
+        };
+        var run = vm.SyncCommand.ExecuteAsync(null);
+        await WaitUntilAsync(() => vm.Repos[1].Status == SyncStatus.Cloning, "bravo to start");
+
+        // Rows leave Pending one by one as they start: removals, never a Reset.
+        Assert.DoesNotContain(System.Collections.Specialized.NotifyCollectionChangedAction.Reset, actions);
+        Assert.DoesNotContain(vm.Repos[1], vm.FilteredRepos);
+
+        gate.SetResult();
+        await run;
+        Assert.Empty(vm.FilteredRepos);
+        Assert.DoesNotContain(System.Collections.Specialized.NotifyCollectionChangedAction.Reset, actions);
+
+        // And a later transition back into the filtered set inserts in table order.
+        vm.Filter = RepoFilter.Failed;
+        _git.CloneHandler = (_, path, _, _, _) =>
+            Path.GetFileName(path) is "delta" or "alpha"
+                ? Task.FromException(new InvalidOperationException("boom"))
+                : Task.CompletedTask;
+        actions.Clear();
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        Assert.Equal(["alpha", "delta"], vm.FilteredRepos.Select(r => r.Name));
+        Assert.DoesNotContain(System.Collections.Specialized.NotifyCollectionChangedAction.Reset, actions);
+    }
+
+    [Fact]
+    public async Task FailedReports_AreLoggedOnTheReportingThread_NotTheUiHandler()
+    {
+        var log = new ThreadRecordingLog();
+        _lister.Repositories = Repos("alpha");
+        var vm = new WorkspaceViewModel(_lister, _git, _orgs,
+            handler => new SyncProgress(handler), TimeSpan.FromMilliseconds(1), log);
+        vm.Organization = "acme";
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+        vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+        await vm.LoadReposCommand.ExecuteAsync(null);
+        int reportingThread = -1;
+        _git.CloneHandler = (_, _, _, _, _) =>
+        {
+            reportingThread = Environment.CurrentManagedThreadId;
+            return Task.FromException(new InvalidOperationException("boom"));
+        };
+
+        await vm.SyncCommand.ExecuteAsync(null);
+
+        var entry = Assert.Single(log.Errors, e => e.Message.StartsWith("alpha failed", StringComparison.Ordinal));
+        Assert.Contains("boom", entry.Message);
+        // The engine reports from the thread that ran the git operation; the fake's
+        // synchronous progress means the log call happened right there, before any
+        // UI-marshaled handler could have run.
+        Assert.Equal(reportingThread, entry.Thread);
+    }
+
+    private sealed class ThreadRecordingLog : IActivityLog
+    {
+        public List<(string Message, int Thread)> Errors { get; } = [];
+
+        public void Info(string message)
+        {
+        }
+
+        public void Error(string message, Exception? exception = null)
+            => Errors.Add((message, Environment.CurrentManagedThreadId));
+
+        public string LogDirectory => "";
+
+        public string CurrentLogFilePath => "";
     }
 
     [Fact]
@@ -994,7 +1227,6 @@ public sealed class WorkspaceViewModelTests
 
         Assert.Equal(["bravo"], vm.FilteredRepos.Select(r => r.Name));
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -1128,7 +1360,10 @@ public sealed class WorkspaceViewModelTests
     public async Task TokenChange_RapidEdits_OnlyNewestLookupLands()
     {
         _orgs.Handler = (token, _) => Task.FromResult<IReadOnlyList<string>>([token[^4..]]);
-        var vm = CreateViewModel(debounce: TimeSpan.FromMilliseconds(120));
+        // The two assignments below must land inside one debounce window; a
+        // loaded CI runner can pause a test for hundreds of milliseconds between
+        // two lines, so the window is generous (this is the one wall-clock test).
+        var vm = CreateViewModel(debounce: TimeSpan.FromMilliseconds(1500));
 
         vm.Token = "token-1234567890-AAAA";
         vm.Token = "token-1234567890-BBBB"; // supersedes within the debounce window
@@ -1136,6 +1371,55 @@ public sealed class WorkspaceViewModelTests
         await WaitUntilAsync(() => vm.Organizations.Count == 1, "debounced load");
         Assert.Equal("BBBB", vm.Organizations[0]);
         Assert.Equal(1, _orgs.Calls);
+    }
+
+    // ---------------------------------------------------------------- lifecycle
+
+    [Fact]
+    public async Task Dispose_MidOrgLookup_CancelsTheLookup_AndALateResultCannotMutateState()
+    {
+        var gate = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken seen = default;
+        _orgs.Handler = (_, ct) =>
+        {
+            seen = ct;
+            return gate.Task.WaitAsync(ct);
+        };
+        var vm = CreateViewModel();
+        vm.Token = "token-1234567890";
+        await WaitUntilAsync(() => _orgs.Calls == 1, "lookup to start");
+
+        vm.Dispose();
+
+        Assert.True(seen.IsCancellationRequested, "the in-flight lookup's token must be canceled");
+        gate.SetResult(["late"]);
+        await Task.Yield();
+        Assert.Empty(vm.Organizations); // the canceled wait threw before the result could land
+    }
+
+    [Fact]
+    public void Dispose_Twice_IsANoOp()
+    {
+        var vm = CreateViewModel();
+        vm.Dispose();
+        vm.Dispose(); // must not throw (the lookup token source is already gone)
+        Assert.Empty(vm.Organizations);
+    }
+
+    [Fact]
+    public async Task RefreshPresentation_ReRaisesStatusForEveryRow_WithoutChangingIt()
+    {
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+        var raised = new List<string>();
+        foreach (RepoItemViewModel row in vm.Repos)
+        {
+            row.PropertyChanged += (sender, e) => raised.Add($"{((RepoItemViewModel)sender!).Name}:{e.PropertyName}");
+        }
+
+        vm.RefreshPresentation();
+
+        Assert.Equal(["alpha:Status", "bravo:Status"], raised);
+        Assert.All(vm.Repos, r => Assert.Equal(SyncStatus.Queued, r.Status));
     }
 
     // ---------------------------------------------------------------- account workspaces
@@ -1253,7 +1537,6 @@ public sealed class WorkspaceViewModelTests
         await vm.RetryFailedCommand.ExecuteAsync(null);
         Assert.False(vm.HasFailedRepos);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -1504,7 +1787,6 @@ public sealed class WorkspaceViewModelTests
         Assert.True(vm.SyncCommand.CanExecute(null));
         Assert.True(vm.CanEditInputs);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     // ---------------------------------------------------------------- residue
@@ -1589,7 +1871,6 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(SyncStatus.Failed, vm.Repos[0].Status); // unchanged
         Assert.False(vm.IsResolvingPaths);
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 
     [Fact]
@@ -1616,6 +1897,5 @@ public sealed class WorkspaceViewModelTests
 
         Assert.DoesNotContain(vm.Repos, r => r.Name == "ghost-repo");
 
-        Directory.Delete(vm.TargetFolder, recursive: true);
     }
 }

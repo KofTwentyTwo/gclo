@@ -30,7 +30,15 @@ internal static class SyncCommand
                                account's values; a token option overrides the
                                stored token. On completion the run's time and
                                summary are recorded on the account.
-          --parallel <N>       Maximum simultaneous git operations (default 8).
+          --include <glob>     Only repositories whose name matches the pattern
+                               ('*' and '?' wildcards, case-insensitive). Repeatable;
+                               a repository is selected when any include matches.
+          --exclude <glob>     Skip repositories whose name matches. Repeatable;
+                               applied after --include.
+          --skip-archived      Skip archived repositories.
+          --dry-run            List what the run would do ('<name>  would clone' or
+                               'would update') and exit 0 without touching anything.
+          --parallel <N>       Maximum simultaneous git operations, 1-64 (default 8).
           --sanitize-paths     When a repository contains paths that are legal in
                                git but invalid on Windows (reserved device names,
                                characters like ':', trailing dots or spaces),
@@ -44,8 +52,15 @@ internal static class SyncCommand
           --token-file <path>  Read the token from the first non-blank line of a file.
           --token-stdin        Read the token as one line from standard input.
           --json               Print no progress lines; end with one line of JSON:
-                               {"total":N,"cloned":N,"updated":N,"failed":N,"canceled":N,
-                                "wasCanceled":bool,"failures":[{"repo":"...","error":"..."}]}
+                               {"type":"summary","total":N,"cloned":N,"updated":N,
+                                "failed":N,"canceled":N,"wasCanceled":bool,
+                                "failures":[{"repo":"...","error":"...",
+                                  "invalidPaths":null|[{"path","reason","suggestedName"}]}],
+                                "sanitized":[{"repo":"...","renamed":N,"skipped":N,
+                                  "skippedPaths":["..."]}]}
+          --json-lines         Print one JSON object per status transition on stdout
+                               ({"type":"progress","repo","status","error"}), then the
+                               same summary object as --json as the last line.
           --quiet              Suppress per-repository progress lines on stdout.
                                Failures still print to stderr and the summary still prints.
           --help               Show this help.
@@ -64,10 +79,15 @@ internal static class SyncCommand
           repositories are marked Canceled, and the summary still prints.
 
         Exit codes:
-          0  every repository synced
-          1  run completed but some repositories failed, or it was canceled
-          2  fatal: bad arguments, missing or rejected token, organization not
-             found, or an unknown account or missing account token
+          0   every selected repository synced (or --dry-run completed)
+          1   run completed but some repositories failed, or it was canceled
+          2   fatal: bad arguments, missing token, organization not found, unknown
+              account or missing account token, unusable target folder
+          3   the token was rejected (401) or may not see the organization (403):
+              fix the token, do not retry as is
+          4   rate limited or temporarily throttled: retry later
+          70  an unexpected error inside gclo; see the activity log
+          With --json or --json-lines, exits 2-70 print no document on stdout.
 
         Security:
           There is deliberately no '--token <value>' option: process command lines
@@ -97,8 +117,11 @@ internal static class SyncCommand
         string? accountName = null;
         int? parallel = null;
         bool json = false;
+        bool jsonLines = false;
         bool quiet = false;
         bool sanitizePaths = false;
+        bool dryRun = false;
+        var filter = new RepoFilterSpec();
         var tokenOptions = new TokenOptions();
 
         var reader = new OptionReader(args);
@@ -112,7 +135,7 @@ internal static class SyncCommand
             {
                 case "--help" or "-h":
                     Console.Out.WriteLine(HelpText);
-                    return 0;
+                    return ExitCodes.Success;
                 case "--org":
                     org = reader.RequireValue();
                     break;
@@ -122,19 +145,30 @@ internal static class SyncCommand
                 case "--account":
                     accountName = reader.RequireValue();
                     break;
+                case "--include":
+                    filter.Include(reader.RequireValue());
+                    break;
+                case "--exclude":
+                    filter.Exclude(reader.RequireValue());
+                    break;
+                case "--skip-archived":
+                    reader.RejectValue();
+                    filter.SkipArchived = true;
+                    break;
+                case "--dry-run":
+                    reader.RejectValue();
+                    dryRun = true;
+                    break;
                 case "--parallel":
-                    {
-                        string value = reader.RequireValue();
-                        if (!int.TryParse(value, out int parsed) || parsed < 1)
-                        {
-                            throw new CliUsageException($"--parallel expects a positive integer, got '{value}'.");
-                        }
-                        parallel = parsed;
-                        break;
-                    }
+                    parallel = OptionReader.ParseParallel(reader.RequireValue());
+                    break;
                 case "--json":
                     reader.RejectValue();
                     json = true;
+                    break;
+                case "--json-lines":
+                    reader.RejectValue();
+                    jsonLines = true;
                     break;
                 case "--quiet":
                     reader.RejectValue();
@@ -148,6 +182,12 @@ internal static class SyncCommand
                     throw new CliUsageException($"Unknown option '{reader.Current}' for 'gclo sync'.");
             }
         }
+
+        if (json && jsonLines)
+        {
+            throw new CliUsageException("Use --json or --json-lines, not both.");
+        }
+        bool machineReadable = json || jsonLines;
 
         try
         {
@@ -174,39 +214,79 @@ internal static class SyncCommand
                 throw new CliUsageException("--target is required (or use --account).");
             }
             int effectiveParallel = parallel ?? AppSettings.DefaultConcurrency;
+            string organization = org.Trim();
+            string targetRoot = target.Trim();
 
-            log.Info($"sync started: org='{org}', target='{target}', parallel={effectiveParallel}, "
-                + $"sanitizePaths={sanitizePaths}, json={json}, quiet={quiet}"
+            log.Info($"sync started: org='{organization}', target='{targetRoot}', parallel={effectiveParallel}, "
+                + $"filters={filter}, dryRun={dryRun}, sanitizePaths={sanitizePaths}, json={json}, jsonLines={jsonLines}, quiet={quiet}"
                 + (account is null ? "" : $", account='{account.Name}'"));
 
             string token = ResolveToken(tokenOptions, account, vault);
 
-            var printer = new ProgressPrinter(printProgress: !quiet && !json, printFailures: !json);
-            var engine = new OrgSyncEngine(lister, git);
-            var request = new SyncRequest(org.Trim(), token, target.Trim(), effectiveParallel);
-            var progress = new SyncProgressHandler(printer, log, printDetails: !json, collectForSanitize: sanitizePaths);
-
-            SyncSummary summary;
+            // List first (the desktop app's list-select-sync shape): filters and
+            // --dry-run need the descriptors before anything runs, and the engine's
+            // subset overload takes exactly that list.
+            IReadOnlyList<RepoDescriptor> repositories;
+            bool canceledWhileListing = false;
             try
             {
-                summary = await engine
-                    .SyncAsync(request, progress, cancellationToken)
+                repositories = await lister
+                    .ListOrganizationRepositoriesAsync(organization, token, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Canceled while still listing repositories: nothing was processed yet.
-                summary = new SyncSummary(0, 0, 0, 0, 0, WasCanceled: true);
+                repositories = [];
+                canceledWhileListing = true;
             }
             catch (InvalidOperationException ex)
             {
-                // The engine's listers translate auth failures, rate limiting, and
-                // unknown organizations into InvalidOperationException.
-                throw new CliErrorException(ex.Message, ex);
+                // The listers translate auth failures, rate limiting, and unknown
+                // organizations; the kind decides the exit code (2/3/4).
+                throw CliErrorException.FromEngine(ex);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+
+            int listed = repositories.Count;
+            if (!filter.IsEmpty)
             {
-                throw new CliErrorException($"Cannot use target folder '{target}': {ex.Message}", ex);
+                repositories = repositories.Where(filter.Matches).ToList();
+            }
+            log.Info($"sync: {listed} repositories listed, {repositories.Count} selected.");
+
+            if (dryRun)
+            {
+                return PrintDryRun(repositories, git, targetRoot, machineReadable, log);
+            }
+
+            OutputMode mode = jsonLines ? OutputMode.JsonLines
+                : json ? OutputMode.Json
+                : quiet ? OutputMode.Quiet
+                : OutputMode.Text;
+            var printer = new ProgressPrinter(mode);
+            var engine = new OrgSyncEngine(lister, git);
+            var request = new SyncRequest(organization, token, targetRoot, effectiveParallel);
+            var progress = new SyncProgressHandler(printer, log, printDetails: !machineReadable, collectForSanitize: sanitizePaths);
+
+            SyncSummary summary;
+            if (canceledWhileListing)
+            {
+                // Canceled while still listing repositories: nothing was processed yet.
+                summary = new SyncSummary(0, 0, 0, 0, 0, WasCanceled: true);
+            }
+            else
+            {
+                try
+                {
+                    summary = await engine
+                        .SyncAsync(request, repositories, progress, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                // The engine folds cancellation into the summary itself (remaining
+                // repositories are marked Canceled), so only disk failures surface here.
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+                {
+                    throw new CliErrorException($"Cannot use target folder '{targetRoot}': {ex.Message}", ex);
+                }
             }
 
             // --sanitize-paths: repositories whose only problem was Windows-invalid
@@ -215,7 +295,7 @@ internal static class SyncCommand
             int sanitized = 0;
             foreach (PendingRecovery pending in progress.DrainPendingRecoveries())
             {
-                if (await TrySanitizeAsync(git, progress, log, target.Trim(), pending, cancellationToken)
+                if (await TrySanitizeAsync(git, progress, printer, log, targetRoot, pending, announce: !machineReadable, cancellationToken)
                     .ConfigureAwait(false))
                 {
                     sanitized++;
@@ -238,11 +318,11 @@ internal static class SyncCommand
             string summaryLine = $"{verb}: {clonedText}, {summary.Updated} updated, "
                 + $"{summary.Failed} failed, {summary.Canceled} canceled of {summary.Total}.";
 
-            if (json)
+            if (machineReadable)
             {
                 var result = new SyncJsonResult(
-                    summary.Total, summary.Cloned, summary.Updated, summary.Failed,
-                    summary.Canceled, summary.WasCanceled, printer.Failures);
+                    "summary", summary.Total, summary.Cloned, summary.Updated, summary.Failed,
+                    summary.Canceled, summary.WasCanceled, printer.Failures, printer.Sanitized);
                 Console.Out.WriteLine(JsonSerializer.Serialize(result, CliJsonContext.Default.SyncJsonResult));
             }
             else
@@ -257,7 +337,7 @@ internal static class SyncCommand
                 TryRecordSyncResult(store!, account, summaryLine, log);
             }
 
-            return summary.Failed > 0 || summary.WasCanceled ? 1 : 0;
+            return summary.Failed > 0 || summary.WasCanceled ? ExitCodes.Partial : ExitCodes.Success;
         }
         catch (Exception ex)
         {
@@ -266,6 +346,36 @@ internal static class SyncCommand
             log.Error($"sync failed: {ex.Message}", ex);
             throw;
         }
+    }
+
+    /// <summary>
+    /// '--dry-run': says what the run would do with each selected repository and
+    /// touches nothing. Exit 0 even for an empty selection.
+    /// </summary>
+    private static int PrintDryRun(
+        IReadOnlyList<RepoDescriptor> repositories, IGitClient git, string targetRoot, bool json, IActivityLog log)
+    {
+        var entries = repositories
+            .Select(r => new DryRunEntry(
+                r.Name,
+                git.IsValidRepository(Path.Combine(targetRoot, r.Name)) ? "update" : "clone"))
+            .ToList();
+        int clones = entries.Count(e => e.Action == "clone");
+        log.Info($"sync dry run: {clones} would clone, {entries.Count - clones} would update of {entries.Count}.");
+
+        if (json)
+        {
+            Console.Out.WriteLine(JsonSerializer.Serialize(
+                (IReadOnlyList<DryRunEntry>)entries, CliJsonContext.Default.IReadOnlyListDryRunEntry));
+            return ExitCodes.Success;
+        }
+
+        foreach (DryRunEntry entry in entries)
+        {
+            Console.Out.WriteLine($"{entry.Repo}  would {entry.Action}");
+        }
+        Console.Out.WriteLine($"Dry run: {clones} would clone, {entries.Count - clones} would update of {entries.Count}.");
+        return ExitCodes.Success;
     }
 
     /// <summary>
@@ -286,9 +396,9 @@ internal static class SyncCommand
         {
             throw new CliErrorException(
                 $"Account '{account.Name}' has no token in Windows Credential Manager "
-                + $"(entry 'gclo:account:{account.Id:N}'). Re-enter the token in the gclo "
-                + "desktop app's account wizard, restore the credential entry manually, "
-                + "or pass a token with --token-env, --token-file, or --token-stdin.");
+                + $"(entry 'gclo:account:{account.Id:N}'). Re-enter the token with "
+                + "'gclo accounts edit --name <name> --token-stdin' or in the desktop app's account wizard, "
+                + "restore the credential entry manually, or pass a token with --token-env, --token-file, or --token-stdin.");
         }
         return token;
     }
@@ -317,7 +427,7 @@ internal static class SyncCommand
     {
         IReadOnlyList<Account> all = store.GetAll();
         string available = all.Count == 0
-            ? "No accounts exist yet; create one in the gclo desktop app."
+            ? "No accounts exist yet; create one with 'gclo accounts add' or in the gclo desktop app."
             : "Available accounts: " + string.Join(", ", all.Select(a => a.Name)) + ".";
         return new CliErrorException($"No account named '{name}'. {available}");
     }
@@ -326,14 +436,18 @@ internal static class SyncCommand
     /// Applies an automatic <see cref="PathRecovery"/> (rename to the suggested name,
     /// skip what has none) to one repository that failed with Windows-invalid paths.
     /// Reports the real outcome — Done or Failed — through <paramref name="progress"/>,
-    /// which by now forwards to the console again.
+    /// which by now forwards to the console again, and records the sanitized shape
+    /// for the JSON document. The human-readable note is only printed in the text
+    /// modes (<paramref name="announce"/>); the document carries it otherwise.
     /// </summary>
     private static async Task<bool> TrySanitizeAsync(
         IGitClient git,
         SyncProgressHandler progress,
+        ProgressPrinter printer,
         IActivityLog log,
         string targetRoot,
         PendingRecovery pending,
+        bool announce,
         CancellationToken cancellationToken)
     {
         string path = Path.Combine(targetRoot, pending.Repo);
@@ -344,10 +458,18 @@ internal static class SyncCommand
             await git.ApplyRecoveryAsync(path, recovery, cancellationToken).ConfigureAwait(false);
 
             string detail = DescribeRecovery(recovery);
-            Console.Error.WriteLine(
-                $"{pending.Repo}  Sanitized  {recovery.SegmentRenames.Count} renamed, "
-                + $"{recovery.SkippedPaths.Count} skipped: {detail}");
+            if (announce)
+            {
+                Console.Error.WriteLine(
+                    $"{pending.Repo}  Sanitized  {recovery.SegmentRenames.Count} renamed, "
+                    + $"{recovery.SkippedPaths.Count} skipped: {detail}");
+            }
             log.Info($"{pending.Repo}: cloned with sanitized paths: {detail}");
+            printer.RecordSanitized(new SyncSanitized(
+                pending.Repo,
+                recovery.SegmentRenames.Count,
+                recovery.SkippedPaths.Count,
+                recovery.SkippedPaths.Order(StringComparer.Ordinal).ToList()));
             progress.Report(new RepoProgress(pending.Repo, SyncStatus.Done));
             return true;
         }
@@ -421,7 +543,7 @@ internal static class SyncCommand
         private readonly List<PendingRecovery> _pending = new();
         private bool _collectForSanitize;
 
-        /// <param name="printDetails">Write offending-path lines to stderr (off for --json, which carries the reason in the document).</param>
+        /// <param name="printDetails">Write offending-path lines to stderr (off for the JSON modes, whose document carries the full list).</param>
         /// <param name="collectForSanitize">Hold invalid-path failures back for --sanitize-paths instead of reporting them.</param>
         public SyncProgressHandler(ProgressPrinter printer, IActivityLog log, bool printDetails, bool collectForSanitize)
         {

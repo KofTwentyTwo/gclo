@@ -45,6 +45,14 @@ public sealed class LibGit2GitClient : IGitClient
 
     private static readonly JsonSerializerOptions RecoveryJsonOptions = new() { WriteIndented = true };
 
+    /// <summary>
+    /// Test seam: invoked right after a fetch completed, before the cancellation
+    /// check that precedes any working-tree work. Local-transport fixtures fire no
+    /// transfer callbacks, so this is how the offline suite exercises "canceled
+    /// between fetch and checkout/merge" deterministically (#31). Null in production.
+    /// </summary>
+    internal Action? AfterFetchForTesting { get; set; }
+
     /// <inheritdoc/>
     public bool IsValidRepository(string path)
         => Directory.Exists(path) && Repository.IsValid(path);
@@ -69,7 +77,7 @@ public sealed class LibGit2GitClient : IGitClient
             () => ApplyRecovery(path, recovery, cancellationToken),
             cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-    private static void Clone(string url, string path, string token, Action<double>? onProgress, CancellationToken ct)
+    private void Clone(string url, string path, string token, Action<double>? onProgress, CancellationToken ct)
     {
         bool existedBefore = Directory.Exists(path);
 
@@ -102,6 +110,7 @@ public sealed class LibGit2GitClient : IGitClient
         try
         {
             Repository.Clone(url, path, options);
+            AfterFetchForTesting?.Invoke();
 
             using var repo = new Repository(path);
 
@@ -143,6 +152,10 @@ public sealed class LibGit2GitClient : IGitClient
             Commands.Checkout(repo, repo.Head, new CheckoutOptions
             {
                 CheckoutModifiers = CheckoutModifiers.Force, // materialize the fresh working tree
+                // The only checkout that lacked the hook: a canceled clone used to
+                // write its whole tree before the token was ever observed (#31).
+                CheckoutNotifyFlags = CheckoutNotifyFlags.Updated,
+                OnCheckoutNotify = (_, _) => !ct.IsCancellationRequested,
             });
 
             // Only now is the clone complete. Config writes are atomic on disk, so an
@@ -170,7 +183,7 @@ public sealed class LibGit2GitClient : IGitClient
         }
     }
 
-    private static void FetchAndPull(string path, string token, CancellationToken ct)
+    private void FetchAndPull(string path, string token, CancellationToken ct)
     {
         using var repo = new Repository(path);
 
@@ -187,6 +200,10 @@ public sealed class LibGit2GitClient : IGitClient
         {
             CredentialsProvider = MakeCredentialsProvider(token),
             OnTransferProgress = _ => !ct.IsCancellationRequested,
+            // Drop tracking refs for branches origin deleted. Without this a renamed
+            // default branch leaves refs/remotes/origin/<old> frozen at its last SHA,
+            // and every later sync compares against it and says "up to date" (#31).
+            Prune = true,
         };
 
         var refSpecs = remote.FetchRefSpecs.Select(s => s.Specification).ToList();
@@ -198,6 +215,7 @@ public sealed class LibGit2GitClient : IGitClient
         {
             throw new OperationCanceledException(ct);
         }
+        AfterFetchForTesting?.Invoke();
 
         ct.ThrowIfCancellationRequested();
 
@@ -214,7 +232,15 @@ public sealed class LibGit2GitClient : IGitClient
             // tip through the stored mapping. Freshly-invalid paths the mapping does
             // not cover surface as a typed failure listing the effective paths.
             AdvanceHeadToTrackedTip(repo);
-            ApplyRecoveryCore(repo, LoadRecovery(recoveryFile), ct);
+            RecoveryDocument stored = LoadRecoveryDocument(recoveryFile);
+            if (stored.MaterializedTip is not null && stored.MaterializedTip == repo.Head.Tip?.Sha)
+            {
+                // The tree on disk already reflects this tip: nothing to rewrite. A
+                // recovery-managed repo used to re-materialize every blob on every
+                // sync, touching gigabytes and every mtime for zero change (#31).
+                return;
+            }
+            ApplyRecoveryCore(repo, ToRecovery(stored), ct);
             return;
         }
 
@@ -226,7 +252,9 @@ public sealed class LibGit2GitClient : IGitClient
 
         if (repo.Info.IsHeadDetached)
         {
-            throw new InvalidOperationException("HEAD is detached; fetched, but nothing was merged.");
+            throw new InvalidOperationException(
+                "HEAD is detached (a commit is checked out, not a branch); fetched, but nothing was merged. "
+                + "Check out a branch in this repository to resume updates, or delete the folder to re-clone.");
         }
 
         if (repo.Info.IsHeadUnborn)
@@ -241,8 +269,15 @@ public sealed class LibGit2GitClient : IGitClient
         var tracked = repo.Head.TrackedBranch;
         if (tracked?.Tip is null)
         {
-            // No upstream configured: fetch is all we can do.
-            return;
+            if (repo.Head.UpstreamBranchCanonicalName is null)
+            {
+                return; // no upstream configured: fetch is all we can do
+            }
+
+            // Upstream is configured but gone from origin (the fetch pruned it): the
+            // default branch was renamed (master -> main) or deleted. Follow origin's
+            // current default instead of reporting "up to date" forever (#31).
+            tracked = RetargetToRemoteDefaultBranch(repo, remote, fetchOptions.CredentialsProvider, ct);
         }
 
         if (repo.Head.Tip?.Sha == tracked.Tip.Sha)
@@ -251,9 +286,13 @@ public sealed class LibGit2GitClient : IGitClient
         }
 
         // Incoming commits can introduce Windows-invalid paths just like a clone can.
+        // Only what the pull introduces is checked: the current tree was validated
+        // when it was checked out, and re-walking a 100K-file tree for a one-file
+        // commit was the dominant engine cost of a daily update run (#30).
         if (OperatingSystem.IsWindows())
         {
-            var invalidIncoming = WindowsPathValidator.Validate(tracked.Tip.Tree);
+            // HEAD cannot be unborn here (handled above), so the current tip exists.
+            var invalidIncoming = WindowsPathValidator.ValidateIncoming(repo, repo.Head.Tip!.Tree, tracked.Tip.Tree);
             if (invalidIncoming.Count > 0)
             {
                 throw new InvalidRepositoryPathsException(invalidIncoming);
@@ -261,7 +300,9 @@ public sealed class LibGit2GitClient : IGitClient
         }
 
         // Fast-forward only: a mirror tool must never manufacture merge commits.
-        // Diverged local history surfaces as NonFastForwardException -> Failed with a clear message.
+        // Diverged local history is the most common pull failure for this tool's
+        // audience (someone committed in a synced clone), so it gets a message that
+        // says what gclo refuses to do and what to do about it (#30).
         var signature = new Signature("gclo", "gclo@localhost", DateTimeOffset.Now);
         try
         {
@@ -276,6 +317,82 @@ public sealed class LibGit2GitClient : IGitClient
         {
             throw new OperationCanceledException(ct);
         }
+        catch (NonFastForwardException ex)
+        {
+            throw new InvalidOperationException(
+                $"'{repo.Head.FriendlyName}' has local commits that origin does not have; gclo only fast-forwards and never merges. "
+                + "Push or reset the local commits, or delete the folder to re-clone.", ex);
+        }
+    }
+
+    /// <summary>
+    /// The current branch's upstream no longer exists on origin. Asks origin for its
+    /// current default branch (the remote HEAD symref), checks it out as the new
+    /// local branch with upstream wired, and removes the orphaned local branch — but
+    /// only when every commit of the old branch is already contained in the new
+    /// default, because a mirror tool never discards local work. Returns the new
+    /// tracking branch so the normal pull continues from it.
+    /// </summary>
+    private static Branch RetargetToRemoteDefaultBranch(
+        Repository repo, Remote remote, CredentialsHandler credentials, CancellationToken ct)
+    {
+        const string prefix = "refs/heads/";
+        string oldName = repo.Head.FriendlyName;
+
+        string? defaultRef = repo.Network.ListReferences(remote, credentials)
+            .FirstOrDefault(r => r.CanonicalName == "HEAD")?.TargetIdentifier;
+        if (defaultRef is null || !defaultRef.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"'{oldName}' no longer exists on origin, and origin has no default branch to follow. "
+                + "Check the repository on GitHub, or delete the folder to re-clone.");
+        }
+
+        string newName = defaultRef[prefix.Length..];
+        var remoteBranch = repo.Branches[$"{remote.Name}/{newName}"];
+        if (remoteBranch?.Tip is null)
+        {
+            throw new InvalidOperationException(
+                $"'{oldName}' no longer exists on origin; its default branch is now '{newName}', which was not fetched. "
+                + "Delete the folder to re-clone.");
+        }
+
+        var oldTip = repo.Head.Tip;
+        if (oldTip is not null && repo.ObjectDatabase.FindMergeBase(oldTip, remoteBranch.Tip)?.Sha != oldTip.Sha)
+        {
+            throw new InvalidOperationException(
+                $"'{oldName}' no longer exists on origin (the default branch is now '{newName}'), but it has local commits "
+                + $"that '{newName}' does not contain; gclo never discards local work. Push or reset them, or delete the folder to re-clone.");
+        }
+
+        var local = repo.Branches[newName] ?? repo.CreateBranch(newName, remoteBranch.Tip);
+        repo.Branches.Update(local, b =>
+        {
+            b.Remote = remote.Name;
+            b.UpstreamBranch = defaultRef;
+        });
+
+        ct.ThrowIfCancellationRequested();
+        try
+        {
+            Commands.Checkout(repo, local, new CheckoutOptions
+            {
+                CheckoutNotifyFlags = CheckoutNotifyFlags.Updated,
+                OnCheckoutNotify = (_, _) => !ct.IsCancellationRequested,
+            });
+        }
+        catch (UserCancelledException) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
+        }
+
+        if (!string.Equals(oldName, newName, StringComparison.Ordinal))
+        {
+            repo.Branches.Remove(oldName); // fully contained in the new default; nothing is lost
+        }
+
+        return repo.Head.TrackedBranch
+            ?? throw new InvalidOperationException($"'{newName}' could not be set to track origin.");
     }
 
     /// <summary>
@@ -359,9 +476,10 @@ public sealed class LibGit2GitClient : IGitClient
         }
 
         string recoveryFile = GetRecoveryFilePath(repo);
-        if (File.Exists(recoveryFile))
+        RecoveryDocument? previous = File.Exists(recoveryFile) ? LoadRecoveryDocument(recoveryFile) : null;
+        if (previous is not null)
         {
-            recovery = MergeRecoveries(stored: LoadRecovery(recoveryFile), incoming: recovery);
+            recovery = MergeRecoveries(stored: ToRecovery(previous), incoming: recovery);
         }
 
         var tip = repo.Head.Tip
@@ -379,6 +497,19 @@ public sealed class LibGit2GitClient : IGitClient
         }
 
         string workdir = repo.Info.WorkingDirectory;
+
+        // A real checkout removes what left the tree; this materialization must too,
+        // or a recovery-managed working tree accumulates every file upstream ever
+        // deleted or renamed (#31). The previous apply's manifest says what it wrote.
+        var effectiveNow = new HashSet<string>(entries.Select(e => e.EffectivePath), StringComparer.Ordinal);
+        foreach (string stale in previous?.MaterializedPaths ?? [])
+        {
+            if (!effectiveNow.Contains(stale))
+            {
+                DeleteMaterializedFile(workdir, stale);
+            }
+        }
+
         foreach (var (originalPath, effectivePath, blob) in entries)
         {
             ct.ThrowIfCancellationRequested();
@@ -398,8 +529,34 @@ public sealed class LibGit2GitClient : IGitClient
             content.CopyTo(file);
         }
 
-        SaveRecovery(repo, recovery);
+        SaveRecovery(repo, recovery, entries.Select(e => e.EffectivePath), tip.Sha);
         repo.Config.Set(CheckoutPendingKey, false, ConfigurationLevel.Local);
+    }
+
+    /// <summary>
+    /// Removes one file a previous materialization wrote (a user-deleted file is
+    /// fine) and prunes the directories it leaves empty, stopping at the working
+    /// directory root.
+    /// </summary>
+    private static void DeleteMaterializedFile(string workdir, string effectivePath)
+    {
+        string fullPath = Path.Combine(workdir, effectivePath.Replace('/', Path.DirectorySeparatorChar));
+        if (File.Exists(fullPath))
+        {
+            File.SetAttributes(fullPath, FileAttributes.Normal);
+            File.Delete(fullPath);
+        }
+
+        string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workdir));
+        string? directory = Path.GetDirectoryName(fullPath);
+        while (directory is not null
+            && !string.Equals(Path.TrimEndingDirectorySeparator(directory), root, StringComparison.OrdinalIgnoreCase)
+            && Directory.Exists(directory)
+            && !Directory.EnumerateFileSystemEntries(directory).Any())
+        {
+            Directory.Delete(directory);
+            directory = Path.GetDirectoryName(directory);
+        }
     }
 
     /// <summary>
@@ -544,32 +701,76 @@ public sealed class LibGit2GitClient : IGitClient
     /// <summary>Serializable shape of <see cref="PathRecovery"/> for .git\gclo-recovery.json.</summary>
     /// <param name="SegmentRenames">Original path to replacement path map; null when absent from the file.</param>
     /// <param name="SkippedPaths">Paths omitted from the working tree; null when absent from the file.</param>
-    private sealed record RecoveryDocument(Dictionary<string, string>? SegmentRenames, List<string>? SkippedPaths);
+    /// <param name="MaterializedPaths">Effective paths the last apply wrote, so the next one can delete what left the tree; null in files from before this field existed.</param>
+    /// <param name="MaterializedTip">SHA of the commit the last apply materialized; null in older files.</param>
+    private sealed record RecoveryDocument(
+        Dictionary<string, string>? SegmentRenames,
+        List<string>? SkippedPaths,
+        List<string>? MaterializedPaths,
+        string? MaterializedTip);
 
-    private static void SaveRecovery(Repository repo, PathRecovery recovery)
+    private static void SaveRecovery(
+        Repository repo, PathRecovery recovery, IEnumerable<string> materializedPaths, string tipSha)
     {
         var document = new RecoveryDocument(
             new Dictionary<string, string>(recovery.SegmentRenames, StringComparer.Ordinal),
-            recovery.SkippedPaths.Order(StringComparer.Ordinal).ToList());
-        File.WriteAllText(GetRecoveryFilePath(repo), JsonSerializer.Serialize(document, RecoveryJsonOptions));
+            recovery.SkippedPaths.Order(StringComparer.Ordinal).ToList(),
+            materializedPaths.Order(StringComparer.Ordinal).ToList(),
+            tipSha);
+
+        // Atomic replace: a crash mid-write must not leave a truncated document that
+        // fails every later pull of this repository (#31).
+        string path = GetRecoveryFilePath(repo);
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(document, RecoveryJsonOptions));
+        File.Move(temp, path, overwrite: true);
     }
 
-    private static PathRecovery LoadRecovery(string filePath)
+    private static RecoveryDocument LoadRecoveryDocument(string filePath)
     {
-        var document = JsonSerializer.Deserialize<RecoveryDocument>(File.ReadAllText(filePath), RecoveryJsonOptions)
-            ?? throw new InvalidOperationException($"Recovery file '{filePath}' is empty or malformed.");
-        return new PathRecovery(
+        try
+        {
+            return JsonSerializer.Deserialize<RecoveryDocument>(File.ReadAllText(filePath), RecoveryJsonOptions)
+                ?? throw new JsonException("the document is empty");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"The path-recovery file '{filePath}' is corrupt ({ex.Message}). "
+                + "Delete it and use Resolve on this repository again to rebuild it.", ex);
+        }
+    }
+
+    private static PathRecovery ToRecovery(RecoveryDocument document)
+        => new(
             new Dictionary<string, string>(document.SegmentRenames ?? new(StringComparer.Ordinal), StringComparer.Ordinal),
             new HashSet<string>(document.SkippedPaths ?? [], StringComparer.Ordinal));
-    }
 
+    /// <summary>
+    /// GitHub accepts any username when the PAT is sent as the password. libgit2 asks
+    /// again after every 401; handing it the same rejected token loops until it gives
+    /// up with "too many redirects or authentication replays", once per repository.
+    /// A correct token is never asked for a third time, so the third request means the
+    /// token is bad and gets the same actionable message the API listers produce (#31).
+    /// </summary>
     private static CredentialsHandler MakeCredentialsProvider(string token)
-        => (_, _, _) => new UsernamePasswordCredentials
+    {
+        int requests = 0;
+        return (_, _, _) =>
         {
-            // GitHub accepts any username when the PAT is sent as the password.
-            Username = "x-access-token",
-            Password = token,
+            if (Interlocked.Increment(ref requests) > 2)
+            {
+                throw new InvalidOperationException(
+                    "GitHub rejected the token for git over HTTPS (401). Check the PAT: it may have expired, "
+                    + "been revoked, or lack access to this repository.");
+            }
+            return new UsernamePasswordCredentials
+            {
+                Username = "x-access-token",
+                Password = token,
+            };
         };
+    }
 
     private static void TryDeleteDirectory(string path)
     {

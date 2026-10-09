@@ -20,6 +20,15 @@
 
     <StackPanel MinWidth="480" Spacing="12">
         <TextBlock x:Name="IntroText" TextWrapping="Wrap" />
+        <!-- Pre-flight problems with the choices below (a row neither renamed nor
+             skipped, a replacement that is itself invalid, two rows renamed onto one
+             name). Shown instead of closing and failing in the engine. -->
+        <InfoBar
+            x:Name="ProblemsBar"
+            AutomationProperties.AutomationId="PathRecoveryProblems"
+            Severity="Error"
+            IsClosable="False"
+            Title="These choices would fail" />
         <ScrollViewer MaxHeight="400" VerticalScrollBarVisibility="Auto">
             <ItemsControl x:Name="RowsControl">
                 <ItemsControl.ItemTemplate>

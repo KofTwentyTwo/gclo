@@ -7,15 +7,11 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
 {
     private readonly Func<string, IGitHubGateway> _gatewayFactory;
 
-    /// <summary>Production wiring: a fresh Octokit-backed gateway per call's token.</summary>
+    /// <summary>Production wiring: the process-wide Octokit gateway for the call's token (connection reuse).</summary>
     public GitHubRepositoryLister()
-        : this(CreateOctokitGateway)
+        : this(OctokitGatewayCache.Get)
     {
     }
-
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
-        Justification = "Production wiring to the live GitHub API; the offline suite injects a fake gateway.")]
-    private static IGitHubGateway CreateOctokitGateway(string token) => new OctokitGateway(token);
 
     /// <summary>Test seam: substitute the GitHub API with a fake gateway.</summary>
     internal GitHubRepositoryLister(Func<string, IGitHubGateway> gatewayFactory)
@@ -60,9 +56,31 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
             }
             catch (NotFoundException)
             {
-                // /orgs/{name}/repos 404s for user accounts: the token's own account
-                // gets its owned repos (including private); any other user account
-                // yields the repos the token can see there (public).
+                // /orgs/{name}/repos 404s for user accounts — but ALSO for a real
+                // organization the token cannot see (an ungranted fine-grained PAT, or
+                // SSO not authorized). Falling through to /users/{name}/repos for an
+                // organization would list only its public repositories and report a
+                // green sync that silently omitted the rest, so the account kind is
+                // resolved first and an invisible organization is an error (#31).
+                GitHubAccountKind kind = await gateway.GetAccountKindAsync(organization).ConfigureAwait(false);
+                if (kind == GitHubAccountKind.Organization)
+                {
+                    throw new GitHubAccessException(
+                        GitHubAccessKind.Forbidden,
+                        $"'{organization}' is an organization, but this token cannot see its repositories (404). "
+                        + "Grant the PAT access to the organization — for a fine-grained token choose it as the resource owner, "
+                        + "for a classic token authorize it for SSO — then try again.");
+                }
+                if (kind == GitHubAccountKind.NotFound)
+                {
+                    throw new GitHubAccessException(
+                        GitHubAccessKind.NotFound,
+                        $"'{organization}' was found neither as an organization nor as a user account (404). Check the spelling.");
+                }
+
+                // A user account: the token's own account gets its owned repos
+                // (including private); any other user account yields the repos the
+                // token can see there (public).
                 string currentUser = await gateway.GetCurrentUserLoginAsync().ConfigureAwait(false);
                 if (string.Equals(currentUser, organization, StringComparison.OrdinalIgnoreCase))
                 {
@@ -79,7 +97,8 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
                     }
                     catch (NotFoundException ex)
                     {
-                        throw new InvalidOperationException(
+                        throw new GitHubAccessException(
+                            GitHubAccessKind.NotFound,
                             $"'{organization}' was found neither as an organization nor as a user account (404) — or the token cannot see it.", ex);
                     }
                 }
@@ -87,13 +106,28 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
         }
         catch (AuthorizationException ex)
         {
-            throw new InvalidOperationException(
+            throw new GitHubAccessException(
+                GitHubAccessKind.Unauthorized,
                 "GitHub rejected the token (401). Check the PAT and make sure it has 'repo' (classic) or repository read access (fine-grained).", ex);
         }
         catch (RateLimitExceededException ex)
         {
-            throw new InvalidOperationException(
-                $"GitHub API rate limit exceeded; it resets at {ex.Reset:u}.", ex);
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited, $"GitHub API rate limit exceeded; it resets at {ex.Reset:u}.", ex);
+        }
+        catch (SecondaryRateLimitExceededException ex)
+        {
+            // A burst of requests, not a scope problem; Octokit models it beside (not
+            // under) AbuseException, so both get the same translation.
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited,
+                "GitHub's secondary rate limit was hit (too many requests in a short time); retry in a minute.", ex);
+        }
+        catch (AbuseException ex)
+        {
+            throw new GitHubAccessException(
+                GitHubAccessKind.RateLimited,
+                $"GitHub's secondary rate limit was hit (too many requests in a short time); retry in {ex.RetryAfterSeconds ?? 60} seconds.", ex);
         }
 
         cancellationToken.ThrowIfCancellationRequested();

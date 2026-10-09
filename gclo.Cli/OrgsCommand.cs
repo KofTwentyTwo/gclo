@@ -25,7 +25,9 @@ internal static class OrgsCommand
         Exit codes:
           0  listed successfully (even when only the account login is visible)
           1  canceled (Ctrl+C)
-          2  fatal: bad arguments, or missing or rejected token
+          2  fatal: bad arguments, or missing token
+          3  the token was rejected (401)
+          4  rate limited; retry later
 
         Security:
           There is deliberately no '--token <value>' option: process command lines
@@ -56,7 +58,7 @@ internal static class OrgsCommand
             {
                 case "--help" or "-h":
                     Console.Out.WriteLine(HelpText);
-                    return 0;
+                    return ExitCodes.Success;
                 case "--json":
                     reader.RejectValue();
                     json = true;
@@ -81,9 +83,9 @@ internal static class OrgsCommand
             }
             catch (InvalidOperationException ex)
             {
-                // The lister translates auth failures and rate limiting into
-                // InvalidOperationException.
-                throw new CliErrorException(ex.Message, ex);
+                // The lister translates auth failures and rate limiting; the kind
+                // picks the exit code (2/3/4).
+                throw CliErrorException.FromEngine(ex);
             }
 
             log.Info($"orgs finished: {logins.Count} login(s) listed.");
@@ -99,7 +101,7 @@ internal static class OrgsCommand
                     Console.Out.WriteLine(login);
                 }
             }
-            return 0;
+            return ExitCodes.Success;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

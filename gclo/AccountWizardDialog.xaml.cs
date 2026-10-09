@@ -42,13 +42,13 @@ namespace gclo
             _windowHandleProvider = windowHandleProvider;
             InitializeComponent();
 
-            // PasswordBox has no reliable two-way binding: seed it with the token in
-            // effect (editing an account), and mirror edits back by hand. The seed's
-            // PasswordChanged echo writes the same value back, a no-op set.
-            if (ViewModel.Token.Length > 0)
-            {
-                TokenBox.Password = ViewModel.Token;
-            }
+            // PasswordBox has no reliable two-way binding, so edits are mirrored back
+            // by hand. The stored token of an existing account is deliberately NOT
+            // loaded into the box: an empty box means "keep it", and the secret never
+            // sits in an editable control with a reveal button (#32).
+            TokenBox.PlaceholderText = ViewModel.IsEditing
+                ? "Leave empty to keep the stored token"
+                : "ghp_…";
 
             // NumberBox.Value is a double; the int is mirrored by hand (see ValueChanged).
             ConcurrencyBox.Value = ViewModel.MaxConcurrency;
@@ -192,16 +192,13 @@ namespace gclo
         /// </summary>
         private void AnnounceStepError()
         {
-            TextBlock? errorText = ViewModel.Step switch
+            TextBlock errorText = ViewModel.Step switch
             {
                 1 => NameErrorText,
                 2 => TokenErrorText,
-                _ => null, // steps 3 and 4 have no message property; the fields show what is required
+                3 => OrganizationErrorText,
+                _ => TargetErrorText,
             };
-            if (errorText is null)
-            {
-                return;
-            }
 
             DispatcherQueue.TryEnqueue(() =>
             {

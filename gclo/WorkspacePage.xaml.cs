@@ -28,6 +28,22 @@ namespace gclo
         public WorkspaceViewModel ViewModel { get; }
 
         /// <summary>
+        /// Raised by the chip's "Edit account…" (account workspaces only) with the account
+        /// id; the shell answers by opening the edit wizard. Null when nothing is wired.
+        /// </summary>
+        public Func<Guid, Task>? EditAccountRequested { get; set; }
+
+        /// <summary>
+        /// Raised by the chip's "Save as account…" (Quick Sync only) with the connection
+        /// in effect; the shell answers by opening the add wizard seeded with it.
+        /// </summary>
+        public Func<AccountWizardSeed, Task>? SaveAsAccountRequested { get; set; }
+
+        // Handlers kept so Detach can unhook exactly what the constructor hooked.
+        private readonly System.Collections.Specialized.NotifyCollectionChangedEventHandler _onReposChanged;
+        private readonly System.Collections.Specialized.NotifyCollectionChangedEventHandler _onFilteredChanged;
+
+        /// <summary>
         /// Wires the page to its (caller-owned) view model. The
         /// <paramref name="windowHandleProvider"/> returns the host window's HWND,
         /// needed to initialize the folder picker.
@@ -46,22 +62,20 @@ namespace gclo
             // The chip's repo count, the toolbar's selection summary, and the
             // empty-filter placeholder are set from code: they derive from collection
             // counts, which raise no property change an x:Bind function could ride on.
-            ViewModel.Repos.CollectionChanged += (_, _) => UpdateDerivedTexts();
-            ViewModel.FilteredRepos.CollectionChanged += (_, _) => UpdateDerivedTexts();
+            _onReposChanged = (_, _) => UpdateDerivedTexts();
+            _onFilteredChanged = (_, _) => UpdateDerivedTexts();
+            ViewModel.Repos.CollectionChanged += _onReposChanged;
+            ViewModel.FilteredRepos.CollectionChanged += _onFilteredChanged;
 
             // The view model stays UI-free: when ResolvePathsCommand needs the user's
             // path-recovery choices, it calls back through here and the page answers
             // with PathRecoveryDialog.
             ViewModel.RecoveryInteraction = ShowPathRecoveryDialogAsync;
 
-            // An account-seeded view model already carries its vault token; mirror it
-            // into the box so the UI shows what is in effect. The resulting
-            // PasswordChanged echoes the same value back, which the Token setter
-            // ignores as a no-op.
-            if (ViewModel.Token.Length > 0)
-            {
-                TokenBox.Password = ViewModel.Token;
-            }
+            // Both hosts of the shared connection form need the window handle for
+            // their folder picker.
+            ConnectForm.WindowHandleProvider = _windowHandleProvider;
+            EditForm.WindowHandleProvider = _windowHandleProvider;
 
             // SelectorBar starts with no selection; the view model's filter default is
             // All, so select that item (the resulting SelectionChanged is a no-op set).
@@ -70,7 +84,8 @@ namespace gclo
         }
 
         /// <summary>
-        /// Label for the org-subfolder checkbox; names the actual organization once one is chosen.
+        /// Label for the org-subfolder checkbox in the Options flyout; names the actual
+        /// organization once one is chosen (the connection form has its own copy).
         /// </summary>
         public string OrgSubfolderLabel(string organization)
             => string.IsNullOrWhiteSpace(organization)
@@ -81,12 +96,19 @@ namespace gclo
         public bool IsAccountWorkspace => ViewModel.AccountId is not null;
 
         /// <summary>
-        /// Whether the edit flyout's connection fields accept input: Quick Sync follows
-        /// <see cref="WorkspaceViewModel.CanEditInputs"/>; account workspaces are always
-        /// read-only here (their settings are edited in the account wizard).
+        /// Unhooks every subscription this page made on its (longer-lived) view model, so
+        /// a page the shell releases while its workspace is idle can be collected: the
+        /// view model's event lists would otherwise pin the whole visual tree (#30).
+        /// The view model itself is untouched; a fresh page re-hydrates from it.
         /// </summary>
-        public bool ConnectFieldsEnabled(bool canEditInputs)
-            => canEditInputs && ViewModel.AccountId is null;
+        public void Detach()
+        {
+            ViewModel.AnnouncementRequested -= AnnounceToAssistiveTechnology;
+            ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            ViewModel.Repos.CollectionChanged -= _onReposChanged;
+            ViewModel.FilteredRepos.CollectionChanged -= _onFilteredChanged;
+            ViewModel.RecoveryInteraction = null;
+        }
 
         /// <summary>
         /// Sort-direction arrow (visual only; the header button's automation name
@@ -119,7 +141,8 @@ namespace gclo
                 // it here. Enqueued so the binding has pushed the new text first.
                 DispatcherQueue.TryEnqueue(RaiseStatusLiveRegionChanged);
             }
-            else if (e.PropertyName == nameof(WorkspaceViewModel.SelectedCount))
+            else if (e.PropertyName is nameof(WorkspaceViewModel.SelectedCount)
+                or nameof(WorkspaceViewModel.LoadedOrganization))
             {
                 UpdateDerivedTexts();
             }
@@ -152,6 +175,13 @@ namespace gclo
                 ViewModel.FilteredRepos.Count == 0 && ViewModel.Repos.Count > 0
                     ? Visibility.Visible
                     : Visibility.Collapsed;
+
+            bool loadedNothing = ViewModel.HasLoadedRepos && ViewModel.Repos.Count == 0;
+            EmptyTableText.Text = loadedNothing
+                ? $"No repositories found in '{ViewModel.LoadedOrganization}'. "
+                  + "Check the name, or make sure the token can see its repositories."
+                : "";
+            EmptyTableText.Visibility = loadedNothing ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void FilterSelectorBar_SelectionChanged(
@@ -242,13 +272,6 @@ namespace gclo
             null => "Filter by archived",
         };
 
-        // An editable ComboBox does not render Text that was set before its template
-        // loaded, so an account workspace's seeded org shows as blank even though
-        // the view model holds it — see EditableComboBox. Runs on every Loaded:
-        // the connect card's box on page creation, the chip flyout's on each open.
-        private void OrgBox_Loaded(object sender, RoutedEventArgs e)
-            => EditableComboBox.ReapplyText((ComboBox)sender, ViewModel.Organization);
-
         private void Toolbar_SizeChanged(object sender, SizeChangedEventArgs e)
             => UpdateToolbarLayout();
 
@@ -278,13 +301,26 @@ namespace gclo
         private void EditButton_Click(object sender, RoutedEventArgs e)
             => FlyoutBase.ShowAttachedFlyout((FrameworkElement)sender);
 
-        // PasswordBox has no reliable two-way binding, so the flyout's token box is
-        // synchronized on open; it then always shows the token in effect.
-        private void EditFlyout_Opening(object? sender, object e)
+        private async void EditAccountButton_Click(object sender, RoutedEventArgs e)
         {
-            if (EditTokenBox.Password != ViewModel.Token)
+            EditFlyout.Hide();
+            if (ViewModel.AccountId is Guid id && EditAccountRequested is { } edit)
             {
-                EditTokenBox.Password = ViewModel.Token;
+                await edit(id);
+            }
+        }
+
+        private async void SaveAsAccountButton_Click(object sender, RoutedEventArgs e)
+        {
+            EditFlyout.Hide();
+            if (SaveAsAccountRequested is { } save)
+            {
+                await save(new AccountWizardSeed(
+                    ViewModel.Token,
+                    ViewModel.Organization,
+                    ViewModel.TargetFolder,
+                    ViewModel.CreateOrgSubfolder,
+                    ViewModel.MaxConcurrency));
             }
         }
 
@@ -334,33 +370,12 @@ namespace gclo
             return dialog.Result; // blocked by another open dialog reads as dismissed
         }
 
-        // PasswordBox does not support reliable two-way x:Bind on Password;
-        // mirror it into the view model by hand (shared by the connect card's box
-        // and the edit flyout's box).
-        private void TokenBox_PasswordChanged(object sender, RoutedEventArgs e)
-        {
-            ViewModel.Token = ((PasswordBox)sender).Password;
-        }
-
-        private async void BrowseButton_Click(object sender, RoutedEventArgs e)
-        {
-            var picker = new Windows.Storage.Pickers.FolderPicker();
-            picker.FileTypeFilter.Add("*"); // required in packaged apps
-
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, _windowHandleProvider());
-
-            var folder = await picker.PickSingleFolderAsync();
-            if (folder is not null)
-            {
-                ViewModel.TargetFolder = folder.Path;
-            }
-        }
-
         private async void OpenFolderButton_Click(object sender, RoutedEventArgs e)
         {
             string root = ViewModel.EffectiveTargetRoot;
             if (Directory.Exists(root))
             {
+                ViewModel.NoteFolderOpened();
                 await Windows.System.Launcher.LaunchFolderPathAsync(root);
             }
         }

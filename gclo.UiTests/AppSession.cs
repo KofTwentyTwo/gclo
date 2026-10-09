@@ -377,9 +377,91 @@ public sealed class AppSession : IDisposable
             + "Set GCLO_UITEST_EXE to the gclo.exe to test.");
     }
 
+    private static int _sessionCounter;
+
+    /// <summary>
+    /// Waits until the app's activity log (under the session's data directory)
+    /// contains <paramref name="fragment"/>. The log is the one deterministic signal
+    /// for "the app handled that command" when the UI shows no change by design.
+    /// </summary>
+    public void WaitForLogLine(string fragment, TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        string logs = Path.Combine(DataDirectory, "logs");
+        while (DateTime.UtcNow < deadline)
+        {
+            if (Directory.Exists(logs))
+            {
+                foreach (string file in Directory.EnumerateFiles(logs, "*.log"))
+                {
+                    try
+                    {
+                        using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                        using var reader = new StreamReader(stream);
+                        if (reader.ReadToEnd().Contains(fragment, StringComparison.Ordinal))
+                        {
+                            return;
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        // Mid-write; try again.
+                    }
+                }
+            }
+            Thread.Sleep(50);
+        }
+        throw new TimeoutException($"Timed out waiting for the activity log to contain '{fragment}'.");
+    }
+
+    /// <summary>
+    /// When GCLO_UITEST_ARTIFACTS names a directory (CI does), saves a screenshot of
+    /// the screen as the session ends and copies the app's activity log beside it, so
+    /// a failure on a hosted runner has something to diagnose with. Best effort.
+    /// </summary>
+    private void TryCaptureArtifacts()
+    {
+        string? root = Environment.GetEnvironmentVariable("GCLO_UITEST_ARTIFACTS");
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return;
+        }
+
+        int number = Interlocked.Increment(ref _sessionCounter);
+        string stamp = DateTime.Now.ToString("HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        try
+        {
+            Directory.CreateDirectory(root);
+            using var image = FlaUI.Core.Capturing.Capture.Screen();
+            image.ToFile(Path.Combine(root, $"session-{number:D2}-{stamp}.png"));
+        }
+        catch
+        {
+            // A missing desktop session or a disposed automation must not fail the test.
+        }
+
+        try
+        {
+            string logs = Path.Combine(DataDirectory, "logs");
+            if (Directory.Exists(logs))
+            {
+                foreach (string file in Directory.EnumerateFiles(logs))
+                {
+                    File.Copy(file, Path.Combine(root, $"session-{number:D2}-{Path.GetFileName(file)}"), overwrite: true);
+                }
+            }
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
     /// <inheritdoc/>
     public void Dispose()
     {
+        TryCaptureArtifacts();
+
         // Order matters: take the app down first, dispose the automation only after
         // the process is gone, then sweep the temp data directory. Every step is
         // best-effort so one failure cannot mask the test outcome.

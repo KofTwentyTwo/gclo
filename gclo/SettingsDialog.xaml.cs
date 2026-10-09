@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using gclo.Engine;
 using gclo.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -25,20 +27,26 @@ namespace gclo
     {
         private readonly AppSettings _settings;
         private readonly ITokenVault _vault;
+        private readonly IActivityLog _log;
         // A ContentDialog has no HWND of its own; the host window supplies one for pickers.
         private readonly Func<nint> _windowHandleProvider;
 
         /// <summary>Set by the Remove link; the deletion happens on Save.</summary>
         private bool _removeSavedToken;
 
-        /// <summary>Creates the dialog and populates the controls from <paramref name="settings"/>.</summary>
-        public SettingsDialog(AppSettings settings, ITokenVault vault, Func<nint> windowHandleProvider)
+        /// <summary>
+        /// Creates the dialog and populates the controls from <paramref name="settings"/>;
+        /// <paramref name="log"/> records what a save changed (field names and values,
+        /// never the token).
+        /// </summary>
+        public SettingsDialog(AppSettings settings, ITokenVault vault, Func<nint> windowHandleProvider, IActivityLog? log = null)
         {
             ArgumentNullException.ThrowIfNull(settings);
             ArgumentNullException.ThrowIfNull(vault);
             ArgumentNullException.ThrowIfNull(windowHandleProvider);
             _settings = settings;
             _vault = vault;
+            _log = log ?? new NullActivityLog();
             _windowHandleProvider = windowHandleProvider;
             InitializeComponent();
 
@@ -66,31 +74,57 @@ namespace gclo
         /// </summary>
         public void ApplyAndSave()
         {
-            _settings.DefaultTargetFolder = TargetFolderBox.Text.Trim();
+            var changes = new List<string>();
+
+            string folder = TargetFolderBox.Text.Trim();
+            if (folder != _settings.DefaultTargetFolder)
+            {
+                changes.Add($"default folder '{_settings.DefaultTargetFolder}' -> '{folder}'");
+                _settings.DefaultTargetFolder = folder;
+            }
 
             // NumberBox.Value is NaN when the field was cleared; keep the previous value then.
             double value = ConcurrencyBox.Value;
             if (!double.IsNaN(value))
             {
-                _settings.DefaultMaxConcurrency = Math.Clamp(
+                int concurrency = Math.Clamp(
                     (int)Math.Round(value), AppSettings.MinConcurrency, AppSettings.MaxConcurrency);
+                if (concurrency != _settings.DefaultMaxConcurrency)
+                {
+                    changes.Add($"default parallelism {_settings.DefaultMaxConcurrency} -> {concurrency}");
+                    _settings.DefaultMaxConcurrency = concurrency;
+                }
             }
 
-            _settings.Theme = ThemeBox.SelectedIndex switch
+            string theme = ThemeBox.SelectedIndex switch
             {
                 1 => "Light",
                 2 => "Dark",
                 _ => "System",
             };
+            if (theme != _settings.Theme)
+            {
+                changes.Add($"theme {_settings.Theme} -> {theme}");
+                _settings.Theme = theme;
+            }
 
-            _settings.ShowSplashScreen = SplashToggle.IsOn;
+            if (SplashToggle.IsOn != _settings.ShowSplashScreen)
+            {
+                changes.Add($"splash screen {(SplashToggle.IsOn ? "on" : "off")}");
+                _settings.ShowSplashScreen = SplashToggle.IsOn;
+            }
             double splash = SplashDurationBox.Value;
             if (!double.IsNaN(splash))
             {
-                _settings.SplashMilliseconds = Math.Clamp(
+                int milliseconds = Math.Clamp(
                     (int)Math.Round(splash),
                     AppSettings.MinSplashMilliseconds,
                     AppSettings.MaxSplashMilliseconds);
+                if (milliseconds != _settings.SplashMilliseconds)
+                {
+                    changes.Add($"splash duration {_settings.SplashMilliseconds} -> {milliseconds} ms");
+                    _settings.SplashMilliseconds = milliseconds;
+                }
             }
 
             _settings.Save();
@@ -99,11 +133,17 @@ namespace gclo
             if (typed.Length > 0)
             {
                 _vault.Store(AppSettings.DefaultTokenVaultId, typed);
+                changes.Add("default token stored");
             }
             else if (_removeSavedToken)
             {
                 _vault.Delete(AppSettings.DefaultTokenVaultId);
+                changes.Add("default token removed");
             }
+
+            _log.Info(changes.Count == 0
+                ? "Settings saved (no changes)."
+                : "Settings saved: " + string.Join("; ", changes) + ".");
         }
 
         private void RemoveTokenButton_Click(object sender, RoutedEventArgs e)

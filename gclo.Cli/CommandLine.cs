@@ -1,4 +1,41 @@
+using gclo.Engine;
+
 namespace gclo.Cli;
+
+/// <summary>
+/// The process exit codes. 0-2 are the original contract; 3 and 4 split what used
+/// to be 2 so a scheduler can tell "fix the invocation or token" from "transient,
+/// retry later" without parsing stderr; 70 (BSD EX_SOFTWARE) marks a bug in gclo
+/// itself rather than a caller mistake.
+/// </summary>
+internal static class ExitCodes
+{
+    /// <summary>Every repository synced (or the listing completed).</summary>
+    public const int Success = 0;
+
+    /// <summary>The run completed, but some repositories failed or it was canceled.</summary>
+    public const int Partial = 1;
+
+    /// <summary>Fatal: bad arguments, missing token, unknown organization or account, unusable target.</summary>
+    public const int Fatal = 2;
+
+    /// <summary>GitHub rejected the token or refused access (401/403): fix the token; never retry as is.</summary>
+    public const int Auth = 3;
+
+    /// <summary>A rate limit or temporary throttle: retry later.</summary>
+    public const int Transient = 4;
+
+    /// <summary>An unexpected exception inside gclo; details are in the activity log.</summary>
+    public const int Unexpected = 70;
+
+    /// <summary>The exit code for an engine access refusal of the given kind.</summary>
+    public static int ForAccess(GitHubAccessKind kind) => kind switch
+    {
+        GitHubAccessKind.Unauthorized or GitHubAccessKind.Forbidden => Auth,
+        GitHubAccessKind.RateLimited => Transient,
+        _ => Fatal,
+    };
+}
 
 /// <summary>
 /// A command-line usage error. The message is printed to stderr followed by a
@@ -14,13 +51,27 @@ internal sealed class CliUsageException : Exception
 /// <summary>
 /// A fatal runtime error (missing token, rejected token, organization not found,
 /// unusable target folder). The message is printed to stderr and the process
-/// exits with code 2.
+/// exits with <see cref="ExitCode"/> — 2 unless the failure is an auth (3) or
+/// transient (4) refusal from GitHub.
 /// </summary>
 internal sealed class CliErrorException : Exception
 {
-    public CliErrorException(string message, Exception? inner = null) : base(message, inner)
+    public CliErrorException(string message, Exception? inner = null, int exitCode = ExitCodes.Fatal)
+        : base(message, inner)
     {
+        ExitCode = exitCode;
     }
+
+    /// <summary>The process exit code this error maps to.</summary>
+    public int ExitCode { get; }
+
+    /// <summary>
+    /// Wraps an engine failure: the listers translate GitHub refusals into
+    /// <see cref="GitHubAccessException"/>, whose kind picks the exit code; any other
+    /// <see cref="InvalidOperationException"/> stays fatal (2).
+    /// </summary>
+    public static CliErrorException FromEngine(InvalidOperationException ex)
+        => new(ex.Message, ex, ex is GitHubAccessException access ? ExitCodes.ForAccess(access.Kind) : ExitCodes.Fatal);
 }
 
 /// <summary>
@@ -90,5 +141,23 @@ internal sealed class OptionReader
         {
             throw new CliUsageException($"Option '{Current}' does not take a value.");
         }
+    }
+
+    /// <summary>
+    /// Parses a '--parallel' value: an integer within the engine's supported range,
+    /// the same 1..64 the desktop app enforces (an unbounded value would open
+    /// thousands of connections and trip GitHub's secondary rate limit).
+    /// </summary>
+    public static int ParseParallel(string value)
+    {
+        if (!int.TryParse(value, out int parsed)
+            || parsed < gclo.ViewModels.AppSettings.MinConcurrency
+            || parsed > gclo.ViewModels.AppSettings.MaxConcurrency)
+        {
+            throw new CliUsageException(
+                $"--parallel expects an integer between {gclo.ViewModels.AppSettings.MinConcurrency} and "
+                + $"{gclo.ViewModels.AppSettings.MaxConcurrency}, got '{value}'.");
+        }
+        return parsed;
     }
 }

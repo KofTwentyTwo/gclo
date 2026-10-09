@@ -187,6 +187,50 @@ public sealed class OrgSyncEngineTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Sync_Cancellation_DoesNotWaitForAGitOperationThatIgnoresTheToken()
+    {
+        // A wedged native transport observes no callback and so no cancellation; the
+        // engine must still honor Cancel promptly by abandoning the await (#31).
+        _lister.Repositories = Repos("stuck", "queued");
+        var neverDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _git.CloneHandler = (_, _, _, _, _) => neverDone.Task; // ignores ct entirely
+
+        using var cts = new CancellationTokenSource();
+        var syncTask = CreateEngine().SyncAsync(CreateRequest(maxConcurrency: 1), _progress, cts.Token);
+        await WaitUntilAsync(() => _git.CloneCalls.Count == 1, "the stuck clone to start");
+
+        cts.Cancel();
+        var summary = await syncTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(summary.WasCanceled);
+        Assert.Equal(new SyncSummary(Total: 2, Cloned: 0, Updated: 0, Failed: 0, Canceled: 2, WasCanceled: true), summary);
+        Assert.Equal(SyncStatus.Canceled, _progress.LastFor("stuck")!.Status);
+        Assert.Equal(SyncStatus.Canceled, _progress.LastFor("queued")!.Status);
+        neverDone.SetResult(); // let the orphan finish; nothing may change
+    }
+
+    [Fact]
+    public async Task Sync_RepoNamedLikeAWindowsDevice_FailsThatRowWithoutTouchingGit()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return; // the folder-name rule is a Windows one
+        }
+        _lister.Repositories = Repos("alpha", "aux", "bravo");
+
+        var summary = await CreateEngine().SyncAsync(CreateRequest(), _progress);
+
+        Assert.Equal(new SyncSummary(Total: 3, Cloned: 2, Updated: 0, Failed: 1, Canceled: 0, WasCanceled: false), summary);
+        var failed = _progress.LastFor("aux")!;
+        Assert.Equal(SyncStatus.Failed, failed.Status);
+        Assert.Contains("reserved Windows device name", failed.Error);
+        Assert.Contains("Rename the repository", failed.Error);
+        Assert.Null(failed.InvalidPaths); // not a path-recovery case: there is nothing to resolve
+        Assert.DoesNotContain("aux", _git.ClonedRepoNames);
+        Assert.DoesNotContain(_git.ValidityChecks, p => Path.GetFileName(p) == "aux");
+    }
+
     // ---------------------------------------------------------------- (e)
 
     [Fact]

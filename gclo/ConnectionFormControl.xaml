@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="gclo.ConnectionFormControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:gclo"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    IsTabStop="False"
+    Loaded="OnLoaded">
+
+    <!-- The one connection form: token, organization, target folder, subfolder
+         preference, and the path preview. Hosted by the connect card and by the
+         chip's Edit flyout (WorkspacePage), both over the same view model, so a
+         change here lands in both places and the FlaUI suite can target either
+         through its AutomationIdPrefix. -->
+    <StackPanel Spacing="12">
+        <PasswordBox
+            x:Name="TokenBox"
+            AutomationProperties.AutomationId="{x:Bind Id('TokenBox')}"
+            Header="Personal access token"
+            ToolTipService.ToolTip="Fine-grained or classic PAT with repository read access; used for the GitHub API and git over HTTPS. Never written to disk or logs."
+            PlaceholderText="ghp_…"
+            PasswordChanged="TokenBox_PasswordChanged" />
+        <HyperlinkButton
+            Padding="0"
+            Content="How to create a token"
+            NavigateUri="https://github.com/settings/tokens" />
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ComboBox
+                Grid.Column="0"
+                AutomationProperties.AutomationId="{x:Bind Id('OrgBox')}"
+                HorizontalAlignment="Stretch"
+                Header="Organization or account"
+                ToolTipService.ToolTip="The GitHub organization or user account whose repositories are synced. Populated from the token; typing a name also works."
+                IsEditable="True"
+                ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
+                PlaceholderText="Paste a token first, or type an org"
+                Loaded="OrgBox_Loaded"
+                Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
+            <ProgressRing
+                Grid.Column="1"
+                Width="20"
+                Height="20"
+                Margin="0,0,0,8"
+                VerticalAlignment="Bottom"
+                AutomationProperties.Name="Loading organizations"
+                IsActive="{x:Bind ViewModel.IsLoadingOrgs, Mode=OneWay}" />
+        </Grid>
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox
+                Grid.Column="0"
+                AutomationProperties.AutomationId="{x:Bind Id('TargetBox')}"
+                ToolTipService.ToolTip="Local folder each repository is cloned into (one subfolder per repository)"
+                Header="Target folder"
+                PlaceholderText="C:\src\my-org"
+                Text="{x:Bind ViewModel.TargetFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <Button
+                Grid.Column="1"
+                AutomationProperties.AutomationId="{x:Bind Id('BrowseButton')}"
+                ToolTipService.ToolTip="Choose the target folder"
+                VerticalAlignment="Bottom"
+                Content="Browse…"
+                Click="BrowseButton_Click" />
+        </Grid>
+        <CheckBox
+            MinWidth="0"
+            Content="{x:Bind OrgSubfolderLabel(ViewModel.Organization), Mode=OneWay}"
+            IsChecked="{x:Bind ViewModel.CreateOrgSubfolder, Mode=TwoWay}" />
+        <TextBlock
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            TextWrapping="Wrap"
+            Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.TargetPreview), Mode=OneWay}">
+            <Run Text="Each repository will be placed at:" />
+            <Run FontWeight="SemiBold" Text="{x:Bind ViewModel.TargetPreview, Mode=OneWay}" />
+        </TextBlock>
+    </StackPanel>
+</UserControl>

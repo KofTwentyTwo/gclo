@@ -6,6 +6,19 @@ namespace gclo.Engine;
 /// <summary>One repository as the GitHub API describes it, in the fields gclo uses.</summary>
 internal readonly record struct GitHubRepo(string Name, string CloneUrl, string? DefaultBranch, bool IsArchived);
 
+/// <summary>What a GitHub login names, as far as the token can tell.</summary>
+internal enum GitHubAccountKind
+{
+    /// <summary>A user account.</summary>
+    User,
+
+    /// <summary>An organization (whether or not the token can see its repositories).</summary>
+    Organization,
+
+    /// <summary>No account with that login is visible to the token.</summary>
+    NotFound,
+}
+
 /// <summary>
 /// The seam between the listers and the GitHub REST API: exactly the calls gclo
 /// makes, returning plain shapes. Implementations surface Octokit's exception
@@ -33,6 +46,34 @@ internal interface IGitHubGateway
 
     /// <summary>Logins of the organizations visible to the token.</summary>
     Task<IReadOnlyList<string>> GetOrganizationLoginsAsync();
+
+    /// <summary>Whether <paramref name="login"/> is a user, an organization, or unknown to the token.</summary>
+    Task<GitHubAccountKind> GetAccountKindAsync(string login);
+}
+
+/// <summary>
+/// One <see cref="OctokitGateway"/> per token, shared by both listers for the life of
+/// the process, so successive org lookups and repository loads ride one warm HTTP
+/// connection instead of paying a DNS + TCP + TLS handshake to api.github.com on
+/// every interactive action (#30). Octokit clients are thread-safe for concurrent
+/// requests with fixed credentials. Bounded: tokens are rotated rarely, so when the
+/// cache grows past a handful of entries it is simply emptied.
+/// </summary>
+[ExcludeFromCodeCoverage(Justification = "Holds live Octokit clients; the offline suite injects fake gateways.")]
+internal static class OctokitGatewayCache
+{
+    private const int MaxEntries = 8;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, OctokitGateway> Gateways =
+        new(StringComparer.Ordinal);
+
+    public static IGitHubGateway Get(string token)
+    {
+        if (Gateways.Count >= MaxEntries && !Gateways.ContainsKey(token))
+        {
+            Gateways.Clear();
+        }
+        return Gateways.GetOrAdd(token, static t => new OctokitGateway(t));
+    }
 }
 
 /// <summary>
@@ -73,6 +114,19 @@ internal sealed class OctokitGateway : IGitHubGateway
             .GetAllForCurrent(new ApiOptions { PageSize = IGitHubGateway.PageSize })
             .ConfigureAwait(false);
         return organizations.Select(o => o.Login).ToList();
+    }
+
+    public async Task<GitHubAccountKind> GetAccountKindAsync(string login)
+    {
+        try
+        {
+            var account = await _client.User.Get(login).ConfigureAwait(false);
+            return account.Type == AccountType.Organization ? GitHubAccountKind.Organization : GitHubAccountKind.User;
+        }
+        catch (NotFoundException)
+        {
+            return GitHubAccountKind.NotFound;
+        }
     }
 
     private static ApiOptions Page(int page)

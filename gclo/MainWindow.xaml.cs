@@ -29,12 +29,20 @@ namespace gclo
         private const string RepoUrl = "https://github.com/KofTwentyTwo/gclo";
 
         // Smallest logical (DPI-independent) size at which the workspace toolbar,
-        // connect card, and repo table remain usable.
-        private const int MinWindowWidth = 700;
+        // connect card, and repo table remain usable WITH the navigation pane open:
+        // the pane takes 240, page and card padding 64, the fixed table columns 400,
+        // and the Name column needs room to show a name (#31).
+        private const int MinWindowWidth = 900;
         private const int MinWindowHeight = 520;
 
+        /// <summary>Set once the root's theme-change subscription exists.</summary>
+        private bool _themeHooked;
+
         private readonly AppSettings _settings;
-        private readonly UpdateService _updateService = new();
+        private readonly UpdateService _updateService;
+
+        /// <summary>Guards Help > Check for updates against re-entry while a check or download runs.</summary>
+        private bool _updateInFlight;
 
         // One log, vault, and store shared by every workspace (and the log viewer),
         // so all workspaces write to the same file and read the same accounts.
@@ -42,8 +50,23 @@ namespace gclo
         private readonly ITokenVault _tokenVault;
         private readonly AccountsStore _accountsStore;
 
+        /// <summary>
+        /// A cached workspace: the view model always (it keeps a running sync alive
+        /// across navigation and costs little), the page only while it is on screen
+        /// or its view model is busy. A page pins a whole visual tree — connect card,
+        /// toolbar, flyouts, a ListView's realized rows — so idle pages are released
+        /// when the user navigates away and rebuilt from the view model on return
+        /// (only transient scroll position is lost) (#30).
+        /// </summary>
+        private sealed class WorkspaceEntry(WorkspaceViewModel viewModel)
+        {
+            public WorkspaceViewModel ViewModel { get; } = viewModel;
+
+            public WorkspacePage? Page { get; set; }
+        }
+
         /// <summary>Workspaces created so far, keyed by account id (Guid.Empty = Quick Sync).</summary>
-        private readonly Dictionary<Guid, (WorkspaceViewModel ViewModel, WorkspacePage Page)> _workspaces = new();
+        private readonly Dictionary<Guid, WorkspaceEntry> _workspaces = new();
 
         /// <summary>Badge subscriptions per workspace, unhooked before the view models are disposed.</summary>
         private readonly Dictionary<Guid, PropertyChangedEventHandler> _badgeHandlers = new();
@@ -68,10 +91,13 @@ namespace gclo
         {
             _log = new FileActivityLog(System.IO.Path.Combine(GcloPaths.DataRoot, "logs"));
             App.CrashLog = _log; // the unhandled-exception net now reaches the activity log
+            _log.Info($"gclo {BuildVersion.Describe(typeof(MainWindow).Assembly)} starting.");
+            _updateService = new UpdateService(_log);
             _tokenVault = new CredentialManagerVault();
             _accountsStore = new AccountsStore(_tokenVault, log: _log);
 
             InitializeComponent();
+            ApplyBackdrop();
 
             Title = "gclo — Git Clone Large Organizations";
 
@@ -90,7 +116,7 @@ namespace gclo
             // Create and show Quick Sync before selecting it, so NavigationView.Content
             // is never empty regardless of when SelectionChanged fires.
             ShowWorkspace(Guid.Empty);
-            ApplySettings();
+            ApplySettings(seedQuickSyncConcurrency: true);
             WorkspaceNav.SelectedItem = QuickSyncNavItem;
 
             // AppWindow.Resize takes physical pixels; scale by the monitor DPI so the
@@ -116,6 +142,7 @@ namespace gclo
             {
                 _logWindow?.Close(); // a log-only process would linger otherwise
                 DisposeWorkspaces();
+                _log.Info("gclo closing.");
             };
 
             // The splash overlay honors Settings → Advanced: skipped entirely when
@@ -126,23 +153,85 @@ namespace gclo
                 {
                     await Task.Delay(_settings.SplashMilliseconds);
                     await StartupSplash.DismissAsync();
+                    await CheckForUpdatesAtStartupAsync();
                 });
             }
             else
             {
                 StartupSplash.Visibility = Visibility.Collapsed;
+                DispatcherQueue.TryEnqueue(async () => await CheckForUpdatesAtStartupAsync());
             }
         }
 
-        private void ApplySettings()
+        /// <summary>
+        /// A background check on every launch (installed builds only): a newer release
+        /// is offered in the update bar with an "Update and restart…" action that runs
+        /// the same flow as Help > Check for updates; nothing is shown when up to date
+        /// or when the check fails (the activity log records both) (#32).
+        /// </summary>
+        private async Task CheckForUpdatesAtStartupAsync()
+        {
+            if (!_updateService.IsSupported || _updateInFlight)
+            {
+                return;
+            }
+
+            UpdateCheckResult result = await _updateService.CheckAsync();
+            if (result.AvailableVersion is not { } version)
+            {
+                return;
+            }
+
+            ShowUpdateBar(InfoBarSeverity.Informational, $"gclo v{version} is available.", busy: false);
+            var install = new Button { Content = "Update and restart…" };
+            install.Click += async (_, _) => await RunUpdateFlowAsync();
+            UpdateBar.ActionButton = install;
+        }
+
+        /// <summary>
+        /// Applies the theme and seeds the ad-hoc Quick Sync workspace from the settings
+        /// defaults (account workspaces carry their own configuration). The target
+        /// folder is only filled when blank; the parallelism default is pushed only
+        /// when <paramref name="seedQuickSyncConcurrency"/> — at startup, and after a
+        /// Settings save that actually changed it — so saving an unrelated setting
+        /// (theme, splash) cannot silently reset a value the user tuned in the
+        /// workspace's Options flyout (#30).
+        /// </summary>
+        /// <summary>
+        /// Mica where the OS supports it, acrylic where only that does, otherwise the
+        /// themed page background so the layered card brushes have a surface to sit on.
+        /// </summary>
+        private void ApplyBackdrop()
+        {
+            if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
+            {
+                SystemBackdrop = new MicaBackdrop();
+            }
+            else if (Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController.IsSupported())
+            {
+                SystemBackdrop = new DesktopAcrylicBackdrop();
+            }
+            else if (Application.Current.Resources.TryGetValue("ApplicationPageBackgroundThemeBrush", out object? brush)
+                && brush is Brush background)
+            {
+                RootGrid.Background = background;
+            }
+        }
+
+        private void ApplySettings(bool seedQuickSyncConcurrency)
         {
             if (Content is FrameworkElement root)
             {
                 root.RequestedTheme = StatusFormat.ToElementTheme(_settings.Theme);
+                if (!_themeHooked)
+                {
+                    // Covers an OS light/dark flip while running in System mode too.
+                    root.ActualThemeChanged += (sender, _) => OnThemeChanged(sender.ActualTheme);
+                    _themeHooked = true;
+                }
+                OnThemeChanged(root.ActualTheme);
             }
 
-            // Settings defaults only seed the ad-hoc Quick Sync workspace; account
-            // workspaces carry their own configuration.
             if (_workspaces.TryGetValue(Guid.Empty, out var quickSync))
             {
                 WorkspaceViewModel viewModel = quickSync.ViewModel;
@@ -151,8 +240,33 @@ namespace gclo
                 {
                     viewModel.TargetFolder = _settings.DefaultTargetFolder;
                 }
-                viewModel.MaxConcurrency = _settings.DefaultMaxConcurrency;
+                if (seedQuickSyncConcurrency)
+                {
+                    viewModel.MaxConcurrency = _settings.DefaultMaxConcurrency;
+                }
             }
+        }
+
+        /// <summary>
+        /// Keeps everything that is not a ThemeResource reference in step with the
+        /// effective theme: the function-bound status brushes (resolved from the
+        /// matching theme dictionary from now on), the rows that cache them (asked to
+        /// re-evaluate), the pane badges, and the title bar (#31).
+        /// </summary>
+        private void OnThemeChanged(ElementTheme actual)
+        {
+            StatusFormat.CurrentTheme = actual;
+            foreach ((Guid id, WorkspaceEntry workspace) in _workspaces)
+            {
+                workspace.ViewModel.RefreshPresentation();
+                OnWorkspaceStateChanged(id);
+            }
+            AppWindow.TitleBar.PreferredTheme = actual switch
+            {
+                ElementTheme.Light => TitleBarTheme.Light,
+                ElementTheme.Dark => TitleBarTheme.Dark,
+                _ => TitleBarTheme.UseDefaultAppMode,
+            };
         }
 
         // ---------------------------------------------------------------- workspaces
@@ -183,10 +297,15 @@ namespace gclo
 
             if (item.Tag is Guid id)
             {
+                if (id != _currentWorkspaceId)
+                {
+                    ReleasePageIfIdle(_currentWorkspaceId);
+                }
                 ShowWorkspace(id);
-                if (_workspaces.ContainsKey(id))
+                if (_workspaces.TryGetValue(id, out WorkspaceEntry? shown))
                 {
                     _currentWorkspaceId = id;
+                    _log.Info($"Showing workspace '{shown.ViewModel.DisplayName}'.");
                 }
             }
         }
@@ -213,25 +332,57 @@ namespace gclo
 
         /// <summary>
         /// Puts the workspace for <paramref name="id"/> on screen, creating and caching
-        /// it on first visit. Cached view models keep running syncs alive across switches.
+        /// its view model on first visit and (re)building its page when none is cached.
+        /// Cached view models keep running syncs alive across switches.
         /// </summary>
         private void ShowWorkspace(Guid id)
         {
             if (EnsureWorkspace(id) is { } workspace)
             {
+                workspace.Page ??= CreatePage(workspace.ViewModel);
                 WorkspaceNav.Content = workspace.Page;
             }
         }
 
+        private WorkspacePage CreatePage(WorkspaceViewModel viewModel)
+            => new(viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
+            {
+                EditAccountRequested = ShowEditAccountWizardAsync,
+                SaveAsAccountRequested = ShowSeededAccountWizardAsync,
+            };
+
+        /// <summary>
+        /// Drops the page of a workspace the user navigated away from when nothing is
+        /// running in it; a busy workspace keeps its page (its path-recovery dialog and
+        /// announcements route through it). The view model stays cached either way.
+        /// </summary>
+        private void ReleasePageIfIdle(Guid id)
+        {
+            if (!_workspaces.TryGetValue(id, out WorkspaceEntry? workspace) || workspace.Page is null)
+            {
+                return;
+            }
+
+            WorkspaceViewModel viewModel = workspace.ViewModel;
+            if (viewModel.IsRunning || viewModel.IsLoadingRepos || viewModel.IsResolvingPaths)
+            {
+                return;
+            }
+
+            workspace.Page.Detach();
+            workspace.Page = null;
+        }
+
         /// <summary>
         /// Returns the cached workspace for <paramref name="id"/>, creating and caching
-        /// it (badge subscription included) on first use WITHOUT putting it on screen —
-        /// 'Sync all' warms unvisited workspaces this way. Null when the account no
-        /// longer exists in the store.
+        /// its view model (badge subscription included) on first use WITHOUT building a
+        /// page or putting it on screen — 'Sync all' warms unvisited workspaces this
+        /// way and never needs the page. Null when the account no longer exists in the
+        /// store.
         /// </summary>
-        private (WorkspaceViewModel ViewModel, WorkspacePage Page)? EnsureWorkspace(Guid id)
+        private WorkspaceEntry? EnsureWorkspace(Guid id)
         {
-            if (_workspaces.TryGetValue(id, out var workspace))
+            if (_workspaces.TryGetValue(id, out WorkspaceEntry? workspace))
             {
                 return workspace;
             }
@@ -242,9 +393,7 @@ namespace gclo
                 return null; // stale item: the account no longer exists in the store
             }
 
-            var page = new WorkspacePage(
-                viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
-            workspace = (viewModel, page);
+            workspace = new WorkspaceEntry(viewModel);
             _workspaces[id] = workspace;
 
             PropertyChangedEventHandler handler = (_, e) =>
@@ -316,7 +465,7 @@ namespace gclo
         private void OnWorkspaceStateChanged(Guid id)
         {
             if (!_navItems.TryGetValue(id, out NavigationViewItem? item)
-                || !_workspaces.TryGetValue(id, out var workspace))
+                || !_workspaces.TryGetValue(id, out WorkspaceEntry? workspace))
             {
                 return;
             }
@@ -372,10 +521,9 @@ namespace gclo
             {
                 badge.Style = style;
             }
-            else if (Application.Current.Resources.TryGetValue(fallbackBrushKey, out object? brushValue)
-                && brushValue is Brush brush)
+            else
             {
-                badge.Background = brush;
+                badge.Background = StatusFormat.ThemedBrush(fallbackBrushKey);
             }
             return badge;
         }
@@ -453,17 +601,26 @@ namespace gclo
         /// </summary>
         private async Task ShowAccountWizardAsync(Account? existing)
         {
-            string? existingToken = existing is null ? null : _tokenVault.TryRetrieve(existing.Id);
+            // The vault is consulted only if step 2 needs the stored token for a
+            // validation call; the wizard never displays or retains it.
+            Func<string?>? storedToken = existing is null ? null : () => _tokenVault.TryRetrieve(existing.Id);
             var viewModel = new AccountWizardViewModel(
-                _accountsStore, new GitHubOrganizationLister(), _settings, existing, existingToken);
+                _accountsStore, new GitHubOrganizationLister(), _settings, existing, storedToken, _log);
             var dialog = new AccountWizardDialog(
                 viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
             {
                 XamlRoot = Content.XamlRoot,
             };
+            if (DialogGuard.IsDialogOpen)
+            {
+                _log.Info("Account wizard not opened: another dialog is open.");
+                return;
+            }
+            _log.Info(existing is null ? "Account wizard opened (add)." : $"Account wizard opened (edit '{existing.Name}').");
             await DialogGuard.ShowAsync(dialog);
             if (!dialog.Saved)
             {
+                _log.Info("Account wizard canceled.");
                 return;
             }
 
@@ -485,6 +642,35 @@ namespace gclo
                 return; // deleted meanwhile; the stale item is on its way out
             }
             await ShowAccountWizardAsync(account);
+        }
+
+        /// <summary>
+        /// "Save as account…" from Quick Sync: the add wizard opens with the working
+        /// connection already filled in, so the user only names it (#30).
+        /// </summary>
+        private async Task ShowSeededAccountWizardAsync(AccountWizardSeed seed)
+        {
+            var viewModel = new AccountWizardViewModel(_accountsStore, new GitHubOrganizationLister(), seed, _log);
+            var dialog = new AccountWizardDialog(
+                viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
+            {
+                XamlRoot = Content.XamlRoot,
+            };
+            if (DialogGuard.IsDialogOpen)
+            {
+                _log.Info("Account wizard not opened: another dialog is open.");
+                return;
+            }
+            _log.Info($"Account wizard opened (save Quick Sync connection to '{seed.Organization}' as an account).");
+            await DialogGuard.ShowAsync(dialog);
+            if (dialog.Saved)
+            {
+                OnAccountAdded(viewModel);
+            }
+            else
+            {
+                _log.Info("Account wizard canceled.");
+            }
         }
 
         /// <summary>
@@ -560,12 +746,13 @@ namespace gclo
             };
             if (await DialogGuard.ShowAsync(confirm) != ContentDialogResult.Primary)
             {
+                _log.Info($"Delete of account '{account.Name}' canceled.");
                 return;
             }
 
             try
             {
-                _accountsStore.Delete(id);
+                _accountsStore.Delete(id); // the store logs the deletion
             }
             catch (Exception ex)
             {
@@ -588,7 +775,6 @@ namespace gclo
                 _currentWorkspaceId = Guid.Empty;
                 WorkspaceNav.SelectedItem = QuickSyncNavItem; // SelectionChanged shows it
             }
-            _log.Info($"Account '{account.Name}' deleted.");
         }
 
         /// <summary>
@@ -598,7 +784,7 @@ namespace gclo
         /// </summary>
         private void EvictWorkspace(Guid id)
         {
-            if (!_workspaces.TryGetValue(id, out var workspace))
+            if (!_workspaces.TryGetValue(id, out WorkspaceEntry? workspace))
             {
                 return;
             }
@@ -612,6 +798,7 @@ namespace gclo
             {
                 workspace.ViewModel.SyncCancelCommand.Execute(null);
             }
+            workspace.Page?.Detach();
             workspace.ViewModel.Dispose();
             _workspaces.Remove(id);
 
@@ -633,9 +820,11 @@ namespace gclo
         {
             if (_cancelSyncAll is not null)
             {
+                _log.Info("Sync all: cancel requested; the account in flight will finish.");
                 _cancelSyncAll();
                 return;
             }
+            _log.Info("Sync all requested.");
 
             // Account workspaces in pane order, created (not shown) when never visited.
             var accountWorkspaces = new List<WorkspaceViewModel>();
@@ -713,7 +902,7 @@ namespace gclo
         {
             _cancelSyncAll?.Invoke(); // no further accounts start while the window tears down
 
-            foreach ((Guid id, var workspace) in _workspaces)
+            foreach ((Guid id, WorkspaceEntry workspace) in _workspaces)
             {
                 if (_badgeHandlers.TryGetValue(id, out PropertyChangedEventHandler? handler))
                 {
@@ -723,6 +912,7 @@ namespace gclo
                 {
                     workspace.ViewModel.SyncCancelCommand.Execute(null);
                 }
+                workspace.Page?.Detach();
                 workspace.ViewModel.Dispose();
             }
             _badgeHandlers.Clear();
@@ -734,14 +924,20 @@ namespace gclo
         private async void SettingsMenuItem_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new SettingsDialog(
-                _settings, _tokenVault, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
+                _settings, _tokenVault, () => WinRT.Interop.WindowNative.GetWindowHandle(this), _log)
             {
                 XamlRoot = Content.XamlRoot,
             };
+            _log.Info("Settings opened.");
+            int concurrencyBefore = _settings.DefaultMaxConcurrency;
             if (await DialogGuard.ShowAsync(dialog) == ContentDialogResult.Primary)
             {
-                dialog.ApplyAndSave();
-                ApplySettings();
+                dialog.ApplyAndSave(); // logs what changed
+                ApplySettings(seedQuickSyncConcurrency: _settings.DefaultMaxConcurrency != concurrencyBefore);
+            }
+            else
+            {
+                _log.Info("Settings closed without saving.");
             }
         }
 
@@ -758,69 +954,123 @@ namespace gclo
             {
                 _logWindow = new LogWindow(_log);
                 _logWindow.Closed += (_, _) => _logWindow = null;
+                _log.Info("Activity log window opened.");
             }
             _logWindow.Activate();
         }
 
         private async void GitHubMenuItem_Click(object sender, RoutedEventArgs e)
         {
+            _log.Info($"Opening {RepoUrl} in the browser.");
             await Windows.System.Launcher.LaunchUriAsync(new Uri(RepoUrl));
         }
 
         private async void AboutMenuItem_Click(object sender, RoutedEventArgs e)
         {
+            _log.Info("About dialog opened.");
             var dialog = new AboutDialog { XamlRoot = Content.XamlRoot };
             await DialogGuard.ShowAsync(dialog);
         }
 
+        /// <summary>
+        /// Help > Check for updates: every phase is visible in <c>UpdateBar</c> (#39) —
+        /// checking with an indeterminate bar, the outcome inline (up to date / failed),
+        /// then, after the user confirms, a determinate download bar until the process
+        /// restarts. The menu item is disabled for the duration so it cannot be re-run.
+        /// Only "update available" still asks with a dialog, because that is a decision.
+        /// </summary>
         private async void CheckForUpdatesMenuItem_Click(object sender, RoutedEventArgs e)
+            => await RunUpdateFlowAsync();
+
+        private async Task RunUpdateFlowAsync()
         {
-            if (!_updateService.IsSupported)
-            {
-                await ShowMessageAsync(
-                    "Check for updates",
-                    "Updates are only available in installed builds.");
-                return;
-            }
-
-            var result = await _updateService.CheckAsync();
-            if (result.Error is not null)
-            {
-                await ShowMessageAsync(
-                    "Check for updates",
-                    $"Could not check for updates.\n{result.Error}");
-                return;
-            }
-
-            if (result.AvailableVersion is null)
-            {
-                string current = _updateService.CurrentVersion is string v ? $" (v{v})" : "";
-                await ShowMessageAsync("Check for updates", $"You are up to date{current}.");
-                return;
-            }
-
-            var confirm = new ContentDialog
-            {
-                Title = "Update available",
-                Content = $"gclo v{result.AvailableVersion} is available. "
-                    + "The app will restart to finish installing the update.",
-                PrimaryButtonText = "Update and restart",
-                CloseButtonText = "Not now",
-                DefaultButton = ContentDialogButton.Primary,
-                XamlRoot = Content.XamlRoot,
-            };
-            if (await DialogGuard.ShowAsync(confirm) != ContentDialogResult.Primary)
+            if (_updateInFlight)
             {
                 return;
             }
-
-            // On success this exits the process to restart into the new version,
-            // so reaching the line below means the update did not go through.
-            string? error = await _updateService.DownloadAndApplyAsync();
-            if (error is not null)
+            _updateInFlight = true;
+            CheckUpdatesMenuItem.IsEnabled = false;
+            try
             {
-                await ShowMessageAsync("Update failed", error);
+                if (!_updateService.IsSupported)
+                {
+                    _log.Info("Update check requested, but this is not an installed build.");
+                    ShowUpdateBar(InfoBarSeverity.Informational, "Updates are only available in installed builds.", busy: false);
+                    return;
+                }
+
+                ShowUpdateBar(InfoBarSeverity.Informational, "Checking for updates…", busy: true);
+                UpdateCheckResult result = await _updateService.CheckAsync();
+                if (result.Error is not null)
+                {
+                    ShowUpdateBar(InfoBarSeverity.Error, $"Could not check for updates. {result.Error}", busy: false);
+                    return;
+                }
+
+                if (result.AvailableVersion is null)
+                {
+                    string current = _updateService.CurrentVersion is string v ? $" (v{v})" : "";
+                    ShowUpdateBar(InfoBarSeverity.Success, $"You are up to date{current}.", busy: false);
+                    return;
+                }
+
+                ShowUpdateBar(
+                    InfoBarSeverity.Informational,
+                    $"gclo v{result.AvailableVersion} is available.",
+                    busy: false);
+                var confirm = new ContentDialog
+                {
+                    Title = "Update available",
+                    Content = $"gclo v{result.AvailableVersion} is available. "
+                        + "The app will restart to finish installing the update.",
+                    PrimaryButtonText = "Update and restart",
+                    CloseButtonText = "Not now",
+                    DefaultButton = ContentDialogButton.Primary,
+                    XamlRoot = Content.XamlRoot,
+                };
+                if (await DialogGuard.ShowAsync(confirm) != ContentDialogResult.Primary)
+                {
+                    _log.Info($"Update to v{result.AvailableVersion} declined for now.");
+                    ShowUpdateBar(
+                        InfoBarSeverity.Informational,
+                        $"gclo v{result.AvailableVersion} is available. Run Help > Check for updates again when you are ready to install it.",
+                        busy: false);
+                    return;
+                }
+
+                string version = result.AvailableVersion;
+                ShowUpdateBar(InfoBarSeverity.Informational, $"Downloading gclo v{version}…", busy: true, determinate: true);
+                var progress = new Progress<int>(percent =>
+                {
+                    UpdateProgressBar.Value = percent;
+                    UpdateBar.Message = $"Downloading gclo v{version}… {percent}%";
+                });
+
+                // On success this exits the process to restart into the new version,
+                // so reaching the line below means the update did not go through.
+                string? error = await _updateService.DownloadAndApplyAsync(progress);
+                if (error is not null)
+                {
+                    ShowUpdateBar(InfoBarSeverity.Error, $"Update failed. {error}", busy: false);
+                }
             }
+            finally
+            {
+                _updateInFlight = false;
+                CheckUpdatesMenuItem.IsEnabled = true;
+            }
+        }
+
+        private void ShowUpdateBar(InfoBarSeverity severity, string message, bool busy, bool determinate = false)
+        {
+            UpdateBar.ActionButton = null; // only the startup offer carries one
+            UpdateBar.Severity = severity;
+            UpdateBar.Message = message;
+            UpdateBar.IsClosable = !busy;
+            UpdateProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+            UpdateProgressBar.IsIndeterminate = busy && !determinate;
+            UpdateProgressBar.Value = 0;
+            UpdateBar.IsOpen = true;
         }
 
         private async Task ShowMessageAsync(string title, string message)
