@@ -17,6 +17,9 @@ public static class GcloPaths
     public static string DataRoot =>
         Environment.GetEnvironmentVariable("GCLO_DATA_DIR") is { Length: > 0 } dir
             ? dir
-            : Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "gclo");
+            : DefaultDataRoot;
+
+    /// <summary>%LOCALAPPDATA%\gclo: the root used when GCLO_DATA_DIR is not set.</summary>
+    public static string DefaultDataRoot =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "gclo");
 }

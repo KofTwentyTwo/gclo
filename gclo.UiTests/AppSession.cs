@@ -48,6 +48,10 @@ public sealed class AppSession : IDisposable
         {
             App = Application.Launch(startInfo);
             MainWindow = WaitForMainWindow();
+            // Snapshot the launch state before any test types: the Quick Sync page is
+            // up once its connect card is, and a pre-fill logs synchronously on the way.
+            WaitForElement("ConnectTokenBox", TimeSpan.FromSeconds(30));
+            TokenPrefilledAtLaunch = LogContains("Token entered in workspace");
         }
         catch
         {
@@ -63,6 +67,41 @@ public sealed class AppSession : IDisposable
 
     /// <summary>The temp directory the app sees as its data root (via GCLO_DATA_DIR).</summary>
     public string DataDirectory { get; }
+
+    /// <summary>
+    /// True when the app had logged a token being entered by the time its Quick Sync
+    /// page was up, before any test typed one: the workspace was pre-filled from a
+    /// default token the developer saved in their real profile. The vault is scoped
+    /// per data directory precisely so this never happens (#60); the fresh-data-dir
+    /// smoke test asserts it.
+    /// </summary>
+    public bool TokenPrefilledAtLaunch { get; }
+
+    private bool LogContains(string fragment)
+    {
+        string logs = Path.Combine(DataDirectory, "logs");
+        if (!Directory.Exists(logs))
+        {
+            return false;
+        }
+        foreach (string file in Directory.EnumerateFiles(logs, "*.log"))
+        {
+            try
+            {
+                using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                if (reader.ReadToEnd().Contains(fragment, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            catch (IOException)
+            {
+                // mid-write; treat as not found
+            }
+        }
+        return false;
+    }
 
     /// <summary>The UIA3 automation used for every lookup and pattern call.</summary>
     public UIA3Automation Automation { get; }
