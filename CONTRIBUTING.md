@@ -99,9 +99,9 @@ pre-commit install --hook-type pre-commit --hook-type commit-msg
 | `pr / dependency-review` | Added dependencies have no known vulnerabilities and an allowed license |
 | `security / secrets`, `security / sca`, `security / workflows` | No secrets, no vulnerable or malicious dependencies, safe workflows |
 | `codeql / analyze (csharp)`, `codeql / analyze (actions)` | No high-severity static analysis findings |
-| `ci / build-test` | Zero-warning x64 build, both unit suites, 100% coverage gate |
-| `ci / format` | `dotnet format --verify-no-changes --severity warn` and PSScriptAnalyzer |
-| `ci / ui-tests` | FlaUI end-to-end tests against the real `gclo.exe` (advisory until it is made required, #54) |
+| `build-test` | Zero-warning x64 build, both unit suites, 100% coverage gate |
+| `format` | `dotnet format --verify-no-changes --severity warn` and PSScriptAnalyzer |
+| `ui-tests` | FlaUI end-to-end tests against the real `gclo.exe` (advisory until it is made required, #54) |
 
 ## Sign-off (Developer Certificate of Origin)
 
