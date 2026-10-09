@@ -64,6 +64,14 @@ public sealed class OrgSyncEngine
             .DistinctBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        // Resolve every target folder before anything is created or reported: this
+        // overload accepts caller-supplied names, and a name that is not one safe
+        // segment under TargetRoot (rooted, traversal, separators) fails the whole
+        // call here rather than cloning somewhere the caller never asked for.
+        var targets = repos
+            .Select(r => (Repo: r, Path: RepositoryPathResolver.Resolve(request.TargetRoot, r.Name)))
+            .ToList();
+
         // Create the root before anything is reported as Queued: if the path is
         // invalid, the caller gets one exception instead of repos stranded mid-state.
         Directory.CreateDirectory(request.TargetRoot);
@@ -92,9 +100,9 @@ public sealed class OrgSyncEngine
         {
             // Parallel.ForEachAsync stops scheduling as soon as any body throws, so the
             // body must swallow every per-repo failure; only cancellation may escape.
-            await Parallel.ForEachAsync(repos, parallelOptions, async (repo, token) =>
+            await Parallel.ForEachAsync(targets, parallelOptions, async (target, token) =>
             {
-                var path = Path.Combine(request.TargetRoot, repo.Name);
+                var (repo, path) = target;
                 try
                 {
                     token.ThrowIfCancellationRequested();
