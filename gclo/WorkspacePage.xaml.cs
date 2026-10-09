@@ -28,6 +28,22 @@ namespace gclo
         public WorkspaceViewModel ViewModel { get; }
 
         /// <summary>
+        /// Raised by the chip's "Edit account…" (account workspaces only) with the account
+        /// id; the shell answers by opening the edit wizard. Null when nothing is wired.
+        /// </summary>
+        public Func<Guid, Task>? EditAccountRequested { get; set; }
+
+        /// <summary>
+        /// Raised by the chip's "Save as account…" (Quick Sync only) with the connection
+        /// in effect; the shell answers by opening the add wizard seeded with it.
+        /// </summary>
+        public Func<AccountWizardSeed, Task>? SaveAsAccountRequested { get; set; }
+
+        // Handlers kept so Detach can unhook exactly what the constructor hooked.
+        private readonly System.Collections.Specialized.NotifyCollectionChangedEventHandler _onReposChanged;
+        private readonly System.Collections.Specialized.NotifyCollectionChangedEventHandler _onFilteredChanged;
+
+        /// <summary>
         /// Wires the page to its (caller-owned) view model. The
         /// <paramref name="windowHandleProvider"/> returns the host window's HWND,
         /// needed to initialize the folder picker.
@@ -46,8 +62,10 @@ namespace gclo
             // The chip's repo count, the toolbar's selection summary, and the
             // empty-filter placeholder are set from code: they derive from collection
             // counts, which raise no property change an x:Bind function could ride on.
-            ViewModel.Repos.CollectionChanged += (_, _) => UpdateDerivedTexts();
-            ViewModel.FilteredRepos.CollectionChanged += (_, _) => UpdateDerivedTexts();
+            _onReposChanged = (_, _) => UpdateDerivedTexts();
+            _onFilteredChanged = (_, _) => UpdateDerivedTexts();
+            ViewModel.Repos.CollectionChanged += _onReposChanged;
+            ViewModel.FilteredRepos.CollectionChanged += _onFilteredChanged;
 
             // The view model stays UI-free: when ResolvePathsCommand needs the user's
             // path-recovery choices, it calls back through here and the page answers
@@ -81,12 +99,19 @@ namespace gclo
         public bool IsAccountWorkspace => ViewModel.AccountId is not null;
 
         /// <summary>
-        /// Whether the edit flyout's connection fields accept input: Quick Sync follows
-        /// <see cref="WorkspaceViewModel.CanEditInputs"/>; account workspaces are always
-        /// read-only here (their settings are edited in the account wizard).
+        /// Unhooks every subscription this page made on its (longer-lived) view model, so
+        /// a page the shell releases while its workspace is idle can be collected: the
+        /// view model's event lists would otherwise pin the whole visual tree (#30).
+        /// The view model itself is untouched; a fresh page re-hydrates from it.
         /// </summary>
-        public bool ConnectFieldsEnabled(bool canEditInputs)
-            => canEditInputs && ViewModel.AccountId is null;
+        public void Detach()
+        {
+            ViewModel.AnnouncementRequested -= AnnounceToAssistiveTechnology;
+            ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            ViewModel.Repos.CollectionChanged -= _onReposChanged;
+            ViewModel.FilteredRepos.CollectionChanged -= _onFilteredChanged;
+            ViewModel.RecoveryInteraction = null;
+        }
 
         /// <summary>
         /// Sort-direction arrow (visual only; the header button's automation name
@@ -285,6 +310,29 @@ namespace gclo
         // Flyout property of its own).
         private void EditButton_Click(object sender, RoutedEventArgs e)
             => FlyoutBase.ShowAttachedFlyout((FrameworkElement)sender);
+
+        private async void EditAccountButton_Click(object sender, RoutedEventArgs e)
+        {
+            EditFlyout.Hide();
+            if (ViewModel.AccountId is Guid id && EditAccountRequested is { } edit)
+            {
+                await edit(id);
+            }
+        }
+
+        private async void SaveAsAccountButton_Click(object sender, RoutedEventArgs e)
+        {
+            EditFlyout.Hide();
+            if (SaveAsAccountRequested is { } save)
+            {
+                await save(new AccountWizardSeed(
+                    ViewModel.Token,
+                    ViewModel.Organization,
+                    ViewModel.TargetFolder,
+                    ViewModel.CreateOrgSubfolder,
+                    ViewModel.MaxConcurrency));
+            }
+        }
 
         // PasswordBox has no reliable two-way binding, so the flyout's token box is
         // synchronized on open; it then always shows the token in effect.

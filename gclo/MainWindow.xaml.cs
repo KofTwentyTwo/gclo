@@ -42,8 +42,23 @@ namespace gclo
         private readonly ITokenVault _tokenVault;
         private readonly AccountsStore _accountsStore;
 
+        /// <summary>
+        /// A cached workspace: the view model always (it keeps a running sync alive
+        /// across navigation and costs little), the page only while it is on screen
+        /// or its view model is busy. A page pins a whole visual tree — connect card,
+        /// toolbar, flyouts, a ListView's realized rows — so idle pages are released
+        /// when the user navigates away and rebuilt from the view model on return
+        /// (only transient scroll position is lost) (#30).
+        /// </summary>
+        private sealed class WorkspaceEntry(WorkspaceViewModel viewModel)
+        {
+            public WorkspaceViewModel ViewModel { get; } = viewModel;
+
+            public WorkspacePage? Page { get; set; }
+        }
+
         /// <summary>Workspaces created so far, keyed by account id (Guid.Empty = Quick Sync).</summary>
-        private readonly Dictionary<Guid, (WorkspaceViewModel ViewModel, WorkspacePage Page)> _workspaces = new();
+        private readonly Dictionary<Guid, WorkspaceEntry> _workspaces = new();
 
         /// <summary>Badge subscriptions per workspace, unhooked before the view models are disposed.</summary>
         private readonly Dictionary<Guid, PropertyChangedEventHandler> _badgeHandlers = new();
@@ -193,6 +208,10 @@ namespace gclo
 
             if (item.Tag is Guid id)
             {
+                if (id != _currentWorkspaceId)
+                {
+                    ReleasePageIfIdle(_currentWorkspaceId);
+                }
                 ShowWorkspace(id);
                 if (_workspaces.ContainsKey(id))
                 {
@@ -223,25 +242,57 @@ namespace gclo
 
         /// <summary>
         /// Puts the workspace for <paramref name="id"/> on screen, creating and caching
-        /// it on first visit. Cached view models keep running syncs alive across switches.
+        /// its view model on first visit and (re)building its page when none is cached.
+        /// Cached view models keep running syncs alive across switches.
         /// </summary>
         private void ShowWorkspace(Guid id)
         {
             if (EnsureWorkspace(id) is { } workspace)
             {
+                workspace.Page ??= CreatePage(workspace.ViewModel);
                 WorkspaceNav.Content = workspace.Page;
             }
         }
 
+        private WorkspacePage CreatePage(WorkspaceViewModel viewModel)
+            => new(viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
+            {
+                EditAccountRequested = ShowEditAccountWizardAsync,
+                SaveAsAccountRequested = ShowSeededAccountWizardAsync,
+            };
+
+        /// <summary>
+        /// Drops the page of a workspace the user navigated away from when nothing is
+        /// running in it; a busy workspace keeps its page (its path-recovery dialog and
+        /// announcements route through it). The view model stays cached either way.
+        /// </summary>
+        private void ReleasePageIfIdle(Guid id)
+        {
+            if (!_workspaces.TryGetValue(id, out WorkspaceEntry? workspace) || workspace.Page is null)
+            {
+                return;
+            }
+
+            WorkspaceViewModel viewModel = workspace.ViewModel;
+            if (viewModel.IsRunning || viewModel.IsLoadingRepos || viewModel.IsResolvingPaths)
+            {
+                return;
+            }
+
+            workspace.Page.Detach();
+            workspace.Page = null;
+        }
+
         /// <summary>
         /// Returns the cached workspace for <paramref name="id"/>, creating and caching
-        /// it (badge subscription included) on first use WITHOUT putting it on screen —
-        /// 'Sync all' warms unvisited workspaces this way. Null when the account no
-        /// longer exists in the store.
+        /// its view model (badge subscription included) on first use WITHOUT building a
+        /// page or putting it on screen — 'Sync all' warms unvisited workspaces this
+        /// way and never needs the page. Null when the account no longer exists in the
+        /// store.
         /// </summary>
-        private (WorkspaceViewModel ViewModel, WorkspacePage Page)? EnsureWorkspace(Guid id)
+        private WorkspaceEntry? EnsureWorkspace(Guid id)
         {
-            if (_workspaces.TryGetValue(id, out var workspace))
+            if (_workspaces.TryGetValue(id, out WorkspaceEntry? workspace))
             {
                 return workspace;
             }
@@ -252,9 +303,7 @@ namespace gclo
                 return null; // stale item: the account no longer exists in the store
             }
 
-            var page = new WorkspacePage(
-                viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
-            workspace = (viewModel, page);
+            workspace = new WorkspaceEntry(viewModel);
             _workspaces[id] = workspace;
 
             PropertyChangedEventHandler handler = (_, e) =>
@@ -326,7 +375,7 @@ namespace gclo
         private void OnWorkspaceStateChanged(Guid id)
         {
             if (!_navItems.TryGetValue(id, out NavigationViewItem? item)
-                || !_workspaces.TryGetValue(id, out var workspace))
+                || !_workspaces.TryGetValue(id, out WorkspaceEntry? workspace))
             {
                 return;
             }
@@ -498,6 +547,25 @@ namespace gclo
         }
 
         /// <summary>
+        /// "Save as account…" from Quick Sync: the add wizard opens with the working
+        /// connection already filled in, so the user only names it (#30).
+        /// </summary>
+        private async Task ShowSeededAccountWizardAsync(AccountWizardSeed seed)
+        {
+            var viewModel = new AccountWizardViewModel(_accountsStore, new GitHubOrganizationLister(), seed);
+            var dialog = new AccountWizardDialog(
+                viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
+            {
+                XamlRoot = Content.XamlRoot,
+            };
+            await DialogGuard.ShowAsync(dialog);
+            if (dialog.Saved)
+            {
+                OnAccountAdded(viewModel);
+            }
+        }
+
+        /// <summary>
         /// After the wizard saved a new account: create its pane item (sorted into the
         /// account section) and select it, which shows its workspace.
         /// </summary>
@@ -608,7 +676,7 @@ namespace gclo
         /// </summary>
         private void EvictWorkspace(Guid id)
         {
-            if (!_workspaces.TryGetValue(id, out var workspace))
+            if (!_workspaces.TryGetValue(id, out WorkspaceEntry? workspace))
             {
                 return;
             }
@@ -622,6 +690,7 @@ namespace gclo
             {
                 workspace.ViewModel.SyncCancelCommand.Execute(null);
             }
+            workspace.Page?.Detach();
             workspace.ViewModel.Dispose();
             _workspaces.Remove(id);
 
@@ -723,7 +792,7 @@ namespace gclo
         {
             _cancelSyncAll?.Invoke(); // no further accounts start while the window tears down
 
-            foreach ((Guid id, var workspace) in _workspaces)
+            foreach ((Guid id, WorkspaceEntry workspace) in _workspaces)
             {
                 if (_badgeHandlers.TryGetValue(id, out PropertyChangedEventHandler? handler))
                 {
@@ -733,6 +802,7 @@ namespace gclo
                 {
                     workspace.ViewModel.SyncCancelCommand.Execute(null);
                 }
+                workspace.Page?.Detach();
                 workspace.ViewModel.Dispose();
             }
             _badgeHandlers.Clear();

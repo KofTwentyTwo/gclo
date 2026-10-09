@@ -192,16 +192,13 @@ namespace gclo
         /// </summary>
         private void AnnounceStepError()
         {
-            TextBlock? errorText = ViewModel.Step switch
+            TextBlock errorText = ViewModel.Step switch
             {
                 1 => NameErrorText,
                 2 => TokenErrorText,
-                _ => null, // steps 3 and 4 have no message property; the fields show what is required
+                3 => OrganizationErrorText,
+                _ => TargetErrorText,
             };
-            if (errorText is null)
-            {
-                return;
-            }
 
             DispatcherQueue.TryEnqueue(() =>
             {

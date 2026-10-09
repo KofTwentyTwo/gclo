@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using gclo.Engine;
+using gclo.ViewModels;
 using Microsoft.UI.Xaml.Controls;
 
 namespace gclo
@@ -9,8 +11,13 @@ namespace gclo
     /// <summary>
     /// Asks the user how to recover a repository whose tree contains Windows-invalid
     /// paths: rename each offending name (prefilled with the validator's suggestion when
-    /// there is one) or skip the file or folder entirely. <see cref="Result"/> carries
-    /// the chosen <see cref="PathRecovery"/> after "Apply and check out" and stays null
+    /// there is one) or skip the file or folder entirely. Rows the validator has no safe
+    /// rename for (case-only collisions, duplicate destinations) start as Skip — the
+    /// same default the CLI's --sanitize-paths applies — so accepting the defaults
+    /// never produces a plan that is guaranteed to fail (#30). "Apply and check out"
+    /// pre-flights the choices through <see cref="PathRecoveryPlanner"/> and keeps the
+    /// dialog open with the problems listed when they would fail. <see cref="Result"/>
+    /// carries the chosen <see cref="PathRecovery"/> after a sound apply and stays null
     /// when the dialog is dismissed ("Skip this repo").
     ///
     /// As with every ContentDialog, the caller must set <c>XamlRoot</c> before
@@ -43,25 +50,21 @@ namespace gclo
 
         private void OnPrimaryButtonClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
         {
-            // Git paths are case-sensitive, so both collections compare ordinally. The same
-            // repo path can appear in two rows (e.g. an invalid segment that also collides
-            // by case), which is why renames assigns via the indexer instead of Add.
-            var renames = new Dictionary<string, string>(StringComparer.Ordinal);
-            var skipped = new HashSet<string>(StringComparer.Ordinal);
+            PathRecoveryPlanner.Plan plan = PathRecoveryPlanner.Build(
+                _rows.Select(row => new PathRecoveryPlanner.Choice(row.RepoPath, row.BuildReplacementPath(), row.Skip))
+                    .ToList());
 
-            foreach (PathRecoveryRow row in _rows)
+            if (plan.Problems.Count > 0)
             {
-                if (row.Skip)
-                {
-                    skipped.Add(row.RepoPath);
-                }
-                else if (row.BuildReplacementPath() is { } replacement)
-                {
-                    renames[row.RepoPath] = replacement;
-                }
+                // Stay open and say which rows need a different choice.
+                args.Cancel = true;
+                ProblemsBar.Message = string.Join(Environment.NewLine, plan.Problems);
+                ProblemsBar.IsOpen = true;
+                return;
             }
 
-            Result = new PathRecovery(renames, skipped);
+            ProblemsBar.IsOpen = false;
+            Result = plan.Recovery;
         }
     }
 
@@ -91,6 +94,9 @@ namespace gclo
             _originalSegment = info.RepoPath[(slash + 1)..];
             _prefill = info.SuggestedName ?? _originalSegment;
             NewName = _prefill;
+            // No safe rename exists (case-only collision, duplicate destination): the
+            // original name would fail again, so the row defaults to Skip.
+            Skip = info.SuggestedName is null;
         }
 
         /// <summary>Full repo path (forward slashes) of the offending file or folder.</summary>

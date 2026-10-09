@@ -108,6 +108,14 @@
                 PlaceholderText="Choose from the list, or type a name"
                 Loaded="OrgBox_Loaded"
                 Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
+            <TextBlock
+                x:Name="OrganizationErrorText"
+                AutomationProperties.AutomationId="WizardOrganizationError"
+                AutomationProperties.LiveSetting="Polite"
+                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                TextWrapping="Wrap"
+                Text="{x:Bind ViewModel.OrganizationError, Mode=OneWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.OrganizationError), Mode=OneWay}" />
         </StackPanel>
 
         <!-- ============================================================ Step 4
@@ -135,6 +143,14 @@
                     Content="Browse…"
                     Click="BrowseButton_Click" />
             </Grid>
+            <TextBlock
+                x:Name="TargetErrorText"
+                AutomationProperties.AutomationId="WizardTargetError"
+                AutomationProperties.LiveSetting="Polite"
+                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                TextWrapping="Wrap"
+                Text="{x:Bind ViewModel.TargetError, Mode=OneWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.TargetError), Mode=OneWay}" />
             <CheckBox
                 MinWidth="0"
                 Content="{x:Bind OrgSubfolderLabel(ViewModel.Organization), Mode=OneWay}"

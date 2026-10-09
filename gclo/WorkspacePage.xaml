@@ -171,6 +171,13 @@
                     </StackPanel>
                     </ContentControl>
 
+                    <TextBlock
+                        Style="{ThemeResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextWrapping="Wrap"
+                        Text="Once this connection works, save it as an account (Edit on the connection chip) so the token is kept for you."
+                        Visibility="{x:Bind local:StatusFormat.VisibleIfNot(IsAccountWorkspace), Mode=OneTime}" />
+
                     <StackPanel Orientation="Horizontal" Spacing="12">
                         <Button
                             MinWidth="140"
@@ -256,16 +263,27 @@
                         <FlyoutBase.AttachedFlyout>
                             <Flyout x:Name="EditFlyout" Placement="Bottom" Opening="EditFlyout_Opening">
                                 <StackPanel Width="360" Spacing="12">
-                                    <TextBlock
-                                        Style="{ThemeResource CaptionTextBlockStyle}"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        TextWrapping="Wrap"
-                                        Text="Account settings are edited in the account wizard (next update)."
-                                        Visibility="{x:Bind local:StatusFormat.VisibleIf(IsAccountWorkspace), Mode=OneTime}" />
+                                    <!-- Account workspace: the connection is the saved profile; the one
+                                         visible Edit affordance must lead to the wizard that edits it. -->
+                                    <StackPanel
+                                        Spacing="12"
+                                        Visibility="{x:Bind local:StatusFormat.VisibleIf(IsAccountWorkspace), Mode=OneTime}">
+                                        <TextBlock
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            TextWrapping="Wrap"
+                                            Text="This workspace is a saved account. Its token, organization, folder, and parallelism are edited in the account wizard." />
+                                        <Button
+                                            AutomationProperties.AutomationId="ChipEditAccountButton"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Content="Edit account…"
+                                            IsEnabled="{x:Bind ViewModel.CanEditInputs, Mode=OneWay}"
+                                            Click="EditAccountButton_Click" />
+                                    </StackPanel>
                                     <ContentControl
                                         HorizontalContentAlignment="Stretch"
-                                        IsEnabled="{x:Bind ConnectFieldsEnabled(ViewModel.CanEditInputs), Mode=OneWay}"
-                                        IsTabStop="False">
+                                        IsEnabled="{x:Bind ViewModel.CanEditInputs, Mode=OneWay}"
+                                        IsTabStop="False"
+                                        Visibility="{x:Bind local:StatusFormat.VisibleIfNot(IsAccountWorkspace), Mode=OneTime}">
                                     <StackPanel Spacing="12">
                                         <PasswordBox
                                             x:Name="EditTokenBox"
@@ -326,6 +344,13 @@
                                             <Run Text="Each repository will be placed at:" />
                                             <Run FontWeight="SemiBold" Text="{x:Bind ViewModel.TargetPreview, Mode=OneWay}" />
                                         </TextBlock>
+                                        <!-- The bridge from a working ad-hoc setup to a saved account:
+                                             the wizard opens seeded with everything above. -->
+                                        <Button
+                                            AutomationProperties.AutomationId="ChipSaveAsAccountButton"
+                                            Content="Save as account…"
+                                            ToolTipService.ToolTip="Keep this token, organization, and folder as a named account in the navigation pane"
+                                            Click="SaveAsAccountButton_Click" />
                                     </StackPanel>
                                     </ContentControl>
                                 </StackPanel>
