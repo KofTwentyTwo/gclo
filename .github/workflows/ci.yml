@@ -184,8 +184,13 @@ jobs:
         shell: pwsh
         run: |
           Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
-          $findings = @(Invoke-ScriptAnalyzer -Path .github/scripts -Recurse -Settings ./PSScriptAnalyzerSettings.psd1)
-          $findings += @(Invoke-ScriptAnalyzer -Path packaging/chocolatey/tools -Recurse -Settings ./PSScriptAnalyzerSettings.psd1)
+          # One file per call: PSScriptAnalyzer 1.25.0 intermittently fails with
+          # "Object reference not set to an instance of an object" when it is
+          # handed a directory, and never when it is handed a single script.
+          $settings = (Resolve-Path ./PSScriptAnalyzerSettings.psd1).Path
+          $scripts = Get-ChildItem -Path .github/scripts, packaging/chocolatey/tools -Recurse -Include *.ps1, *.psm1, *.psd1
+          $findings = @()
+          foreach ($script in $scripts) { $findings += @(Invoke-ScriptAnalyzer -Path $script.FullName -Settings $settings) }
           foreach ($f in $findings) { Write-Output "::error file=$($f.ScriptPath),line=$($f.Line)::$($f.RuleName): $($f.Message)" }
           if ($findings.Count -gt 0) { exit 1 }
           Write-Output 'PSScriptAnalyzer: no findings.'
