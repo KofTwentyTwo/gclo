@@ -38,6 +38,15 @@
         "resolved": "1.2.161",
         "contentHash": "OpHNacIumnkhaaX3ZlQ/TCR4YPOJvud2/PAOoWb6o+mIrLwIVA275I5wAgt4q/1O2VrJeDwR1qFQyqzG4lUArg=="
       },
+      "WinUI.TableView": {
+        "type": "Direct",
+        "requested": "[1.5.0, )",
+        "resolved": "1.5.0",
+        "contentHash": "YtZtk/JHhL668jfAhjlCm9u8kchajg5FJQVbeYDNKjjl3JqmQbcpCY5McHwaTrlADVwmoDn/x794Px16ZtyRRQ==",
+        "dependencies": {
+          "Microsoft.WindowsAppSDK.WinUI": "1.8.260528001"
+        }
+      },
       "LibGit2Sharp": {
         "type": "Transitive",
         "resolved": "0.32.0",

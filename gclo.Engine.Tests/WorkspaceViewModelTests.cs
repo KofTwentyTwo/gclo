@@ -866,8 +866,17 @@ public sealed class WorkspaceViewModelTests : IDisposable
         item.Note = "Cloned in WSL";
 
         Assert.True(item.HasNote);
+        Assert.True(item.HasDetails); // the row-details strip shows for a note alone
         Assert.Contains(nameof(RepoItemViewModel.Note), changed);
         Assert.Contains(nameof(RepoItemViewModel.HasNote), changed);
+        Assert.Contains(nameof(RepoItemViewModel.HasDetails), changed);
+
+        changed.Clear();
+        item.Note = null;
+        Assert.False(item.HasDetails);
+        item.Error = "boom";
+        Assert.True(item.HasDetails); // and for an error alone
+        Assert.Contains(nameof(RepoItemViewModel.HasDetails), changed);
     }
 
     [Fact]

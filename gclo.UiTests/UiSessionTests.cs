@@ -1,3 +1,7 @@
+// The table tests launch a second app instance in their own collection; two FlaUI
+// sessions must never drive input at the same time, so collections run one at a time.
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
+
 namespace gclo.UiTests;
 
 /// <summary>

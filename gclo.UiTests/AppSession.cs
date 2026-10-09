@@ -40,6 +40,8 @@ public sealed class AppSession : IDisposable
             WorkingDirectory = Path.GetDirectoryName(ExePath) ?? "",
         };
         startInfo.Environment["GCLO_DATA_DIR"] = DataDirectory;
+        // Enables the offline fixture for the one magic token only (see UiTestFixture).
+        startInfo.Environment["GCLO_UITEST_FIXTURE"] = "1";
 
         Automation = new UIA3Automation();
         try
