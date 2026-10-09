@@ -11,7 +11,9 @@ public interface ITokenVault
     /// <summary>
     /// Stores the token for an account, overwriting any existing entry. Throws on
     /// failure — silently losing a token would leave the account unusable without
-    /// any warning to the user.
+    /// any warning to the user. A failed call must leave the vault as it was (the
+    /// previous entry, if any, still readable): <see cref="AccountsStore"/> relies on
+    /// that to keep an account's working credential when a replacement write fails.
     /// </summary>
     void Store(Guid accountId, string token);
 

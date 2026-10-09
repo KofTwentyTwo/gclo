@@ -13,6 +13,32 @@ namespace gclo.ViewModels;
 /// <see cref="RecordSyncResult"/> propagate instead of being swallowed; only loading
 /// is tolerant (a missing or corrupt file yields an empty list).
 /// </summary>
+/// <remarks>
+/// <para>
+/// Metadata and the vault are two stores with no shared transaction, so every
+/// operation that touches both has a fixed order and a compensating step:
+/// </para>
+/// <list type="bullet">
+/// <item><description>
+/// <b>Save with a token:</b> vault write first, then metadata. A vault failure
+/// changes nothing (the vault's <see cref="ITokenVault.Store"/> either replaces the
+/// entry or leaves the previous one intact, so an update keeps its working
+/// credential). A metadata failure is compensated by restoring the previous token
+/// (or deleting the entry for a brand-new account).
+/// </description></item>
+/// <item><description>
+/// <b>Delete:</b> vault delete first, then metadata. A vault failure changes nothing.
+/// A metadata failure is compensated by re-storing the token that was removed.
+/// </description></item>
+/// <item><description>
+/// <b>Compensation failure</b> surfaces as <see cref="AccountConsistencyException"/>
+/// whose message states the exact leftover state. Every such state is reconciled by
+/// simply retrying the same operation: Save overwrites the vault entry and rewrites
+/// the file; Delete tolerates an absent vault entry.
+/// </description></item>
+/// </list>
+/// <para>In-memory state changes only after both stores succeeded. Nothing here logs a token.</para>
+/// </remarks>
 public sealed class AccountsStore
 {
     private readonly ITokenVault _vault;
@@ -60,9 +86,11 @@ public sealed class AccountsStore
     /// Inserts or updates (matching by <see cref="Account.Id"/>) and persists
     /// immediately. Throws <see cref="ArgumentException"/> when another account
     /// already uses the name (case-insensitive); nothing is persisted in that case.
-    /// A non-null <paramref name="token"/> goes into the vault only after the
-    /// metadata write succeeds, so a vault entry never points at an unsaved account;
-    /// a null token leaves any existing vault entry untouched.
+    /// A non-null <paramref name="token"/> is written to the vault BEFORE the
+    /// metadata; if the metadata write then fails, the vault is put back the way it
+    /// was (previous token restored, or the new entry removed) and the failure
+    /// propagates. A null token leaves any existing vault entry untouched.
+    /// See the class remarks for the full consistency contract.
     /// </summary>
     public void Save(Account account, string? token)
     {
@@ -89,19 +117,63 @@ public sealed class AccountsStore
                 updated.Add(account);
             }
 
-            Persist(updated); // IO failures propagate; _accounts stays unchanged then.
-            _accounts = updated;
-
-            if (token is not null)
+            if (token is null)
             {
-                _vault.Store(account.Id, token);
+                Persist(updated); // IO failures propagate; _accounts stays unchanged then.
+                _accounts = updated;
+                return;
             }
+
+            // Vault first: a failing Store leaves the vault exactly as it was (the
+            // previous token, if any, is still there), and nothing else has changed.
+            string? previousToken = _vault.TryRetrieve(account.Id);
+            _vault.Store(account.Id, token);
+
+            try
+            {
+                Persist(updated);
+            }
+            catch (Exception persistFailure)
+            {
+                // Undo the vault write so no entry points at metadata that was never saved.
+                try
+                {
+                    if (previousToken is null)
+                    {
+                        _vault.Delete(account.Id);
+                    }
+                    else
+                    {
+                        _vault.Store(account.Id, previousToken);
+                    }
+                }
+                catch (Exception compensationFailure)
+                {
+                    string leftover = previousToken is null
+                        ? $"the vault holds a token for account {account.Id:N} ('{account.Name}') that is not in accounts.json; "
+                          + "saving the account again overwrites it, deleting the account removes it"
+                        : $"the vault holds the NEW token for account {account.Id:N} ('{account.Name}') while accounts.json "
+                          + "still has the previous metadata; saving the account again reconciles both";
+                    _log.Error($"Account save failed and the vault could not be restored: {leftover}.", compensationFailure);
+                    throw new AccountConsistencyException(
+                        $"Saving account '{account.Name}' failed ({persistFailure.Message}), and restoring the token vault "
+                        + $"failed too ({compensationFailure.Message}). Current state: {leftover}.",
+                        persistFailure, compensationFailure);
+                }
+
+                throw;
+            }
+
+            _accounts = updated;
         }
     }
 
     /// <summary>
-    /// Removes the account's metadata and vault token; an unknown id is a no-op.
-    /// The vault entry is deleted only after the metadata write succeeds.
+    /// Removes the account's vault token and then its metadata; an unknown id is a
+    /// no-op. A vault failure changes nothing. If the metadata write fails after the
+    /// token was removed, the token is stored again and the failure propagates, so a
+    /// listed account never silently loses its credential and a token is never left
+    /// behind without its account. See the class remarks for the full contract.
     /// </summary>
     public void Delete(Guid id)
     {
@@ -113,9 +185,41 @@ public sealed class AccountsStore
                 return;
             }
 
-            Persist(remaining);
-            _accounts = remaining;
+            // Vault first: a failing Delete leaves both stores untouched. Keep the
+            // token in memory only long enough to put it back if the file write fails.
+            string? removedToken = _vault.TryRetrieve(id);
             _vault.Delete(id);
+
+            try
+            {
+                Persist(remaining);
+            }
+            catch (Exception persistFailure)
+            {
+                if (removedToken is null)
+                {
+                    throw; // there was no token to restore; the account is simply still listed
+                }
+
+                try
+                {
+                    _vault.Store(id, removedToken);
+                }
+                catch (Exception compensationFailure)
+                {
+                    string leftover = $"account {id:N} is still listed in accounts.json but its token is gone from the vault; "
+                        + "deleting it again completes the removal, or edit it and enter the token again to keep it";
+                    _log.Error($"Account delete failed and the token could not be restored: {leftover}.", compensationFailure);
+                    throw new AccountConsistencyException(
+                        $"Deleting the account failed ({persistFailure.Message}), and restoring its token failed too "
+                        + $"({compensationFailure.Message}). Current state: {leftover}.",
+                        persistFailure, compensationFailure);
+                }
+
+                throw;
+            }
+
+            _accounts = remaining;
         }
     }
 
