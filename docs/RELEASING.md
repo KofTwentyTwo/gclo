@@ -134,7 +134,7 @@ Both install the same asset, `gclo-cli-win-x64.zip`, by URL and SHA-256.
    - **Verify tag** — validate the tag, derive version/channel, and check
      that the tagged commit is contained in `main`. A tag on any other commit
      fails here and nothing is built or published.
-   - **Gates** — the full `CI` workflow, exactly as a pull request runs it:
+   - **Gates** — the full `ci` workflow, exactly as a pull request runs it:
      x64 build with warnings as errors, 100% line coverage on
      `gclo.Engine` / `gclo.ViewModels` / `gclo`, and the formatting gate.
      The FlaUI UI smoke suite runs as well but is **advisory** for a release,

@@ -3,7 +3,7 @@
 # Build bar: `dotnet build gclo.slnx -p:Platform=x64` must produce ZERO warnings,
 # which -warnaserror enforces (this also fails the build on NuGetAudit
 # vulnerability warnings, so known-vulnerable packages break CI).
-name: CI
+name: ci
 
 on:
   push:
@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   build-test:
-    name: Build and test (x64)
+    name: build-test
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -116,7 +116,7 @@ jobs:
     # (the Release workflow) can make it advisory so a flaky UI run cannot block
     # an immutable tag that main itself would have accepted. On push/PR events the
     # input is unset, so the job fails the workflow exactly as before.
-    name: UI end-to-end tests (x64)
+    name: ui-tests
     runs-on: windows-latest
     timeout-minutes: 30
     continue-on-error: ${{ inputs.ui-tests-advisory == true }}
@@ -155,7 +155,7 @@ jobs:
           if-no-files-found: warn
 
   format:
-    name: Format (style gate)
+    name: format
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
