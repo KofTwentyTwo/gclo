@@ -90,7 +90,7 @@ namespace gclo
             // Create and show Quick Sync before selecting it, so NavigationView.Content
             // is never empty regardless of when SelectionChanged fires.
             ShowWorkspace(Guid.Empty);
-            ApplySettings();
+            ApplySettings(seedQuickSyncConcurrency: true);
             WorkspaceNav.SelectedItem = QuickSyncNavItem;
 
             // AppWindow.Resize takes physical pixels; scale by the monitor DPI so the
@@ -134,15 +134,22 @@ namespace gclo
             }
         }
 
-        private void ApplySettings()
+        /// <summary>
+        /// Applies the theme and seeds the ad-hoc Quick Sync workspace from the settings
+        /// defaults (account workspaces carry their own configuration). The target
+        /// folder is only filled when blank; the parallelism default is pushed only
+        /// when <paramref name="seedQuickSyncConcurrency"/> — at startup, and after a
+        /// Settings save that actually changed it — so saving an unrelated setting
+        /// (theme, splash) cannot silently reset a value the user tuned in the
+        /// workspace's Options flyout (#30).
+        /// </summary>
+        private void ApplySettings(bool seedQuickSyncConcurrency)
         {
             if (Content is FrameworkElement root)
             {
                 root.RequestedTheme = StatusFormat.ToElementTheme(_settings.Theme);
             }
 
-            // Settings defaults only seed the ad-hoc Quick Sync workspace; account
-            // workspaces carry their own configuration.
             if (_workspaces.TryGetValue(Guid.Empty, out var quickSync))
             {
                 WorkspaceViewModel viewModel = quickSync.ViewModel;
@@ -151,7 +158,10 @@ namespace gclo
                 {
                     viewModel.TargetFolder = _settings.DefaultTargetFolder;
                 }
-                viewModel.MaxConcurrency = _settings.DefaultMaxConcurrency;
+                if (seedQuickSyncConcurrency)
+                {
+                    viewModel.MaxConcurrency = _settings.DefaultMaxConcurrency;
+                }
             }
         }
 
@@ -738,10 +748,11 @@ namespace gclo
             {
                 XamlRoot = Content.XamlRoot,
             };
+            int concurrencyBefore = _settings.DefaultMaxConcurrency;
             if (await DialogGuard.ShowAsync(dialog) == ContentDialogResult.Primary)
             {
                 dialog.ApplyAndSave();
-                ApplySettings();
+                ApplySettings(seedQuickSyncConcurrency: _settings.DefaultMaxConcurrency != concurrencyBefore);
             }
         }
 

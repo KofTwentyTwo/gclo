@@ -119,7 +119,8 @@ namespace gclo
                 // it here. Enqueued so the binding has pushed the new text first.
                 DispatcherQueue.TryEnqueue(RaiseStatusLiveRegionChanged);
             }
-            else if (e.PropertyName == nameof(WorkspaceViewModel.SelectedCount))
+            else if (e.PropertyName is nameof(WorkspaceViewModel.SelectedCount)
+                or nameof(WorkspaceViewModel.LoadedOrganization))
             {
                 UpdateDerivedTexts();
             }
@@ -152,6 +153,13 @@ namespace gclo
                 ViewModel.FilteredRepos.Count == 0 && ViewModel.Repos.Count > 0
                     ? Visibility.Visible
                     : Visibility.Collapsed;
+
+            bool loadedNothing = ViewModel.HasLoadedRepos && ViewModel.Repos.Count == 0;
+            EmptyTableText.Text = loadedNothing
+                ? $"No repositories found in '{ViewModel.LoadedOrganization}'. "
+                  + "Check the name, or make sure the token can see its repositories."
+                : "";
+            EmptyTableText.Visibility = loadedNothing ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void FilterSelectorBar_SelectionChanged(

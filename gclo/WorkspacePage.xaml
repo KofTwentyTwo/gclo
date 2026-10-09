@@ -31,6 +31,7 @@
 
     <Grid Padding="20" RowSpacing="12">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -57,10 +58,29 @@
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
 
+        <!-- Failed load / organization lookup. Lives outside both states so a first
+             load that fails (connect card still showing) and a refresh that fails
+             (table showing) get the same red, dismissable surface with a Retry — not
+             caption text at the bottom of the window. -->
+        <InfoBar
+            Grid.Row="0"
+            AutomationProperties.AutomationId="LoadErrorBar"
+            Severity="Error"
+            IsOpen="{x:Bind ViewModel.LoadErrorOpen, Mode=TwoWay}"
+            Title="{x:Bind ViewModel.LoadErrorTitle, Mode=OneWay}"
+            Message="{x:Bind ViewModel.LoadErrorMessage, Mode=OneWay}">
+            <InfoBar.ActionButton>
+                <Button
+                    AutomationProperties.AutomationId="LoadErrorRetryButton"
+                    Content="Retry"
+                    Command="{x:Bind ViewModel.LoadReposCommand, Mode=OneTime}" />
+            </InfoBar.ActionButton>
+        </InfoBar>
+
         <!-- ============================================================ State 1
              Connect card, shown until the first successful load in this workspace. -->
         <ScrollViewer
-            Grid.Row="0"
+            Grid.Row="1"
             VerticalScrollBarVisibility="Auto"
             Visibility="{x:Bind local:StatusFormat.VisibleIfNot(ViewModel.HasLoadedRepos), Mode=OneWay}">
             <Border
@@ -177,10 +197,11 @@
         <!-- ============================================================ State 2
              Connection chip + hero table card, once repositories have loaded. -->
         <Grid
-            Grid.Row="0"
+            Grid.Row="1"
             RowSpacing="12"
             Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.HasLoadedRepos), Mode=OneWay}">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
@@ -314,9 +335,28 @@
                 </StackPanel>
             </Border>
 
+            <!-- The organization was edited after the load: the rows no longer match the
+                 chip and target path, so syncing is blocked until a reload. Not closable;
+                 it goes away by reloading (or by putting the organization back). -->
+            <InfoBar
+                Grid.Row="1"
+                AutomationProperties.AutomationId="StaleTableBar"
+                Severity="Warning"
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.IsTableStale, Mode=OneWay}"
+                Title="Organization changed"
+                Message="{x:Bind ViewModel.StaleTableMessage, Mode=OneWay}">
+                <InfoBar.ActionButton>
+                    <Button
+                        AutomationProperties.AutomationId="StaleTableReloadButton"
+                        Content="Reload repositories"
+                        Command="{x:Bind ViewModel.LoadReposCommand, Mode=OneTime}" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+
             <!-- Hero table card: toolbar, active strip, results InfoBar, header, rows. -->
             <Grid
-                Grid.Row="1"
+                Grid.Row="2"
                 Padding="12"
                 Background="{ThemeResource LayerFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -563,8 +603,8 @@
                             MinWidth="0"
                             Padding="0"
                             VerticalAlignment="Center"
-                            ToolTipService.ToolTip="Select all"
-                            AutomationProperties.Name="Select all repositories"
+                            ToolTipService.ToolTip="Select or clear every visible row (hidden rows keep their selection)"
+                            AutomationProperties.Name="Select all visible repositories"
                             IsChecked="{x:Bind ViewModel.AllSelected, Mode=TwoWay}" />
 
                         <Grid Grid.Column="1">
@@ -875,6 +915,21 @@
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Text="No repositories match this filter."
                     Visibility="Collapsed" />
+
+                <!-- Shown when a load succeeded but returned nothing: a wrong name, an
+                     empty org, or a token that cannot see its repositories all list as
+                     empty rather than failing, and a blank table explains none of them. -->
+                <TextBlock
+                    x:Name="EmptyTableText"
+                    AutomationProperties.AutomationId="EmptyTableText"
+                    Grid.Row="4"
+                    MaxWidth="480"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Visibility="Collapsed" />
             </Grid>
         </Grid>
 
@@ -883,7 +938,7 @@
         <TextBlock
             x:Name="StatusTextBlock"
             AutomationProperties.AutomationId="StatusTextBlock"
-            Grid.Row="1"
+            Grid.Row="2"
             AutomationProperties.LiveSetting="Polite"
             Style="{ThemeResource CaptionTextBlockStyle}"
             Foreground="{ThemeResource TextFillColorSecondaryBrush}"

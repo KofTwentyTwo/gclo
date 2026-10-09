@@ -27,6 +27,16 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     private readonly Dictionary<string, RepoItemViewModel> _itemsByName = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _orgLoadCts;
 
+    /// <summary>
+    /// Position of every row in <see cref="Repos"/>; rebuilt on load and sort. Lets
+    /// progress-driven membership changes find a row's slot in <see cref="FilteredRepos"/>
+    /// by binary search instead of rebuilding the whole bound list (#30).
+    /// </summary>
+    private readonly Dictionary<RepoItemViewModel, int> _reposIndex = new();
+
+    /// <summary>Mirror of <see cref="FilteredRepos"/> for O(1) membership checks.</summary>
+    private readonly HashSet<RepoItemViewModel> _filteredSet = new();
+
     /// <summary>Canceled on dispose so an in-flight path recovery dies with the workspace.</summary>
     private readonly CancellationTokenSource _lifetimeCts = new();
 
@@ -91,6 +101,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         MaxConcurrency = AppSettings.DefaultConcurrency;
         StatusText = "";
         ResultMessage = "";
+        LoadErrorTitle = "";
+        LoadErrorMessage = "";
         AllSelected = true;
         CanEditInputs = true;
 
@@ -187,9 +199,55 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     public partial bool CreateOrgSubfolder { get; set; }
 
-    /// <summary>Header checkbox state: setting it checks or unchecks every row.</summary>
+    /// <summary>
+    /// Header checkbox state: setting it checks or unchecks every VISIBLE row (the rows
+    /// in <see cref="FilteredRepos"/>), and it reads true when every visible row is
+    /// selected. With no filter active that is every row; with a filter it makes
+    /// "filter, then select what you see" the subset workflow (#30). Hidden rows keep
+    /// their selection and still sync.
+    /// </summary>
     [ObservableProperty]
     public partial bool AllSelected { get; set; }
+
+    /// <summary>
+    /// Organization whose repositories the table currently holds (trimmed, as loaded);
+    /// null before the first successful load.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsTableStale))]
+    [NotifyPropertyChangedFor(nameof(StaleTableMessage))]
+    public partial string? LoadedOrganization { get; set; }
+
+    /// <summary>
+    /// True when <see cref="Organization"/> was edited after a load: the table still
+    /// shows the previous organization's rows while the chip and target path describe
+    /// the new one. Sync is blocked until a reload replaces the rows (#30).
+    /// </summary>
+    public bool IsTableStale
+        => LoadedOrganization is not null
+            && !string.Equals(Organization.Trim(), LoadedOrganization, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>One-line explanation shown while <see cref="IsTableStale"/>; empty otherwise.</summary>
+    public string StaleTableMessage
+        => IsTableStale
+            ? $"The table still shows '{LoadedOrganization}'. Reload to list '{Organization.Trim()}' before syncing."
+            : "";
+
+    /// <summary>Title of the error surface for a failed load or organization lookup.</summary>
+    [ObservableProperty]
+    public partial string LoadErrorTitle { get; set; }
+
+    /// <summary>Message of the most recent failed load or organization lookup; empty when none.</summary>
+    [ObservableProperty]
+    public partial string LoadErrorMessage { get; set; }
+
+    /// <summary>
+    /// True while the load-error surface is showing. Set by a failed load or
+    /// organization lookup, cleared when the next load starts or a lookup succeeds; the
+    /// page two-way binds it so the user can dismiss the bar (#30).
+    /// </summary>
+    [ObservableProperty]
+    public partial bool LoadErrorOpen { get; set; }
 
     /// <summary>True once a sync run has finished (successfully, canceled, or faulted).</summary>
     [ObservableProperty]
@@ -314,7 +372,22 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
     partial void OnTargetFolderChanged(string value) => NotifyTargetPathChanged();
 
-    partial void OnOrganizationChanged(string value) => NotifyTargetPathChanged();
+    partial void OnOrganizationChanged(string value)
+    {
+        NotifyTargetPathChanged();
+        OnPropertyChanged(nameof(IsTableStale));
+        OnPropertyChanged(nameof(StaleTableMessage));
+        SyncCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Records a failed load or lookup on the error surface (and the live region).</summary>
+    private void ShowLoadError(string title, string message)
+    {
+        StatusText = message;
+        LoadErrorTitle = title;
+        LoadErrorMessage = message;
+        LoadErrorOpen = true;
+    }
 
     partial void OnCreateOrgSubfolderChanged(bool value) => NotifyTargetPathChanged();
 
@@ -377,6 +450,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             }
             Organization = organizationBeforeRefresh;
             OnPropertyChanged(nameof(Organization));
+            LoadErrorOpen = false; // a lookup that works clears a stale lookup failure
             // The production lister always lists the token's own account first, so a
             // single entry means no organizations were visible.
             StatusText = orgs.Count <= 1
@@ -391,7 +465,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         {
             if (_orgLoadCts == cts)
             {
-                StatusText = ex.Message;
+                ShowLoadError("Could not list organizations", ex.Message);
             }
         }
         finally
@@ -442,7 +516,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         _syncingSelection = true;
         try
         {
-            foreach (RepoItemViewModel item in Repos)
+            foreach (RepoItemViewModel item in FilteredRepos)
             {
                 item.IsSelected = value;
             }
@@ -469,18 +543,21 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         }
         if (!_syncingSelection)
         {
-            // A header push recomputes once after its loop instead of per row.
+            // A header push (or any other batch) recomputes once after its loop
+            // instead of per row — including the command re-query, whose CanSync
+            // scans every row (#30).
             RecomputeSelectedCount();
             UpdateAllSelectedFromItems();
+            SyncCommand.NotifyCanExecuteChanged();
         }
-        SyncCommand.NotifyCanExecuteChanged();
     }
 
     private void RecomputeSelectedCount() => SelectedCount = Repos.Count(r => r.IsSelected);
 
+    /// <summary>Header state follows the VISIBLE rows; see <see cref="AllSelected"/>.</summary>
     private void UpdateAllSelectedFromItems()
     {
-        bool all = Repos.All(r => r.IsSelected);
+        bool all = FilteredRepos.All(r => r.IsSelected);
         if (AllSelected != all)
         {
             _syncingSelection = true;
@@ -510,6 +587,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     {
         IsLoadingRepos = true;
         ResetRunResult();
+        LoadErrorOpen = false;
         try
         {
             string organization = Organization.Trim();
@@ -544,14 +622,18 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             SortColumn = null;
             SortDescending = false;
             _sampleRepoName = Repos.Count > 0 ? Repos[0].Name : null;
-            UpdateAllSelectedFromItems();
+            RebuildReposIndex();
+            LoadedOrganization = organization;
             HasLoadedRepos = true;
             StatusText = $"{Repos.Count} repositories loaded.";
             _log.Info($"Loaded {Repos.Count} repositories for organization '{organization}'.");
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            // The message is good (the listers translate 401/404/rate limits); the
+            // surface must be too — an InfoBar with Retry, not caption text at the
+            // bottom of the window (#30).
+            ShowLoadError("Could not load repositories", ex.Message);
             _log.Error($"Loading repositories failed: {ex.Message}", ex);
         }
         finally
@@ -559,7 +641,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             IsLoadingRepos = false;
             NotifyTargetPathChanged();
             RecomputeSelectedCount();
-            RebuildFilteredRepos();
+            RebuildFilteredRepos(); // also re-derives AllSelected from the visible rows
             SyncCommand.NotifyCanExecuteChanged();
             RetryFailedCommand.NotifyCanExecuteChanged();
             RecomputeHasFailedRepos();
@@ -572,6 +654,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         !IsRunning
         && !IsLoadingRepos
         && !IsResolvingPaths
+        && !IsTableStale
         && !string.IsNullOrWhiteSpace(TargetFolder)
         && Repos.Any(r => r.IsSelected);
 
@@ -597,6 +680,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             _runSet = selected;
             TotalCount = selected.Count;
             RecomputeCompletedCount();
+            RebuildFilteredRepos(); // every selected row just went back to Queued
 
             string targetRoot = EffectiveTargetRoot;
             StatusText = $"Syncing {selected.Count} repositories...";
@@ -604,7 +688,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
             // Constructed on the UI thread: Progress<T> captures the WinUI
             // SynchronizationContext, so HandleProgress always runs on the UI thread.
-            var progress = _progressFactory(HandleProgress);
+            // Failure logging is layered in front of it so the per-entry file I/O
+            // happens on the engine's worker thread, never on the dispatcher (#30).
+            var progress = new FailureLoggingProgress(_progressFactory(HandleProgress), _log);
 
             var request = new SyncRequest(
                 Organization.Trim(), Token.Trim(), targetRoot, MaxConcurrency);
@@ -676,10 +762,23 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(CanRetryFailed))]
     private async Task RetryFailedAsync()
     {
-        foreach (RepoItemViewModel item in Repos)
+        // One batch: per-row recounts and command re-queries would be O(n^2) (#30).
+        _syncingSelection = true;
+        try
         {
-            item.IsSelected = item.Status == SyncStatus.Failed;
+            foreach (RepoItemViewModel item in Repos)
+            {
+                item.IsSelected = item.Status == SyncStatus.Failed;
+            }
         }
+        finally
+        {
+            _syncingSelection = false;
+        }
+        RecomputeSelectedCount();
+        UpdateAllSelectedFromItems();
+        SyncCommand.NotifyCanExecuteChanged();
+
         // Executing SyncCommand itself keeps SyncCancelCommand working for retry runs.
         await SyncCommand.ExecuteAsync(null);
     }
@@ -744,6 +843,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             IsResolvingPaths = false;
         }
         RecomputeCompletedCount();
+        UpdateFilteredMembership(item);
         RetryFailedCommand.NotifyCanExecuteChanged();
     }
 
@@ -779,15 +879,15 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             _ => OrderRepos(r => r.IsArchived, Comparer<bool>.Default),
         };
 
-        // Move (rather than clear + re-add) so list controls keep row containers stable.
-        for (int target = 0; target < sorted.Count; target++)
+        // Nothing binds Repos (the table binds FilteredRepos), so a plain reorder is
+        // enough: O(n) adds instead of the O(n^2) IndexOf/Move choreography that
+        // used to run here, and the one rebuild below refreshes the bound list (#30).
+        Repos.Clear();
+        foreach (RepoItemViewModel item in sorted)
         {
-            int current = Repos.IndexOf(sorted[target]);
-            if (current != target)
-            {
-                Repos.Move(current, target);
-            }
+            Repos.Add(item);
         }
+        RebuildReposIndex();
 
         RebuildFilteredRepos(); // the table binds FilteredRepos, which mirrors Repos' order
     }
@@ -842,8 +942,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
         if (report.Status == SyncStatus.Failed)
         {
-            _log.Error($"{report.RepoName} failed: {report.Error}");
-            // Failures never reach StatusText (which has a live region), so assistive
+            // Logged already by FailureLoggingProgress on the worker thread. Failures
+            // never reach StatusText (which has a live region), so assistive
             // technology hears them only through this explicit channel.
             AnnouncementRequested?.Invoke($"{report.RepoName} failed. {report.Error}");
         }
@@ -852,20 +952,39 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         {
             RecomputeCompletedCount();
         }
-        else if (statusBefore != item.Status && Filter is RepoFilter.Active or RepoFilter.Pending)
+
+        if (statusBefore != item.Status)
         {
-            // Status-dependent filters must follow NON-terminal transitions too (a row
-            // entering Cloning leaves Pending and joins Active immediately); terminal
-            // ones already rebuild via RecomputeCompletedCount, and the rebuild's
-            // sequence check keeps redundant calls cheap and scroll-stable.
-            RebuildFilteredRepos();
+            // Status-dependent filters follow every transition (a row entering Cloning
+            // leaves Pending and joins Active immediately). Only this one row can have
+            // changed membership, so it is inserted or removed in place — no O(n)
+            // rebuild, no Reset notification, no scroll jump (#30).
+            UpdateFilteredMembership(item);
+        }
+    }
+
+    /// <summary>
+    /// Logs failed reports on the thread that produced them (the engine's worker), then
+    /// forwards every report to the UI-marshaled progress. FileActivityLog opens,
+    /// appends, and closes the file per entry; a mass failure (revoked PAT, dropped
+    /// network) used to put a thousand of those on the UI thread (#30).
+    /// </summary>
+    private sealed class FailureLoggingProgress(IProgress<RepoProgress> inner, IActivityLog log)
+        : IProgress<RepoProgress>
+    {
+        public void Report(RepoProgress value)
+        {
+            if (value.Status == SyncStatus.Failed)
+            {
+                log.Error($"{value.RepoName} failed: {value.Error}");
+            }
+            inner.Report(value);
         }
     }
 
     /// <summary>
     /// Recounts terminal rows within the captured run set (#22) — before the first run
-    /// the set is empty and the count stays 0. Also the hook for everything that follows
-    /// a terminal transition: the failed-rows flag and the filtered table.
+    /// the set is empty and the count stays 0. Also refreshes the failed-rows flag.
     /// </summary>
     private void RecomputeCompletedCount()
     {
@@ -879,7 +998,6 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         }
         CompletedCount = completed;
         RecomputeHasFailedRepos();
-        RebuildFilteredRepos();
     }
 
     private void RecomputeHasFailedRepos()
@@ -887,24 +1005,91 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
     // ---------------------------------------------------------------- filtering
 
+    /// <summary>Refreshes the row -> position map after <see cref="Repos"/> was reloaded or reordered.</summary>
+    private void RebuildReposIndex()
+    {
+        _reposIndex.Clear();
+        for (int i = 0; i < Repos.Count; i++)
+        {
+            _reposIndex[Repos[i]] = i;
+        }
+    }
+
     /// <summary>
     /// Rebuilds <see cref="FilteredRepos"/> from <see cref="Repos"/>, preserving the
-    /// table's current sort order. A no-op when the visible set is already correct, so
-    /// list controls keep their scroll position across progress ticks.
+    /// table's current sort order, then re-derives the header checkbox from the
+    /// visible rows. Used when the filter, the table contents, or the sort order
+    /// change; single-row status transitions go through
+    /// <see cref="UpdateFilteredMembership"/> instead. A no-op when the visible set
+    /// is already correct, so list controls keep their scroll position.
     /// </summary>
     private void RebuildFilteredRepos()
     {
         List<RepoItemViewModel> desired = Repos.Where(MatchesFilter).ToList();
-        if (desired.SequenceEqual(FilteredRepos))
+        if (!desired.SequenceEqual(FilteredRepos))
+        {
+            FilteredRepos.Clear();
+            _filteredSet.Clear();
+            foreach (RepoItemViewModel repo in desired)
+            {
+                FilteredRepos.Add(repo);
+                _filteredSet.Add(repo);
+            }
+        }
+        UpdateAllSelectedFromItems();
+    }
+
+    /// <summary>
+    /// Applies one row's current filter match to <see cref="FilteredRepos"/>: inserts it
+    /// at its table position (binary search on <see cref="_reposIndex"/>) when it became
+    /// visible, removes it when it became hidden, and does nothing when its membership
+    /// did not change. O(log n) instead of the former O(n) rebuild per progress report.
+    /// </summary>
+    private void UpdateFilteredMembership(RepoItemViewModel item)
+    {
+        bool visible = MatchesFilter(item);
+        bool wasVisible = _filteredSet.Contains(item);
+        if (visible == wasVisible)
         {
             return;
         }
 
-        FilteredRepos.Clear();
-        foreach (RepoItemViewModel repo in desired)
+        int slot = FindFilteredSlot(item);
+        if (visible)
         {
-            FilteredRepos.Add(repo);
+            FilteredRepos.Insert(slot, item);
+            _filteredSet.Add(item);
         }
+        else
+        {
+            FilteredRepos.RemoveAt(slot);
+            _filteredSet.Remove(item);
+        }
+        UpdateAllSelectedFromItems();
+    }
+
+    /// <summary>
+    /// Index in <see cref="FilteredRepos"/> where <paramref name="item"/> sits (when
+    /// present) or belongs (when absent), by its position in <see cref="Repos"/>.
+    /// </summary>
+    private int FindFilteredSlot(RepoItemViewModel item)
+    {
+        int position = _reposIndex[item];
+        int low = 0;
+        int high = FilteredRepos.Count;
+        while (low < high)
+        {
+            int mid = (low + high) / 2;
+            if (_reposIndex[FilteredRepos[mid]] < position)
+            {
+                low = mid + 1;
+            }
+            else
+            {
+                high = mid;
+            }
+        }
+        return low;
     }
 
     private bool MatchesFilter(RepoItemViewModel repo)
