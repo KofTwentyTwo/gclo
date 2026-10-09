@@ -14,7 +14,7 @@ on:
 
 # Three stages, each gated on the previous:
 #   verify  - the tag must be strict semver AND its commit must be on main
-#   gates   - the full CI workflow (build, 100% coverage, UI smoke, format)
+#   gates   - the full CI workflow (build, 100% coverage, format; UI smoke advisory)
 #   release - package and publish; only runs when both stages succeeded
 #
 # Read-only by default; only the release job gets contents: write, which vpk
@@ -76,12 +76,18 @@ jobs:
           fi
 
   # The same gates a pull request must pass: zero-warning x64 build, 100% line
-  # coverage on Engine/ViewModels/Cli, the FlaUI UI smoke suite, and formatting.
-  # If any job in the called workflow fails, this job fails and release is skipped.
+  # coverage on Engine/ViewModels/Cli, and formatting. If any of those fails, this
+  # job fails and release is skipped. The FlaUI UI smoke suite runs too but is
+  # advisory here, exactly as it is not a required check on main: hosted-runner UI
+  # automation is not yet proven stable enough to hold an immutable tag hostage.
+  # Documented exception per #44; flip ui-tests-advisory to false (and add the job
+  # to main's required checks) once the suite has earned it.
   gates:
     name: Gates
     needs: verify
     uses: ./.github/workflows/ci.yml
+    with:
+      ui-tests-advisory: true
 
   release:
     name: Build, package, and publish

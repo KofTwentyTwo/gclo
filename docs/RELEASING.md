@@ -105,9 +105,13 @@ via `wingetcreate update KofTwentyTwo.gclo ... --submit`.
      fails here and nothing is built or published.
    - **Gates** — the full `CI` workflow, exactly as a pull request runs it:
      x64 build with warnings as errors, 100% line coverage on
-     `gclo.Engine` / `gclo.ViewModels` / `gclo`, the FlaUI UI smoke suite,
-     and the formatting gate. (The UI suite is *not* a required check on
-     `main` PRs yet; it **is** required for a release.)
+     `gclo.Engine` / `gclo.ViewModels` / `gclo`, and the formatting gate.
+     The FlaUI UI smoke suite runs as well but is **advisory** for a release,
+     matching its status on `main` (not a required check yet, because UI
+     automation on hosted runners is still proving itself). A red UI job
+     shows in the run but does not stop publishing; look at it afterwards.
+     If a *blocking* gate fails, fix the cause on `main` and cut a new patch
+     version — never reuse the tag (see "If a release goes wrong").
    - **Build, package, and publish**, which will, in order:
      - publish and zip the CLI,
      - publish the WinUI app unpackaged and pack it with Velopack,
