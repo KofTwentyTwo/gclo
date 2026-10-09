@@ -2,6 +2,11 @@ name: Bug report
 description: Something in gclo (desktop app or CLI) is broken
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: >-
+        Security problem? Do not file it here; use the private
+        [vulnerability report](https://github.com/KofTwentyTwo/gclo/security/advisories/new).
   - type: input
     id: version
     attributes:

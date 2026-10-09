@@ -54,7 +54,7 @@ get a release without a delta package, which is normal.
 | nuget.org (`gclo.Engine` package) | `NUGET_API_KEY` secret is set | `NUGET_API_KEY` — an API key from nuget.org with push rights for `gclo.Engine` |
 | winget (`KofTwentyTwo.gclo`) | stable releases only, and `WINGET_TOKEN` secret is set | `WINGET_TOKEN` — a GitHub personal access token (classic, `public_repo` scope) used by `wingetcreate` to fork/PR [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) |
 | `SHA256SUMS` and CycloneDX SBOMs on the GitHub Release | always | none |
-| Scoop (`bucket/gclo.json` in this repository) | stable releases only | none — the workflow opens a PR against `main` with the updated manifest; merge it (then `main` back into `dev`) and `scoop update gclo` sees the release |
+| Scoop (`bucket/gclo.json` in this repository) | stable releases only | none — the workflow opens a PR against `main` with the updated manifest; merge it and `scoop update gclo` sees the release |
 | Chocolatey (`gclo` on chocolatey.org) | stable releases only, and `CHOCO_API_KEY` secret is set | `CHOCO_API_KEY` — an API key from your chocolatey.org account; the first push creates the package (it then goes through Chocolatey moderation) |
 
 If a secret is not configured, the corresponding step is skipped cleanly — the
@@ -90,11 +90,10 @@ Both install the same asset, `gclo-cli-win-x64.zip`, by URL and SHA-256.
   `scoop install gclo`. The manifest (`bucket/gclo.json`) carries `checkver` and
   `autoupdate` entries keyed on `SHA256SUMS`, so `scoop update` works as
   soon as the manifest on `main` names the new version. The release workflow
-  therefore opens its "Packaging" pull request **against `main`** (the one
-  exception to the dev-first branch model: three generated files, nothing else).
-  Merge it, then merge `main` back into `dev`. Note that a PR opened with the
-  default `GITHUB_TOKEN` triggers no status checks, so the required checks on
-  `main` must be run by hand or `DEPS_PAT` must be configured (#7).
+  therefore opens its "Packaging" pull request against `main` (three generated
+  files, nothing else). Note that a PR opened with the default `GITHUB_TOKEN`
+  triggers no status checks, so `DEPS_PAT` should be configured (#7) for the
+  required checks to run on it.
 - **Chocolatey** needs a one-time account on chocolatey.org and its API key as
   the `CHOCO_API_KEY` secret. The workflow packs `packaging/chocolatey` on every
   stable release and pushes it when the key exists; the first version goes
@@ -105,16 +104,23 @@ Both install the same asset, `gclo-cli-win-x64.zip`, by URL and SHA-256.
 
 ## Cutting a release, start to finish
 
-1. **Make sure `main` is green.** The CI, CodeQL, and (for PRs) dependency
-   review workflows must all pass. The release workflow re-runs the entire CI
-   workflow against the tag, so a red `main` will fail the release anyway —
-   just later and more annoyingly.
+1. **Open the release checklist issue** from the KofTwentyTwo standards'
+   [release checklist template](https://github.com/KofTwentyTwo/standards/blob/main/templates/release-checklist.md),
+   titled `Release vX.Y.Z`, and work through it: the conformance checker
+   (`tools/Test-RepoConformance.ps1 -Repository KofTwentyTwo/gclo`, attach the
+   output), open scanning alerts, and for a MINOR or MAJOR the threat-model
+   review (`docs/security/threat-model.md`). The release notes link the issue.
 
-2. **Pick the version.** Follow semver: breaking change → major, new feature →
+2. **Make sure `main` is green.** CI, the security scans, and CodeQL must all
+   pass. The release workflow re-runs the CI gates against the tag, so a red
+   `main` will fail the release anyway, just later.
+
+3. **Pick the version.** Follow semver: breaking change → major, new feature →
    minor, fix → patch. Add a prerelease suffix (`-beta.1`) if this should go to
    the `dev` channel only.
 
-3. **Tag and push:**
+4. **Tag and push** (the `protect-release-tags` ruleset lets only the
+   repository admin create a `v*` tag):
 
    ```powershell
    git checkout main
@@ -123,7 +129,7 @@ Both install the same asset, `gclo-cli-win-x64.zip`, by URL and SHA-256.
    git push origin v1.2.3
    ```
 
-4. **Watch the workflow.** The `Release` workflow appears under the Actions
+5. **Watch the workflow.** The `Release` workflow appears under the Actions
    tab. It runs three jobs, each gated on the previous one:
    - **Verify tag** — validate the tag, derive version/channel, and check
      that the tagged commit is contained in `main`. A tag on any other commit
@@ -138,22 +144,27 @@ Both install the same asset, `gclo-cli-win-x64.zip`, by URL and SHA-256.
      If a *blocking* gate fails, fix the cause on `main` and cut a new patch
      version — never reuse the tag (see "If a release goes wrong").
    - **Build, package, and publish**, which will, in order:
-     - publish and zip the CLI,
+     - publish and zip the CLI (with the LICENSE inside),
      - publish the WinUI app unpackaged and pack it with Velopack,
+     - generate a CycloneDX SBOM per artifact, write `SHA256SUMS`, and attest
+       provenance and SBOMs,
      - create a **draft** GitHub Release (marked prerelease for `dev`), upload
-       all assets and the generated changelog to it, then **publish** it — this
-       repository uses immutable releases, so everything must land while the
-       release is still a draft,
+       all assets and the notes generated from the Conventional Commit titles
+       since the previous release (`.github/scripts/New-ReleaseNotes.ps1`), then
+       **publish** it — this repository uses immutable releases, so everything
+       must land while the release is still a draft,
      - push `gclo.Engine` to nuget.org (if `NUGET_API_KEY` is set),
      - submit the winget manifest update (stable only, if `WINGET_TOKEN` is set).
 
-5. **Verify.** Check the new release on the
+6. **Verify.** Check the new release on the
    [releases page](https://github.com/KofTwentyTwo/gclo/releases): the Setup
    exe, portable zip, full package, CLI zip (and a delta package after the
-   first release) should all be attached. If the winget step ran, check your
-   PR on microsoft/winget-pkgs.
+   first release), `SHA256SUMS`, and the two SBOMs should all be attached;
+   `gh attestation verify` passes for each asset. Tick the "Ship" section of
+   the checklist issue. If the winget step ran, check your PR on
+   microsoft/winget-pkgs.
 
-6. **If something failed**, where it failed decides the recovery. The workflow
+7. **If something failed**, where it failed decides the recovery. The workflow
    is a single job, so "re-run failed jobs" always re-runs everything from the
    start — and because releases in this repository are **immutable**, a
    published release's tag and assets are frozen and cannot be re-uploaded.
@@ -185,21 +196,19 @@ Both install the same asset, `gclo-cli-win-x64.zip`, by URL and SHA-256.
      ```
 
      If the published release itself is broken, do not try to fix it in
-     place — delete it and its tag (below) and cut a new patch version.
+     place and do not delete it: see "A broken release" below.
 
-### Deleting a bad release
+### A broken release
 
-If a release is broken, delete the GitHub Release *and* the tag, fix the
-problem, and tag again with a **new** patch version. Never reuse a version
-number that was published — installed apps and package managers may have
-already seen it. With immutable releases this is the only fix for a bad
-published release: its assets cannot be swapped in place.
+Releases are immutable and a published version is never deleted or reused
+(K22-REL-07): installed apps, package managers, and attestations may already
+refer to it. Instead:
 
-```powershell
-gh release delete v1.2.3 --yes
-git push origin :refs/tags/v1.2.3
-```
+1. Edit the broken release's notes to say what is wrong and which version fixes
+   it (`gh release edit v1.2.3 --notes-file ...`), and mark it as a prerelease if
+   stable users must stop receiving it (`gh release edit v1.2.3 --prerelease`).
+2. Fix the cause on `main` through a normal pull request.
+3. Tag the **next** patch version and let the pipeline publish it.
 
-> The repository's **tag protection ruleset** blocks tag deletion by default. To
-> delete a bad tag, temporarily disable (or add a bypass to) the tag ruleset in
-> **Settings → Rules → Rulesets**, delete the tag, then re-enable it.
+The `protect-release-tags` ruleset blocks tag deletion and updates for everyone;
+that is deliberate and is not to be bypassed.

@@ -5,10 +5,17 @@
 <p align="center"><b>Clone an entire GitHub organization. Keep it up to date. In parallel.</b></p>
 
 <p align="center">
+  <a href="https://scorecard.dev/viewer/?uri=github.com/KofTwentyTwo/gclo"><img src="https://api.scorecard.dev/projects/github.com/KofTwentyTwo/gclo/badge" alt="OpenSSF Scorecard" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" /></a>
   <a href="https://github.com/KofTwentyTwo/gclo"><img src="https://img.shields.io/badge/platform-Windows%2011-blue" alt="Platform: Windows 11" /></a>
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-10-blueviolet" alt=".NET 10" /></a>
 </p>
+
+| | |
+| --- | --- |
+| **Tier** | Product (see the [KofTwentyTwo standards scope](https://github.com/KofTwentyTwo/standards/blob/main/policies/README.md#scope)) |
+| **Standards** | Conforms to [KofTwentyTwo standards](https://github.com/KofTwentyTwo/standards) `main@855cf44` (pre-1.0 draft); conformance tracked in [#62](https://github.com/KofTwentyTwo/gclo/issues/62) |
+| **Latest release** | [Releases](https://github.com/KofTwentyTwo/gclo/releases/latest) |
 
 **gclo** (**G**it **C**lone **L**arge **O**rganizations) mirrors every repository of a GitHub organization or user account into a local folder in one pass: it clones the repositories that are missing and fast-forwards the ones that already exist, with live per-repo progress and bounded parallelism. It ships as a Windows 11 desktop app (WinUI 3) and a scriptable CLI built on the same engine.
 
@@ -39,7 +46,25 @@ scoop install gclo
 choco install gclo
 ```
 
-Every release also attaches `SHA256SUMS` and a CycloneDX SBOM per artifact, and every asset carries a build-provenance attestation you can check with `gh attestation verify <file> -R KofTwentyTwo/gclo`. `winget` support for the desktop app is tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7).
+`winget` support for the desktop app is tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7). Every official channel (GitHub Releases, the in-app updater, Scoop, Chocolatey, winget) is served over HTTPS.
+
+## Verifying a release
+
+Every release asset is listed in `SHA256SUMS`, carries a build-provenance attestation, and ships with a CycloneDX SBOM (`gclo-cli-win-x64-<version>.cdx.json`, `gclo-app-<version>.cdx.json`):
+
+```powershell
+# 1. Integrity: the file matches the published checksum
+(Get-FileHash .\gclo-stable-Setup.exe -Algorithm SHA256).Hash   # compare with the line in SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS                   # Linux / macOS
+
+# 2. Origin: built by this repository's release workflow from the tagged commit
+gh attestation verify .\gclo-stable-Setup.exe --repo KofTwentyTwo/gclo
+
+# 3. Dependencies: the SBOM is attested too
+gh attestation verify .\gclo-cli-win-x64.zip --repo KofTwentyTwo/gclo --predicate-type https://cyclonedx.org/bom
+```
+
+The binaries are not yet Authenticode-signed (standards exception [EX-0002](https://github.com/KofTwentyTwo/standards/blob/main/exceptions/register.md#ex-0002), [#57](https://github.com/KofTwentyTwo/gclo/issues/57)), so step 2 is the origin check until `Get-AuthenticodeSignature` can be.
 
 ## Getting a token
 
@@ -194,9 +219,13 @@ To F5-debug the packaged app in Visual Studio, open `gclo.slnx`, set `gclo` as t
 
 Line coverage is held at **100%** for `gclo.Engine`, `gclo.ViewModels`, and `gclo` (the CLI), enforced in CI.
 
+## Support
+
+Only the latest release line receives fixes: the latest MINOR of the latest MAJOR gets all fixes, and when a new MAJOR ships the previous MAJOR's last MINOR gets security fixes for 6 months. Details, and how to report a vulnerability privately, are in [SECURITY.md](SECURITY.md).
+
 ## Contributing
 
-Contributions are welcome. Development happens on the `dev` branch; `main` is the stable branch and only advances via pull requests with passing status checks — so base your PRs on `dev`. See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, build and test commands, and pull request expectations (zero-warning builds, green tests, unpackaged mode kept working).
+Contributions are welcome. Branch from `main` (`<type>/<description>`), commit with Conventional Commit messages signed and signed off (`git commit -S -s`), and open a pull request against `main`; it is squash-merged once every required check is green. See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, build and test commands, the checks that gate a merge, and the code style.
 
 ## License
 
