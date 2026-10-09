@@ -57,14 +57,16 @@ finds nothing, and the release simply has no delta package.
 Everything a publishing job needs lives in the **`release` environment**
 (Settings → Environments → `release`, deployment rule: tags matching `v*`) or in
 repository variables. **A job whose token is missing fails** — a green run means
-every channel was published. A failed publisher can be re-run on its own after the
-token is added ("Re-run failed jobs"); the release itself is not rebuilt.
+every enabled channel was published. A failed publisher can be re-run on its own
+after the token is added ("Re-run failed jobs"); the release itself is not rebuilt.
+winget is the one channel switched on explicitly (`WINGET_PACKAGE_ID`), because
+its first submission cannot be automated; see below.
 
 | Job | Runs for | Needs | Publishes |
 | --- | -------- | ----- | --------- |
 | `release` (shared workflow) | every tag | nothing beyond `GITHUB_TOKEN` | the GitHub Release: Setup, portable, full/delta packages, feed, CLI zip, SBOMs, `SHA256SUMS`, provenance and SBOM attestations |
 | `packages` | stable only | `DEPS_PAT` (fine-grained token: contents and pull requests, write, this repository, ≤ 90 days), `CHOCO_API_KEY` (chocolatey.org) | the Chocolatey package pushed to chocolatey.org, and a `build(packaging): …` pull request against `main` with `bucket/gclo.json` and `packaging/chocolatey` pointed at the release |
-| `winget` | stable only | repository variable `WINGET_PACKAGE_ID` (`KofTwentyTwo.gclo`, after the one-time manual submission below) and `WINGET_TOKEN` (fine-grained token that can fork and open pull requests on public repositories, ≤ 90 days) | a manifest update PR on [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) |
+| `winget` | stable only, once the repository variable `WINGET_PACKAGE_ID` is set (`KofTwentyTwo.gclo`, after the one-time manual submission below) | `WINGET_TOKEN` (fine-grained token that can fork and open pull requests on public repositories, ≤ 90 days); missing → the job fails | a manifest update PR on [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) |
 | `nuget` | only when the repository variable `NUGET_PUBLISH` is `true` | `NUGET_API_KEY` (nuget.org, push rights for `gclo.Engine`) | `gclo.Engine` on nuget.org |
 
 Why `DEPS_PAT`: a pull request opened with the default `GITHUB_TOKEN` triggers no
@@ -75,7 +77,7 @@ status checks, so the packaging PR could never satisfy `main`'s required checks.
 `wingetcreate update` can only update a package that already exists in
 [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs). The first
 submission is done by hand, once, after the first stable GitHub release exists
-(the `winget` job of that release fails, by design, until the variable is set):
+(until `WINGET_PACKAGE_ID` is set the `winget` job does not run):
 
 ```powershell
 # From any Windows machine:
@@ -87,9 +89,9 @@ Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
 ```
 
 Once that first PR is merged and the package is live, set the repository variable
-`WINGET_PACKAGE_ID=KofTwentyTwo.gclo` and the `WINGET_TOKEN` secret, re-run the
-failed `winget` job, and every later stable release updates the manifest
-automatically.
+`WINGET_PACKAGE_ID=KofTwentyTwo.gclo` and the `WINGET_TOKEN` secret. Re-running the
+`winget` job of the bootstrapped release is not needed (it is already in winget);
+every later stable release updates the manifest automatically.
 
 ## Scoop and Chocolatey
 

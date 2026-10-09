@@ -14,10 +14,15 @@
 #              builder (SLSA Build L3, K22-CI-30).
 #   packages - stable only: Scoop and Chocolatey manifests pointed at the release,
 #              Chocolatey package pushed, manifests proposed as a PR against main
-#   winget   - stable only: manifest update submitted to microsoft/winget-pkgs
+#   winget   - stable only, once WINGET_PACKAGE_ID is set: manifest update
+#              submitted to microsoft/winget-pkgs
 #   nuget    - only when the repository variable NUGET_PUBLISH is 'true'
 #
-# A publishing job that cannot publish FAILS; nothing is skipped quietly. The
+# A publishing job that cannot publish FAILS; nothing is skipped quietly. winget
+# is the one explicit opt-in: `wingetcreate update` needs a package that already
+# exists in microsoft/winget-pkgs, and the first submission is manual and needs a
+# published stable installer, so the job runs once the WINGET_PACKAGE_ID variable
+# is set (docs/RELEASING.md) and fails if the token is missing from then on. The
 # tokens live in the `release` environment, which only v* tags can use:
 #   DEPS_PAT        fine-grained token: contents + pull requests (write) on this
 #                   repository, so the packaging PR runs the required checks
@@ -25,8 +30,8 @@
 #   WINGET_TOKEN    fine-grained token that can fork and open pull requests on
 #                   public repositories (microsoft/winget-pkgs)
 #   NUGET_API_KEY   nuget.org key with push rights for gclo.Engine (NUGET_PUBLISH)
-# and the repository variable WINGET_PACKAGE_ID (set after the one-time manual
-# `wingetcreate new`, docs/RELEASING.md).
+# plus the repository variable WINGET_PACKAGE_ID (KofTwentyTwo.gclo, set after the
+# one-time manual `wingetcreate new`).
 name: Release
 
 on:
@@ -195,15 +200,16 @@ jobs:
             packaging/chocolatey/gclo.nuspec
             packaging/chocolatey/tools/chocolateyinstall.ps1
 
-  # winget, stable releases only. `wingetcreate update` can only update a package
-  # that already exists in microsoft/winget-pkgs: the first submission is manual
-  # (docs/RELEASING.md), after which WINGET_PACKAGE_ID is set and this job keeps
-  # the manifest current. The job lives here, not in the shared workflow, because
-  # its token belongs to this repository's `release` environment.
+  # winget, stable releases only, once the package exists. `wingetcreate update`
+  # can only update a package that already exists in microsoft/winget-pkgs; the
+  # first submission is manual (docs/RELEASING.md), after which WINGET_PACKAGE_ID
+  # is set and this job keeps the manifest current (re-run it on the release that
+  # was bootstrapped). The job lives here, not in the shared workflow, because its
+  # token belongs to this repository's `release` environment.
   winget:
     name: winget
     needs: release
-    if: needs.release.outputs.prerelease == 'false'
+    if: needs.release.outputs.prerelease == 'false' && vars.WINGET_PACKAGE_ID != ''
     runs-on: windows-latest
     timeout-minutes: 15
     environment: release
@@ -219,9 +225,9 @@ jobs:
           WINGETCREATE_VERSION: v1.12.13.0
           WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea
         run: |
-          if ([string]::IsNullOrEmpty($env:WINGET_PACKAGE_ID) -or [string]::IsNullOrEmpty($env:WINGET_TOKEN))
+          if ([string]::IsNullOrEmpty($env:WINGET_TOKEN))
           {
-             Write-Output '::error::WINGET_PACKAGE_ID (repository variable) and WINGET_TOKEN (release environment secret) are required. Bootstrap the package with `wingetcreate new` (docs/RELEASING.md), set both, and re-run this job.'
+             Write-Output '::error::WINGET_PACKAGE_ID is set but WINGET_TOKEN is missing from the release environment. Add it and re-run this job.'
              exit 1
           }
           # A pinned release asset, verified against its committed SHA-256, instead
