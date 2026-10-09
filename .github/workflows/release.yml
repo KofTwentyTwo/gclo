@@ -1,10 +1,37 @@
-# Release pipeline, triggered by pushing a tag that starts with 'v'.
+# Release pipeline, triggered by pushing a tag that starts with 'v'
+# (docs/RELEASING.md is the runbook).
 #
 #   v1.2.3        -> stable release  -> Velopack channel 'stable'
 #   v1.2.3-beta.1 -> prerelease      -> Velopack channel 'dev'
 #
-# See docs/RELEASING.md for the full release runbook, including the secrets that
-# enable the optional NuGet and winget steps.
+# Stages, each gated on the previous one:
+#   verify   - the tag is strict semver and its commit is on main
+#   gates    - the full ci workflow, exactly as a pull request runs it (K22-CI-31)
+#   release  - the KofTwentyTwo standards' shared Velopack workflow: locked restore,
+#              Release build, tests and coverage gate, publish, vpk pack, SBOMs,
+#              SHA256SUMS, provenance, draft-then-publish GitHub release. The build
+#              runs inside the shared workflow, so the provenance names it as the
+#              builder (SLSA Build L3, K22-CI-30).
+#   packages - stable only: Scoop and Chocolatey manifests pointed at the release,
+#              Chocolatey package pushed, manifests proposed as a PR against main
+#   winget   - stable only, once WINGET_PACKAGE_ID is set: manifest update
+#              submitted to microsoft/winget-pkgs
+#   nuget    - only when the repository variable NUGET_PUBLISH is 'true'
+#
+# A publishing job that cannot publish FAILS; nothing is skipped quietly. winget
+# is the one explicit opt-in: `wingetcreate update` needs a package that already
+# exists in microsoft/winget-pkgs, and the first submission is manual and needs a
+# published stable installer, so the job runs once the WINGET_PACKAGE_ID variable
+# is set (docs/RELEASING.md) and fails if the token is missing from then on. The
+# tokens live in the `release` environment, which only v* tags can use:
+#   DEPS_PAT        fine-grained token: contents + pull requests (write) on this
+#                   repository, so the packaging PR runs the required checks
+#   CHOCO_API_KEY   chocolatey.org API key
+#   WINGET_TOKEN    fine-grained token that can fork and open pull requests on
+#                   public repositories (microsoft/winget-pkgs)
+#   NUGET_API_KEY   nuget.org key with push rights for gclo.Engine (NUGET_PUBLISH)
+# plus the repository variable WINGET_PACKAGE_ID (KofTwentyTwo.gclo, set after the
+# one-time manual `wingetcreate new`).
 name: Release
 
 on:
@@ -12,15 +39,7 @@ on:
     tags:
       - 'v*'
 
-# Three stages, each gated on the previous:
-#   verify  - the tag must be strict semver AND its commit must be on main
-#   gates   - the full CI workflow (build, 100% coverage, format; UI smoke advisory)
-#   release - package and publish; only runs when both stages succeeded
-#
-# Read-only by default; only the release job gets contents: write, which vpk
-# and gh need to create the GitHub Release and upload assets to it.
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -29,12 +48,10 @@ concurrency:
 jobs:
   verify:
     name: Verify tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
-      channel: ${{ steps.version.outputs.channel }}
+    permissions:
+      contents: read
     steps:
       - name: Checkout (full history, so main's ancestry can be checked)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,32 +59,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Derive version from tag
-        id: version
-        shell: pwsh
-        run: |
-          $tag = $env:GITHUB_REF_NAME
-          # Strict semver 2.0 (major.minor.patch with optional prerelease
-          # identifiers). Build metadata ('+...') is deliberately rejected: it
-          # is not meaningful to NuGet or Velopack asset naming.
-          $semverPattern = '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$'
-          if ($tag -notmatch $semverPattern) {
-            Write-Error "Tag '$tag' is not a valid release tag. Expected vMAJOR.MINOR.PATCH with an optional prerelease suffix, e.g. v1.2.3 or v1.2.3-beta.1."
-            exit 1
-          }
-          $version = $tag.Substring(1)
-          $prerelease = $version.Contains('-')
-          $channel = if ($prerelease) { 'dev' } else { 'stable' }
-          Write-Host "Tag: $tag | Version: $version | Prerelease: $prerelease | Velopack channel: $channel"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "prerelease=$($prerelease.ToString().ToLower())"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "channel=$channel"
-
-      # Releases are cut from main (docs/RELEASING.md). A tag anywhere else -
-      # a feature branch, an unmerged dev commit, a detached experiment - would
-      # otherwise publish an immutable release that never passed main's gates.
-      # To exercise the failure path, push a 'v*' tag on a commit that is not
-      # on main: this step fails and nothing downstream runs.
+      # Releases are cut from main. A tag anywhere else (a feature branch, a
+      # detached experiment) would otherwise publish an immutable release that
+      # never passed main's gates. The shared workflow validates the tag's
+      # format itself.
       - name: Require the tagged commit to be on main
         shell: bash
         run: |
@@ -81,274 +76,91 @@ jobs:
           fi
 
   # The same gates a pull request must pass (K22-CI-31): zero-warning x64 build,
-  # 100% line coverage on Engine/ViewModels/Cli, and formatting; the security
-  # scans and CodeQL run on the tagged commit when it reached main. If any of those fails, this
-  # job fails and release is skipped. The FlaUI UI smoke suite runs too but is
-  # advisory here, exactly as it is not a required check on main: hosted-runner UI
-  # automation is not yet proven stable enough to hold an immutable tag hostage.
-  # Documented exception per #44; flip ui-tests-advisory to false (and add the job
-  # to main's required checks) once the suite has earned it.
+  # 100% line coverage, formatting, and the FlaUI end-to-end suite.
   gates:
     name: Gates
     needs: verify
     uses: ./.github/workflows/ci.yml
-    with:
-      ui-tests-advisory: true
+    permissions:
+      contents: read
 
   release:
-    name: Build, package, and publish
+    name: Release
     needs: [verify, gates]
-    runs-on: windows-latest
-    timeout-minutes: 90
+    uses: KofTwentyTwo/standards/.github/workflows/release-velopack.yml@e8ab30f8c60df437440ffd786c87678207246f5c # main 2026-10-09 (pre-1.0 draft, standards#5)
     permissions:
-      contents: write
-      # Build provenance attestations for the published assets.
-      id-token: write
-      attestations: write
+      contents: write      # create and publish the GitHub release
+      id-token: write      # sign attestations; Azure OIDC when signing
+      attestations: write  # store attestations
+    with:
+      solution: gclo.slnx
+      app-project: gclo/gclo.csproj
+      app-id: gclo
+      main-exe: gclo.exe
+      icon: gclo/Assets/Brand/gclo.ico
+      platform: x64
+      runtime: win-x64
+      coverage-packages: gclo.Engine,gclo.ViewModels,gclo
+      coverage-minimum: 100
+      test-projects: |
+        gclo.Engine.Tests
+        gclo.Cli.Tests
+      cli-project: gclo.Cli/gclo.Cli.csproj
+      sign: false # standards exception EX-0002 (#57): true once the Azure Trusted Signing identity is validated
+
+  # Scoop and Chocolatey (#9), stable releases only. The repository is its own
+  # Scoop bucket (bucket/gclo.json) and ships the Chocolatey package source
+  # (packaging/chocolatey). Both are pointed at this release's CLI zip; the
+  # Chocolatey package is pushed, and the updated manifests are proposed as a
+  # pull request against main, where Scoop reads bucket/gclo.json from.
+  packages:
+    name: Scoop and Chocolatey
+    needs: release
+    if: needs.release.outputs.prerelease == 'false'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
     env:
-      REPO_URL: https://github.com/KofTwentyTwo/gclo
-      # The verify job's outputs, as plain environment variables: run: scripts
-      # read these instead of interpolating ${{ }} expressions (K22-CI-12).
-      VERSION: ${{ needs.verify.outputs.version }}
-      PRERELEASE: ${{ needs.verify.outputs.prerelease }}
-      CHANNEL: ${{ needs.verify.outputs.channel }}
-      # SBOM generator (CycloneDX for .NET), pinned like the other release tooling.
-      CYCLONEDX_VERSION: 6.2.0
-      # Pinned release tooling. vpk builds the installer and packages users
-      # receive and wingetcreate is a binary fetched at run time; neither may
-      # float. Bump deliberately, together with the Velopack package reference.
-      VPK_VERSION: 1.2.161
-      WINGETCREATE_VERSION: v1.12.13.0
-      WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea
-    # The publishing secrets (NUGET_API_KEY, WINGET_TOKEN) are NOT job-level env:
-    # only the two steps that publish receive them, so nothing executed by the
-    # build, the tests, vpk, or wingetcreate's download can read them.
+      K22_VERSION: ${{ needs.release.outputs.version }}
+      TAG: ${{ github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # No restore cache here (K22-CI-15): a release never builds from a cache a
-      # pull request run could have written.
-      - name: Set up .NET SDK
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          global-json-file: global.json
-
-      # ----------------------------------------------------------------------
-      # (a) CLI: self-contained single-file publish, zipped as a release asset.
-      # ----------------------------------------------------------------------
-      - name: Publish CLI (win-x64, single file)
-        run: dotnet publish gclo.Cli -c Release -r win-x64 --self-contained -p:Version=$env:VERSION -p:PublishSingleFile=true -p:RestoreLockedMode=true -o publish/cli
-
-      # Released artifacts carry the license (K22-REPO-01).
-      - name: Zip CLI
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          Copy-Item LICENSE publish/cli/LICENSE
-          Compress-Archive -Path publish/cli/* -DestinationPath artifacts/gclo-cli-win-x64.zip
-
-      # ----------------------------------------------------------------------
-      # (b) WinUI app: unpackaged (no MSIX) self-contained publish, then
-      # packaged with Velopack. vpk upload creates the GitHub Release itself
-      # and attaches the Setup, portable, and delta assets to it.
-      # ----------------------------------------------------------------------
-      - name: Publish app for Velopack (unpackaged win-x64)
-        run: dotnet publish gclo/gclo.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained -p:Version=$env:VERSION -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true -p:PublishTrimmed=false -p:RestoreLockedMode=true -o publish/app
-
-      - name: Add the license to the app payload
-        shell: pwsh
-        run: Copy-Item LICENSE publish/app/LICENSE
-
-      - name: Install Velopack CLI
-        run: dotnet tool install -g vpk --version $env:VPK_VERSION
-
-      - name: Download previous Velopack release (delta baseline)
-        # The very first release on a channel has nothing to download; that is
-        # fine - vpk pack simply produces no delta package - so a failure here
-        # must not fail the release.
-        continue-on-error: true
+      # The secrets context cannot be read in `if`; this step is the only one
+      # besides the publishers that sees the values, and it never prints them.
+      - name: Require the publishing secrets
         shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          $preFlag = @()
-          if ($env:PRERELEASE -eq 'true') { $preFlag = @('--pre') }
-          vpk download github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel $env:CHANNEL @preFlag
-
-      - name: Velopack pack
-        run: vpk pack --packId gclo --packVersion $env:VERSION --packDir publish/app --mainExe gclo.exe --channel $env:CHANNEL --icon gclo/Assets/Brand/gclo.ico
-
-      # ----------------------------------------------------------------------
-      # SBOM (K22-REL-06): one CycloneDX document per shipped artifact, from the
-      # resolved dependency graph of the project that produced it. File names
-      # carry the version (K22-REL-03).
-      # ----------------------------------------------------------------------
-      - name: Install CycloneDX
-        run: dotnet tool install -g CycloneDX --version $env:CYCLONEDX_VERSION
-
-      - name: Generate SBOMs
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path artifacts/sbom | Out-Null
-          dotnet CycloneDX gclo.Cli/gclo.Cli.csproj --output artifacts/sbom --filename "gclo-cli-win-x64-$env:VERSION.cdx.json" --output-format Json --spec-version 1.6 --set-name gclo-cli --set-version $env:VERSION --set-type Application --exclude-test-projects --disable-package-restore
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet CycloneDX gclo/gclo.csproj --output artifacts/sbom --filename "gclo-app-$env:VERSION.cdx.json" --output-format Json --spec-version 1.6 --set-name gclo --set-version $env:VERSION --set-type Application --exclude-test-projects --disable-package-restore
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-ChildItem artifacts/sbom
-
-      # SHA256SUMS (K22-REL-04): one line per asset ('<sha256> *<name>'), so users
-      # and the Scoop autoupdate can verify downloads without computing hashes by
-      # hand. Fixed-name channel assets (the update feed) are listed too (K22-REL-03).
-      - name: Write SHA256SUMS
-        shell: pwsh
-        run: |
-          $files = @(Get-Item artifacts/gclo-cli-win-x64.zip) + @(Get-ChildItem artifacts/sbom -File) + @(Get-ChildItem Releases -File | Where-Object { $_.Extension -in '.exe', '.zip', '.nupkg', '.json' })
-          $lines = $files | ForEach-Object { "{0} *{1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name }
-          [System.IO.File]::WriteAllText("artifacts/SHA256SUMS", ($lines -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
-          Get-Content artifacts/SHA256SUMS
-
-      # Provenance: a signed statement that THIS workflow run built these exact
-      # bytes, verifiable with `gh attestation verify <file> -R KofTwentyTwo/gclo`.
-      # Not a code signature (K22 exception EX-0002, #57); it makes a release
-      # attributable to the workflow rather than only to whoever holds the account.
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
-        with:
-          subject-path: |
-            artifacts/gclo-cli-win-x64.zip
-            artifacts/SHA256SUMS
-            artifacts/sbom/*.cdx.json
-            Releases/*.exe
-            Releases/*.zip
-            Releases/*.nupkg
-
-      - name: Attest the CLI SBOM
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
-        with:
-          subject-path: artifacts/gclo-cli-win-x64.zip
-          sbom-path: artifacts/sbom/gclo-cli-win-x64-${{ needs.verify.outputs.version }}.cdx.json
-
-      - name: Attest the app SBOM
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
-        with:
-          subject-path: |
-            Releases/*.exe
-            Releases/*.zip
-            Releases/*.nupkg
-          sbom-path: artifacts/sbom/gclo-app-${{ needs.verify.outputs.version }}.cdx.json
-
-      # This repo has immutable releases: assets freeze the moment a release is
-      # PUBLISHED. So vpk creates a DRAFT (no --publish), every asset and the
-      # changelog land while it is still mutable, and publishing happens last.
-      - name: Velopack upload (creates a draft GitHub Release)
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          $preFlag = @()
-          if ($env:PRERELEASE -eq 'true') { $preFlag = @('--pre') }
-          vpk upload github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel $env:CHANNEL --releaseName "gclo $env:VERSION" --tag $env:GITHUB_REF_NAME @preFlag
-
-      - name: Attach the CLI zip, checksums, and SBOMs to the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload $env:GITHUB_REF_NAME artifacts/gclo-cli-win-x64.zip artifacts/SHA256SUMS (Get-ChildItem artifacts/sbom -File).FullName --clobber
-
-      # Release notes from the Conventional Commit titles merged since the previous
-      # release, breaking changes and security fixes first (K22-REL-02).
-      - name: Generate release notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          ./.github/scripts/New-ReleaseNotes.ps1 -Tag $env:GITHUB_REF_NAME -Repository $env:REPOSITORY -OutputPath notes.md
-          Get-Content notes.md
-          gh release edit $env:GITHUB_REF_NAME --notes-file notes.md
-
-      - name: Publish the completed release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit $env:GITHUB_REF_NAME --draft=false
-
-      # ----------------------------------------------------------------------
-      # (c) NuGet: pack gclo.Engine and push to nuget.org - only when the
-      # NUGET_API_KEY secret is configured on the repository.
-      # ----------------------------------------------------------------------
-      # ContinuousIntegrationBuild normalizes the embedded source paths so the
-      # package is deterministic and SourceLink step-through works; the .snupkg
-      # beside it carries the symbols.
-      - name: Pack gclo.Engine
-        run: dotnet pack gclo.Engine -c Release -p:Version=$env:VERSION -p:ContinuousIntegrationBuild=true -p:RestoreLockedMode=true -o artifacts/nuget
-
-      # The secrets context is not available in a step's `if`, so one step turns
-      # "is it configured?" into outputs; it is the only step besides the two
-      # publishers that sees the values, and it never prints them.
-      - name: Check which optional publishing secrets are configured
-        id: secrets
-        shell: pwsh
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          DEPS_PAT: ${{ secrets.DEPS_PAT }}
           CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
         run: |
-          Add-Content -Path $env:GITHUB_OUTPUT -Value ("nuget=" + (-not [string]::IsNullOrEmpty($env:NUGET_API_KEY)).ToString().ToLower())
-          Add-Content -Path $env:GITHUB_OUTPUT -Value ("winget=" + (-not [string]::IsNullOrEmpty($env:WINGET_TOKEN)).ToString().ToLower())
-          Add-Content -Path $env:GITHUB_OUTPUT -Value ("choco=" + (-not [string]::IsNullOrEmpty($env:CHOCO_API_KEY)).ToString().ToLower())
+          $missing = @('DEPS_PAT', 'CHOCO_API_KEY') | Where-Object { [string]::IsNullOrEmpty((Get-Item -Path "env:$_" -ErrorAction SilentlyContinue).Value) }
+          if ($missing)
+          {
+             Write-Output "::error::Missing in the release environment: $($missing -join ', '). Add them (docs/RELEASING.md) and re-run this job."
+             exit 1
+          }
 
-      - name: Push gclo.Engine to nuget.org
-        if: steps.secrets.outputs.nuget == 'true'
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-        run: dotnet nuget push "artifacts/nuget/*.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
-
-      # ----------------------------------------------------------------------
-      # (d) winget: update the KofTwentyTwo.gclo manifest for STABLE releases
-      # only, and only when the WINGET_TOKEN secret is configured.
-      #
-      # NOTE: the FIRST winget submission cannot be automated with `update` -
-      # the package must already exist in microsoft/winget-pkgs. Bootstrap it
-      # once manually with `wingetcreate new <Setup.exe url>` (see
-      # docs/RELEASING.md), then this step keeps it current.
-      # ----------------------------------------------------------------------
-      - name: Submit winget manifest update
-        if: needs.verify.outputs.prerelease == 'false' && steps.secrets.outputs.winget == 'true'
+      - name: Download the CLI zip from the published release
         shell: pwsh
         env:
-          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # A pinned release asset, verified against its committed SHA-256, instead
-          # of whatever https://aka.ms/wingetcreate/latest redirects to today.
-          $url = "https://github.com/microsoft/winget-create/releases/download/$env:WINGETCREATE_VERSION/wingetcreate.exe"
-          Invoke-WebRequest $url -OutFile wingetcreate.exe
-          $actual = (Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $env:WINGETCREATE_SHA256) {
-            Write-Error "wingetcreate.exe hash mismatch: expected $env:WINGETCREATE_SHA256, got $actual"
-            exit 1
-          }
-          # Velopack names the installer '<packId>-<channel>-Setup.exe'.
-          $setupUrl = "$env:REPO_URL/releases/download/$env:GITHUB_REF_NAME/gclo-stable-Setup.exe"
-          .\wingetcreate.exe update KofTwentyTwo.gclo --urls $setupUrl --version $env:VERSION --submit --token $env:WINGET_TOKEN
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          gh release download $env:TAG --pattern "gclo-cli-win-x64-$env:K22_VERSION.zip" --dir artifacts
+          Get-ChildItem artifacts
 
-      # ----------------------------------------------------------------------
-      # (e) Scoop + Chocolatey (#9), STABLE releases only. The repository is its
-      # own Scoop bucket (bucket/gclo.json) and ships the Chocolatey package
-      # source (packaging/chocolatey). Both are pointed at this release's CLI
-      # zip; the Chocolatey package is pushed when CHOCO_API_KEY is configured,
-      # and the updated manifests are proposed as a pull request against main,
-      # where Scoop reads bucket/gclo.json from. (With only GITHUB_TOKEN the PR
-      # triggers no checks; DEPS_PAT fixes that, see #7.)
-      # ----------------------------------------------------------------------
       - name: Point the Scoop and Chocolatey manifests at this release
-        if: needs.verify.outputs.prerelease == 'false'
         id: manifests
         shell: pwsh
-        run: ./.github/scripts/Update-PackageManifests.ps1 -Version $env:VERSION -CliZipPath artifacts/gclo-cli-win-x64.zip
+        run: ./.github/scripts/Update-PackageManifests.ps1 -Version $env:K22_VERSION -CliZipPath "artifacts/gclo-cli-win-x64-$env:K22_VERSION.zip"
 
       - name: Pack the Chocolatey package
-        if: needs.verify.outputs.prerelease == 'false'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts/chocolatey | Out-Null
@@ -356,31 +168,29 @@ jobs:
           Get-ChildItem artifacts/chocolatey
 
       - name: Push the Chocolatey package
-        if: needs.verify.outputs.prerelease == 'false' && steps.secrets.outputs.choco == 'true'
         shell: pwsh
         env:
           CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
         run: choco push (Get-ChildItem artifacts/chocolatey/*.nupkg | Select-Object -First 1).FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
 
       - name: Open a PR with the updated package manifests
-        if: needs.verify.outputs.prerelease == 'false'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ secrets.DEPS_PAT || github.token }}
+          token: ${{ secrets.DEPS_PAT }}
           base: main
-          branch: packaging/v${{ needs.verify.outputs.version }}
+          branch: packaging/v${{ needs.release.outputs.version }}
           delete-branch: true
-          commit-message: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.verify.outputs.version }}'
-          title: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.verify.outputs.version }}'
+          commit-message: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.release.outputs.version }}'
+          title: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.release.outputs.version }}'
           body: |
             Generated by the Release workflow for tag `${{ github.ref_name }}`.
 
             - `bucket/gclo.json` (Scoop) and `packaging/chocolatey` now point at
-              `gclo-cli-win-x64.zip` of v${{ needs.verify.outputs.version }}
+              `gclo-cli-win-x64-${{ needs.release.outputs.version }}.zip`
               (SHA-256 `${{ steps.manifests.outputs.sha256 }}`).
             - `scoop update gclo` picks this up as soon as this PR is merged (Scoop
-              reads the manifest from `main`); the Chocolatey package
-              was ${{ steps.secrets.outputs.choco == 'true' && 'pushed to chocolatey.org' || 'packed but not pushed (CHOCO_API_KEY not configured)' }}.
+              reads the manifest from `main`); the Chocolatey package was pushed to
+              chocolatey.org.
 
             Relates to #9.
           labels: |
@@ -389,3 +199,87 @@ jobs:
             bucket/gclo.json
             packaging/chocolatey/gclo.nuspec
             packaging/chocolatey/tools/chocolateyinstall.ps1
+
+  # winget, stable releases only, once the package exists. `wingetcreate update`
+  # can only update a package that already exists in microsoft/winget-pkgs; the
+  # first submission is manual (docs/RELEASING.md), after which WINGET_PACKAGE_ID
+  # is set and this job keeps the manifest current (re-run it on the release that
+  # was bootstrapped). The job lives here, not in the shared workflow, because its
+  # token belongs to this repository's `release` environment.
+  winget:
+    name: winget
+    needs: release
+    if: needs.release.outputs.prerelease == 'false' && vars.WINGET_PACKAGE_ID != ''
+    runs-on: windows-latest
+    timeout-minutes: 15
+    environment: release
+    permissions: {}
+    steps:
+      - name: Submit winget manifest update
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          WINGET_PACKAGE_ID: ${{ vars.WINGET_PACKAGE_ID }}
+          K22_VERSION: ${{ needs.release.outputs.version }}
+          SETUP_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ needs.release.outputs.setup }}
+          WINGETCREATE_VERSION: v1.12.13.0
+          WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINGET_TOKEN))
+          {
+             Write-Output '::error::WINGET_PACKAGE_ID is set but WINGET_TOKEN is missing from the release environment. Add it and re-run this job.'
+             exit 1
+          }
+          # A pinned release asset, verified against its committed SHA-256, instead
+          # of whatever https://aka.ms/wingetcreate/latest redirects to today.
+          $wingetcreate = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
+          Invoke-WebRequest -Uri "https://github.com/microsoft/winget-create/releases/download/$env:WINGETCREATE_VERSION/wingetcreate.exe" -OutFile $wingetcreate
+          $actual = (Get-FileHash -LiteralPath $wingetcreate -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:WINGETCREATE_SHA256)
+          {
+             Write-Output "::error::wingetcreate.exe hash mismatch: expected $env:WINGETCREATE_SHA256, got $actual"
+             exit 1
+          }
+          & $wingetcreate update $env:WINGET_PACKAGE_ID --urls $env:SETUP_URL --version $env:K22_VERSION --submit --token $env:WINGET_TOKEN
+
+  # gclo.Engine on nuget.org: opt-in through the repository variable NUGET_PUBLISH
+  # (the library has no published consumers yet). Once opted in, a missing key fails.
+  nuget:
+    name: NuGet (gclo.Engine)
+    needs: release
+    if: vars.NUGET_PUBLISH == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+    env:
+      K22_VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      # ContinuousIntegrationBuild normalizes the embedded source paths so the
+      # package is deterministic and SourceLink step-through works.
+      - name: Pack gclo.Engine
+        shell: pwsh
+        run: dotnet pack gclo.Engine -c Release "-p:Version=$env:K22_VERSION" -p:ContinuousIntegrationBuild=true -p:RestoreLockedMode=true -o artifacts/nuget
+
+      - name: Push gclo.Engine to nuget.org
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:NUGET_API_KEY))
+          {
+             Write-Output '::error::NUGET_PUBLISH is true but NUGET_API_KEY is not in the release environment.'
+             exit 1
+          }
+          dotnet nuget push "artifacts/nuget/*.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate

@@ -6,6 +6,8 @@
     <!-- The release publishes win-x64; declaring it keeps that runtime graph in
          packages.lock.json so the publish can restore in locked mode. -->
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!-- Always on, so the lock file matches the single-file release publish (see gclo.Engine.csproj). -->
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>gclo</AssemblyName>
@@ -22,6 +24,11 @@
   <ItemGroup>
     <!-- The test suite drives internal command cores with injected collaborators. -->
     <InternalsVisibleTo Include="gclo.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Released artifacts carry the license (K22-REPO-01); kept beside the single-file exe. -->
+    <Content Include="..\LICENSE" Link="LICENSE" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>

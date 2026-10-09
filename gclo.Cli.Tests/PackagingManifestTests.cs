@@ -38,6 +38,18 @@ public sealed class PackagingManifestTests
 
 
 
+   /// <summary>
+   /// The release asset the manifests install: releases up to 1.0.0 shipped it as
+   /// gclo-cli-win-x64.zip, the shared release workflow names it with the version.
+   /// </summary>
+   private static string CliZipUrlPattern(string version)
+   {
+      string v = Regex.Escape(version);
+      return $@"^https://github\.com/KofTwentyTwo/gclo/releases/download/v{v}/gclo-cli-win-x64(-{v})?\.zip$";
+   }
+
+
+
    private static (string Version, string Url, string Hash) ReadScoop()
    {
       using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(RepoRoot, "bucket", "gclo.json")));
@@ -47,7 +59,7 @@ public sealed class PackagingManifestTests
       Assert.Equal("MIT", root.GetProperty("license").GetString());
       Assert.Equal("github", root.GetProperty("checkver").GetString());
       string autoupdateUrl = root.GetProperty("autoupdate").GetProperty("architecture").GetProperty("64bit").GetProperty("url").GetString()!;
-      Assert.Contains("v$version/gclo-cli-win-x64.zip", autoupdateUrl);
+      Assert.Contains("v$version/gclo-cli-win-x64-$version.zip", autoupdateUrl);
       Assert.EndsWith("/SHA256SUMS", root.GetProperty("autoupdate").GetProperty("architecture").GetProperty("64bit").GetProperty("hash").GetProperty("url").GetString());
       return (root.GetProperty("version").GetString()!, x64.GetProperty("url").GetString()!, x64.GetProperty("hash").GetString()!);
    }
@@ -78,7 +90,7 @@ public sealed class PackagingManifestTests
       (string? version, string? url, string? hash) = ReadScoop();
 
       Assert.Matches(@"^\d+\.\d+\.\d+$", version); // package managers get stable releases only
-      Assert.Equal($"https://github.com/KofTwentyTwo/gclo/releases/download/v{version}/gclo-cli-win-x64.zip", url);
+      Assert.Matches(CliZipUrlPattern(version), url);
       Assert.Matches(s_sha256, hash);
    }
 
@@ -90,7 +102,7 @@ public sealed class PackagingManifestTests
       (string? version, string? url, string? hash) = ReadChocolatey();
 
       Assert.Matches(@"^\d+\.\d+\.\d+$", version);
-      Assert.Equal($"https://github.com/KofTwentyTwo/gclo/releases/download/v{version}/gclo-cli-win-x64.zip", url);
+      Assert.Matches(CliZipUrlPattern(version), url);
       Assert.Matches(s_sha256, hash);
    }
 

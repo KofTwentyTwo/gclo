@@ -52,7 +52,7 @@ MAJOR's last MINOR receives security fixes for 6 months. There are no maintenanc
 branches beyond that.
 
 Installed desktop builds update in place via **Help → Check for updates**; the CLI is
-updated by downloading the latest `gclo-cli-win-x64.zip` from the
+updated by downloading the latest `gclo-cli-win-x64-<version>.zip` from the
 [releases page](https://github.com/KofTwentyTwo/gclo/releases) or through Scoop.
 
 ## Published vulnerabilities

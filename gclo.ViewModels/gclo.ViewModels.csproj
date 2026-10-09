@@ -9,6 +9,14 @@
   </ItemGroup>
 
   <PropertyGroup>
+    <!--
+      Keeps the restore graph identical between a plain build and the release publish
+      (runtime win-x64, self-contained, single file), so the lock files pass
+      locked mode in both: the RID graph is always present, and the single-file
+      analyzer (which pulls Microsoft.NET.ILLink.Tasks) is always on.
+    -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
