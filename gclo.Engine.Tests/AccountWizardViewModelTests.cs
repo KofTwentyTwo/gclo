@@ -259,11 +259,13 @@ public sealed class AccountWizardViewModelTests : IDisposable
 
         Assert.False(await wizard.TryAdvanceAsync());
         Assert.Equal(3, wizard.Step);
+        Assert.Equal("Choose an organization from the list, or type one.", wizard.OrganizationError);
 
         wizard.Organization = "acme";
         Assert.True(await wizard.TryAdvanceAsync());
         Assert.Equal(4, wizard.Step);
         Assert.True(wizard.IsLastStep);
+        Assert.Equal("", wizard.OrganizationError);
     }
 
     [Fact]
@@ -274,6 +276,45 @@ public sealed class AccountWizardViewModelTests : IDisposable
 
         Assert.False(await wizard.TryAdvanceAsync());
         Assert.Equal(4, wizard.Step);
+        Assert.Equal("Choose a target folder.", wizard.TargetError);
+
+        wizard.TargetRoot = @"C:\repos";
+        Assert.True(await wizard.TryAdvanceAsync());
+        Assert.Equal("", wizard.TargetError);
+    }
+
+    [Fact]
+    public async Task SeededWizard_CarriesTheQuickSyncConnectionOver_AndSavesItsToken()
+    {
+        var seed = new AccountWizardSeed("ghp_quick", "acme", @"C:\src", CreateOrgSubfolder: true, MaxConcurrency: 12);
+        var wizard = new AccountWizardViewModel(_store, _orgs, seed);
+
+        Assert.Equal(1, wizard.Step);
+        Assert.False(wizard.IsEditing);
+        Assert.Equal("", wizard.Name);
+        Assert.Equal("ghp_quick", wizard.Token);
+        Assert.Equal("acme", wizard.Organization);
+        Assert.Equal(@"C:\src", wizard.TargetRoot);
+        Assert.True(wizard.CreateOrgSubfolder);
+        Assert.Equal(12, wizard.MaxConcurrency);
+        Assert.DoesNotContain("ghp_quick", seed.ToString());
+        Assert.Contains("[redacted]", seed.ToString());
+
+        wizard.Name = "Saved from Quick Sync";
+        await AdvanceToStepAsync(wizard, 4);
+        Assert.True(await wizard.TryAdvanceAsync());
+        await wizard.SaveAsync();
+
+        var saved = Assert.Single(_store.GetAll());
+        Assert.Equal("acme", saved.Organization);
+        Assert.Equal(12, saved.MaxConcurrency);
+        Assert.Equal("ghp_quick", _vault.TryRetrieve(saved.Id));
+    }
+
+    [Fact]
+    public void SeededWizard_NullSeed_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => new AccountWizardViewModel(_store, _orgs, (AccountWizardSeed)null!));
     }
 
     [Fact]

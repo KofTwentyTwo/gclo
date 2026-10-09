@@ -265,8 +265,15 @@ public sealed class LibGit2GitClientTests : IDisposable
         CommitFile(source, "from-remote.txt", "remote change", "remote commit");
         CommitFile(target, "from-local.txt", "local change", "local commit");
 
-        await Assert.ThrowsAsync<NonFastForwardException>(
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+
+        // Actionable, not libgit2's "cannot fast-forward": names the branch, says what
+        // gclo refuses to do, and gives the three ways out (#30).
+        Assert.Contains("local commits that origin does not have", ex.Message);
+        Assert.Contains("never merges", ex.Message);
+        Assert.Contains("re-clone", ex.Message);
+        Assert.IsType<NonFastForwardException>(ex.InnerException);
     }
 
     [Fact]
@@ -286,6 +293,7 @@ public sealed class LibGit2GitClientTests : IDisposable
             () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
 
         Assert.Contains("detached", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Check out a branch", ex.Message);
     }
 
     [Fact]

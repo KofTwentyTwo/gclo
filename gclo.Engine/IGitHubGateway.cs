@@ -36,6 +36,31 @@ internal interface IGitHubGateway
 }
 
 /// <summary>
+/// One <see cref="OctokitGateway"/> per token, shared by both listers for the life of
+/// the process, so successive org lookups and repository loads ride one warm HTTP
+/// connection instead of paying a DNS + TCP + TLS handshake to api.github.com on
+/// every interactive action (#30). Octokit clients are thread-safe for concurrent
+/// requests with fixed credentials. Bounded: tokens are rotated rarely, so when the
+/// cache grows past a handful of entries it is simply emptied.
+/// </summary>
+[ExcludeFromCodeCoverage(Justification = "Holds live Octokit clients; the offline suite injects fake gateways.")]
+internal static class OctokitGatewayCache
+{
+    private const int MaxEntries = 8;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, OctokitGateway> Gateways =
+        new(StringComparer.Ordinal);
+
+    public static IGitHubGateway Get(string token)
+    {
+        if (Gateways.Count >= MaxEntries && !Gateways.ContainsKey(token))
+        {
+            Gateways.Clear();
+        }
+        return Gateways.GetOrAdd(token, static t => new OctokitGateway(t));
+    }
+}
+
+/// <summary>
 /// The production <see cref="IGitHubGateway"/> over Octokit. Pure delegation with
 /// no branching of its own, which is why it is excluded from the coverage gate:
 /// exercising these lines requires the live GitHub API, and the test suite is

@@ -156,6 +156,122 @@ public sealed class WindowsPathValidationTests : IDisposable
         Assert.Equal("deep content", File.ReadAllText(fullPath));
     }
 
+    // ---------------------------------------------------------------- ValidateIncoming (#30)
+
+    [Fact]
+    public async Task ValidateIncoming_ReportsOnlyWhatThePullIntroduces()
+    {
+        // The current tree is already checked out (hence valid); a pull that adds one
+        // bad path must report exactly that path, and must not re-examine the rest.
+        string source = CreateForgedRepo(_root, ("ok.txt", "fine"), ("dir/also-ok.txt", "fine"));
+        string clone = NewPath("clone");
+        await new LibGit2GitClient().CloneAsync(source, clone, "t", null, CancellationToken.None);
+        AppendForgedCommit(source, ("dir/bad:name.txt", "x"), ("ok.txt", "modified"));
+
+        using var repo = new Repository(clone);
+        Commands.Fetch(repo, "origin", Array.Empty<string>(), null, null);
+        var invalid = WindowsPathValidator.ValidateIncoming(repo, repo.Head.Tip.Tree, repo.Head.TrackedBranch.Tip.Tree);
+
+        var info = Assert.Single(invalid);
+        Assert.Equal("dir/bad:name.txt", info.RepoPath);
+        Assert.Equal("bad_name.txt", info.SuggestedName);
+    }
+
+    [Fact]
+    public async Task ValidateIncoming_ModifiedFilesOnly_ReturnsEmpty()
+    {
+        string source = CreateForgedRepo(_root, ("ok.txt", "fine"));
+        string clone = NewPath("clone");
+        await new LibGit2GitClient().CloneAsync(source, clone, "t", null, CancellationToken.None);
+        AppendForgedCommit(source, ("ok.txt", "modified"));
+
+        using var repo = new Repository(clone);
+        Commands.Fetch(repo, "origin", Array.Empty<string>(), null, null);
+
+        Assert.Empty(WindowsPathValidator.ValidateIncoming(repo, repo.Head.Tip.Tree, repo.Head.TrackedBranch.Tip.Tree));
+    }
+
+    [Fact]
+    public async Task ValidateIncoming_NewPathDifferingOnlyByCaseFromAnExistingOne_IsFlagged()
+    {
+        string source = CreateForgedRepo(_root, ("docs/readme.md", "a"));
+        string clone = NewPath("clone");
+        await new LibGit2GitClient().CloneAsync(source, clone, "t", null, CancellationToken.None);
+        // Git is happy to hold both; NTFS is not.
+        AppendForgedCommit(source, ("Docs/README.md", "b"));
+
+        using var repo = new Repository(clone);
+        Commands.Fetch(repo, "origin", Array.Empty<string>(), null, null);
+        var invalid = WindowsPathValidator.ValidateIncoming(repo, repo.Head.Tip.Tree, repo.Head.TrackedBranch.Tip.Tree);
+
+        // The directory collides first; the file under it is reported once each.
+        Assert.Contains(invalid, i => i.RepoPath == "Docs" && i.Reason.Contains("'docs'"));
+        Assert.Contains(invalid, i => i.RepoPath == "Docs/README.md" && i.Reason.Contains("'docs/readme.md'"));
+    }
+
+    [Fact]
+    public async Task ValidateIncoming_CaseChangeViaDeleteAndAdd_IsAllowed()
+    {
+        // Upstream renamed 'readme.md' to 'README.md' (delete + add in one commit): the
+        // old spelling leaves the disk with the pull, so the new one does not collide.
+        string source = CreateForgedRepo(_root, ("readme.md", "a"), ("keep.txt", "k"));
+        string clone = NewPath("clone");
+        await new LibGit2GitClient().CloneAsync(source, clone, "t", null, CancellationToken.None);
+        using (var src = new Repository(source))
+        {
+            var head = src.Head.Tip;
+            var definition = TreeDefinition.From(head.Tree);
+            definition.Remove("readme.md");
+            definition.Add("README.md", src.ObjectDatabase.CreateBlob(new MemoryStream("different"u8.ToArray())), Mode.NonExecutableFile);
+            var sig = MakeSignature();
+            var commit = src.ObjectDatabase.CreateCommit(sig, sig, "recase", src.ObjectDatabase.CreateTree(definition), [head], false);
+            src.Refs.UpdateTarget(src.Refs.Head.ResolveToDirectReference(), commit.Id);
+        }
+
+        using var repo = new Repository(clone);
+        Commands.Fetch(repo, "origin", Array.Empty<string>(), null, null);
+
+        Assert.Empty(WindowsPathValidator.ValidateIncoming(repo, repo.Head.Tip.Tree, repo.Head.TrackedBranch.Tip.Tree));
+    }
+
+    [Fact]
+    public async Task ValidateIncoming_DetectedRename_ChecksTheNewPathAndReleasesTheOld()
+    {
+        // Same content under a new name is a rename to libgit2: the new path is
+        // validated (and here is invalid), and the old path no longer counts as
+        // occupying its spelling.
+        string source = CreateForgedRepo(_root, ("old-name.txt", "identical content for rename detection"), ("keep.txt", "k"));
+        string clone = NewPath("clone");
+        await new LibGit2GitClient().CloneAsync(source, clone, "t", null, CancellationToken.None);
+        using (var src = new Repository(source))
+        {
+            var head = src.Head.Tip;
+            var definition = TreeDefinition.From(head.Tree);
+            var blob = head.Tree["old-name.txt"].Target as Blob;
+            definition.Remove("old-name.txt");
+            definition.Add("new:name.txt", blob!, Mode.NonExecutableFile);
+            var sig = MakeSignature();
+            var commit = src.ObjectDatabase.CreateCommit(sig, sig, "rename", src.ObjectDatabase.CreateTree(definition), [head], false);
+            src.Refs.UpdateTarget(src.Refs.Head.ResolveToDirectReference(), commit.Id);
+        }
+
+        using var repo = new Repository(clone);
+        Commands.Fetch(repo, "origin", Array.Empty<string>(), null, null);
+        var invalid = WindowsPathValidator.ValidateIncoming(repo, repo.Head.Tip.Tree, repo.Head.TrackedBranch.Tip.Tree);
+
+        Assert.Equal("new:name.txt", Assert.Single(invalid).RepoPath);
+    }
+
+    [Fact]
+    public void ValidateIncoming_NullArguments_Throw()
+    {
+        string path = NewPath("empty");
+        Repository.Init(path);
+        using var repo = new Repository(path);
+        Assert.Throws<ArgumentNullException>(() => WindowsPathValidator.ValidateIncoming(null!, null!, null!));
+        Assert.Throws<ArgumentNullException>(() => WindowsPathValidator.ValidateIncoming(repo, null!, null!));
+    }
+
     [Fact]
     public async Task FetchAndPull_IncomingCommitWithInvalidPath_ThrowsTypedException()
     {

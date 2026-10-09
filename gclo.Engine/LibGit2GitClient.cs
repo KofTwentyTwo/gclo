@@ -226,7 +226,9 @@ public sealed class LibGit2GitClient : IGitClient
 
         if (repo.Info.IsHeadDetached)
         {
-            throw new InvalidOperationException("HEAD is detached; fetched, but nothing was merged.");
+            throw new InvalidOperationException(
+                "HEAD is detached (a commit is checked out, not a branch); fetched, but nothing was merged. "
+                + "Check out a branch in this repository to resume updates, or delete the folder to re-clone.");
         }
 
         if (repo.Info.IsHeadUnborn)
@@ -251,9 +253,13 @@ public sealed class LibGit2GitClient : IGitClient
         }
 
         // Incoming commits can introduce Windows-invalid paths just like a clone can.
+        // Only what the pull introduces is checked: the current tree was validated
+        // when it was checked out, and re-walking a 100K-file tree for a one-file
+        // commit was the dominant engine cost of a daily update run (#30).
         if (OperatingSystem.IsWindows())
         {
-            var invalidIncoming = WindowsPathValidator.Validate(tracked.Tip.Tree);
+            // HEAD cannot be unborn here (handled above), so the current tip exists.
+            var invalidIncoming = WindowsPathValidator.ValidateIncoming(repo, repo.Head.Tip!.Tree, tracked.Tip.Tree);
             if (invalidIncoming.Count > 0)
             {
                 throw new InvalidRepositoryPathsException(invalidIncoming);
@@ -261,7 +267,9 @@ public sealed class LibGit2GitClient : IGitClient
         }
 
         // Fast-forward only: a mirror tool must never manufacture merge commits.
-        // Diverged local history surfaces as NonFastForwardException -> Failed with a clear message.
+        // Diverged local history is the most common pull failure for this tool's
+        // audience (someone committed in a synced clone), so it gets a message that
+        // says what gclo refuses to do and what to do about it (#30).
         var signature = new Signature("gclo", "gclo@localhost", DateTimeOffset.Now);
         try
         {
@@ -275,6 +283,12 @@ public sealed class LibGit2GitClient : IGitClient
         catch (UserCancelledException) when (ct.IsCancellationRequested)
         {
             throw new OperationCanceledException(ct);
+        }
+        catch (NonFastForwardException ex)
+        {
+            throw new InvalidOperationException(
+                $"'{repo.Head.FriendlyName}' has local commits that origin does not have; gclo only fast-forwards and never merges. "
+                + "Push or reset the local commits, or delete the folder to re-clone.", ex);
         }
     }
 

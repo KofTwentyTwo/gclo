@@ -32,19 +32,9 @@ public sealed partial class AccountWizardViewModel : ObservableObject
         AppSettings defaults,
         Account? existing = null,
         string? existingToken = null)
+        : this(store, orgLister, existing, existingToken ?? "")
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(orgLister);
         ArgumentNullException.ThrowIfNull(defaults);
-        _store = store;
-        _orgLister = orgLister;
-        _existing = existing;
-        _seededToken = existingToken ?? "";
-
-        Step = 1;
-        NameError = "";
-        TokenError = "";
-        Token = _seededToken;
 
         if (existing is null)
         {
@@ -64,6 +54,48 @@ public sealed partial class AccountWizardViewModel : ObservableObject
             CreateOrgSubfolder = existing.CreateOrgSubfolder;
             MaxConcurrency = existing.MaxConcurrency;
         }
+    }
+
+    /// <summary>
+    /// A wizard for a NEW account seeded from a working Quick Sync connection
+    /// (<paramref name="seed"/>): token, organization, folder, subfolder preference,
+    /// and parallelism are carried over so "save this connection as an account" is a
+    /// matter of naming it (#30). The token is treated as freshly typed, so it is
+    /// always written to the vault on save.
+    /// </summary>
+    public AccountWizardViewModel(AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed)
+        : this(store, orgLister, existing: null, seededToken: "")
+    {
+        ArgumentNullException.ThrowIfNull(seed);
+        Name = "";
+        Description = "";
+        Token = seed.Token;
+        Organization = seed.Organization;
+        TargetRoot = seed.TargetRoot;
+        CreateOrgSubfolder = seed.CreateOrgSubfolder;
+        MaxConcurrency = seed.MaxConcurrency;
+    }
+
+    private AccountWizardViewModel(
+        AccountsStore store, IOrganizationLister orgLister, Account? existing, string seededToken)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(orgLister);
+        _store = store;
+        _orgLister = orgLister;
+        _existing = existing;
+        _seededToken = seededToken;
+
+        Step = 1;
+        NameError = "";
+        TokenError = "";
+        OrganizationError = "";
+        TargetError = "";
+        Token = _seededToken;
+        Name = "";
+        Description = "";
+        Organization = "";
+        TargetRoot = "";
     }
 
     /// <summary>Current wizard step, 1 (identity) through 4 (destination).</summary>
@@ -112,6 +144,14 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     [ObservableProperty]
     public partial string TokenError { get; set; }
 
+    /// <summary>Step 3's validation message; empty once an organization is chosen.</summary>
+    [ObservableProperty]
+    public partial string OrganizationError { get; set; }
+
+    /// <summary>Step 4's validation message; empty once a target folder is chosen.</summary>
+    [ObservableProperty]
+    public partial string TargetError { get; set; }
+
     /// <summary>Organizations the validated token can see; feeds step 3's editable dropdown.</summary>
     public ObservableCollection<string> Organizations { get; } = new();
 
@@ -139,8 +179,9 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     /// <summary>
     /// Validates the current step. Steps 1-3 advance and return true on success; step 4
     /// returns true without advancing (the host then calls <see cref="SaveAsync"/>). On
-    /// failure the wizard stays put, with the step's error message set where one exists
-    /// (<see cref="NameError"/> on step 1, <see cref="TokenError"/> on step 2).
+    /// failure the wizard stays put with the step's error message set
+    /// (<see cref="NameError"/>, <see cref="TokenError"/>, <see cref="OrganizationError"/>,
+    /// <see cref="TargetError"/>) — a silent no-op on Next reads as a broken button (#30).
     /// </summary>
     public async Task<bool> TryAdvanceAsync()
     {
@@ -194,13 +235,22 @@ public sealed partial class AccountWizardViewModel : ObservableObject
             case 3:
                 if (string.IsNullOrWhiteSpace(Organization))
                 {
-                    return false; // the dropdown allows free text, but not nothing
+                    // The dropdown allows free text, but not nothing.
+                    OrganizationError = "Choose an organization from the list, or type one.";
+                    return false;
                 }
+                OrganizationError = "";
                 Step = 4;
                 return true;
             default:
                 // Step 4: valid means "ready to save"; the host closes via SaveAsync.
-                return !string.IsNullOrWhiteSpace(TargetRoot);
+                if (string.IsNullOrWhiteSpace(TargetRoot))
+                {
+                    TargetError = "Choose a target folder.";
+                    return false;
+                }
+                TargetError = "";
+                return true;
         }
     }
 

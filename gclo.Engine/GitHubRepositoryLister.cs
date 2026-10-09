@@ -7,15 +7,11 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
 {
     private readonly Func<string, IGitHubGateway> _gatewayFactory;
 
-    /// <summary>Production wiring: a fresh Octokit-backed gateway per call's token.</summary>
+    /// <summary>Production wiring: the process-wide Octokit gateway for the call's token (connection reuse).</summary>
     public GitHubRepositoryLister()
-        : this(CreateOctokitGateway)
+        : this(OctokitGatewayCache.Get)
     {
     }
-
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
-        Justification = "Production wiring to the live GitHub API; the offline suite injects a fake gateway.")]
-    private static IGitHubGateway CreateOctokitGateway(string token) => new OctokitGateway(token);
 
     /// <summary>Test seam: substitute the GitHub API with a fake gateway.</summary>
     internal GitHubRepositoryLister(Func<string, IGitHubGateway> gatewayFactory)
