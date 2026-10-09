@@ -12,30 +12,30 @@ on:
     tags:
       - 'v*'
 
-# contents: write is required so vpk / gh can create the GitHub Release and
-# upload assets to it. The default GITHUB_TOKEN is sufficient for both.
+# Three stages, each gated on the previous:
+#   verify  - the tag must be strict semver AND its commit must be on main
+#   gates   - the full CI workflow (build, 100% coverage, UI smoke, format)
+#   release - package and publish; only runs when both stages succeeded
+#
+# Read-only by default; only the release job gets contents: write, which vpk
+# and gh need to create the GitHub Release and upload assets to it.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    name: Build, package, and publish
-    runs-on: windows-latest
-    timeout-minutes: 90
-    env:
-      # Optional secrets. Empty when not configured; the steps that need them
-      # check for that in their `if:` and are skipped cleanly.
-      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
-      REPO_URL: https://github.com/KofTwentyTwo/gclo
+  verify:
+    name: Verify tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      channel: ${{ steps.version.outputs.channel }}
     steps:
-      - name: Checkout
+      - name: Checkout (full history, so main's ancestry can be checked)
         uses: actions/checkout@v7
-
-      - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          fetch-depth: 0
 
       - name: Derive version from tag
         id: version
@@ -58,18 +58,58 @@ jobs:
           Add-Content -Path $env:GITHUB_OUTPUT -Value "prerelease=$($prerelease.ToString().ToLower())"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "channel=$channel"
 
-      # Same quality gates as CI: zero-warning build and green tests.
-      - name: Build solution (x64, warnings as errors)
-        run: dotnet build gclo.slnx -p:Platform=x64 -warnaserror
+      # Releases are cut from main (docs/RELEASING.md). A tag anywhere else -
+      # a feature branch, an unmerged dev commit, a detached experiment - would
+      # otherwise publish an immutable release that never passed main's gates.
+      # To exercise the failure path, push a 'v*' tag on a commit that is not
+      # on main: this step fails and nothing downstream runs.
+      - name: Require the tagged commit to be on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          tagged="$(git rev-parse "$GITHUB_SHA")"
+          if git merge-base --is-ancestor "$tagged" origin/main; then
+            echo "OK: $GITHUB_REF_NAME ($tagged) is contained in main."
+          else
+            echo "::error::Tag $GITHUB_REF_NAME points at $tagged, which is not contained in origin/main. Releases must be tagged from main (docs/RELEASING.md)."
+            exit 1
+          fi
 
-      - name: Run tests
-        run: dotnet test gclo.Engine.Tests
+  # The same gates a pull request must pass: zero-warning x64 build, 100% line
+  # coverage on Engine/ViewModels/Cli, the FlaUI UI smoke suite, and formatting.
+  # If any job in the called workflow fails, this job fails and release is skipped.
+  gates:
+    name: Gates
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Build, package, and publish
+    needs: [verify, gates]
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      # Optional secrets. Empty when not configured; the steps that need them
+      # check for that in their `if:` and are skipped cleanly.
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+      REPO_URL: https://github.com/KofTwentyTwo/gclo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
 
       # ----------------------------------------------------------------------
       # (a) CLI: self-contained single-file publish, zipped as a release asset.
       # ----------------------------------------------------------------------
       - name: Publish CLI (win-x64, single file)
-        run: dotnet publish gclo.Cli -c Release -r win-x64 --self-contained -p:Version=${{ steps.version.outputs.version }} -p:PublishSingleFile=true -o publish/cli
+        run: dotnet publish gclo.Cli -c Release -r win-x64 --self-contained -p:Version=${{ needs.verify.outputs.version }} -p:PublishSingleFile=true -o publish/cli
 
       - name: Zip CLI
         shell: pwsh
@@ -83,7 +123,7 @@ jobs:
       # and attaches the Setup, portable, and delta assets to it.
       # ----------------------------------------------------------------------
       - name: Publish app for Velopack (unpackaged win-x64)
-        run: dotnet publish gclo/gclo.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained -p:Version=${{ steps.version.outputs.version }} -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true -p:PublishTrimmed=false -o publish/app
+        run: dotnet publish gclo/gclo.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained -p:Version=${{ needs.verify.outputs.version }} -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true -p:PublishTrimmed=false -o publish/app
 
       - name: Install Velopack CLI
         run: dotnet tool install -g vpk
@@ -98,11 +138,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $preFlag = @()
-          if ('${{ steps.version.outputs.prerelease }}' -eq 'true') { $preFlag = @('--pre') }
-          vpk download github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ steps.version.outputs.channel }} @preFlag
+          if ('${{ needs.verify.outputs.prerelease }}' -eq 'true') { $preFlag = @('--pre') }
+          vpk download github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ needs.verify.outputs.channel }} @preFlag
 
       - name: Velopack pack
-        run: vpk pack --packId gclo --packVersion ${{ steps.version.outputs.version }} --packDir publish/app --mainExe gclo.exe --channel ${{ steps.version.outputs.channel }} --icon gclo/Assets/Brand/gclo.ico
+        run: vpk pack --packId gclo --packVersion ${{ needs.verify.outputs.version }} --packDir publish/app --mainExe gclo.exe --channel ${{ needs.verify.outputs.channel }} --icon gclo/Assets/Brand/gclo.ico
 
       # This repo has immutable releases: assets freeze the moment a release is
       # PUBLISHED. So vpk creates a DRAFT (no --publish), every asset and the
@@ -113,8 +153,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $preFlag = @()
-          if ('${{ steps.version.outputs.prerelease }}' -eq 'true') { $preFlag = @('--pre') }
-          vpk upload github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ steps.version.outputs.channel }} --releaseName "gclo ${{ steps.version.outputs.version }}" --tag $env:GITHUB_REF_NAME @preFlag
+          if ('${{ needs.verify.outputs.prerelease }}' -eq 'true') { $preFlag = @('--pre') }
+          vpk upload github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ needs.verify.outputs.channel }} --releaseName "gclo ${{ needs.verify.outputs.version }}" --tag $env:GITHUB_REF_NAME @preFlag
 
       - name: Attach CLI zip to the draft release
         env:
@@ -139,7 +179,7 @@ jobs:
       # NUGET_API_KEY secret is configured on the repository.
       # ----------------------------------------------------------------------
       - name: Pack gclo.Engine
-        run: dotnet pack gclo.Engine -c Release -p:Version=${{ steps.version.outputs.version }} -o artifacts/nuget
+        run: dotnet pack gclo.Engine -c Release -p:Version=${{ needs.verify.outputs.version }} -o artifacts/nuget
 
       - name: Push gclo.Engine to nuget.org
         if: env.NUGET_API_KEY != ''
@@ -155,10 +195,10 @@ jobs:
       # docs/RELEASING.md), then this step keeps it current.
       # ----------------------------------------------------------------------
       - name: Submit winget manifest update
-        if: steps.version.outputs.prerelease == 'false' && env.WINGET_TOKEN != ''
+        if: needs.verify.outputs.prerelease == 'false' && env.WINGET_TOKEN != ''
         shell: pwsh
         run: |
           Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
           # Velopack names the installer '<packId>-<channel>-Setup.exe'.
           $setupUrl = "$env:REPO_URL/releases/download/$env:GITHUB_REF_NAME/gclo-stable-Setup.exe"
-          .\wingetcreate.exe update KofTwentyTwo.gclo --urls $setupUrl --version ${{ steps.version.outputs.version }} --submit --token $env:WINGET_TOKEN
+          .\wingetcreate.exe update KofTwentyTwo.gclo --urls $setupUrl --version ${{ needs.verify.outputs.version }} --submit --token $env:WINGET_TOKEN

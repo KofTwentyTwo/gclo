@@ -81,9 +81,9 @@ via `wingetcreate update KofTwentyTwo.gclo ... --submit`.
 ## Cutting a release, start to finish
 
 1. **Make sure `main` is green.** The CI, CodeQL, and (for PRs) dependency
-   review workflows must all pass. The release workflow re-runs the build with
-   `-warnaserror` and the test suite, so a red `main` will fail the release
-   anyway — just later and more annoyingly.
+   review workflows must all pass. The release workflow re-runs the entire CI
+   workflow against the tag, so a red `main` will fail the release anyway —
+   just later and more annoyingly.
 
 2. **Pick the version.** Follow semver: breaking change → major, new feature →
    minor, fix → patch. Add a prerelease suffix (`-beta.1`) if this should go to
@@ -99,17 +99,24 @@ via `wingetcreate update KofTwentyTwo.gclo ... --submit`.
    ```
 
 4. **Watch the workflow.** The `Release` workflow appears under the Actions
-   tab. It is a single job that will, in order:
-   - validate the tag and derive version/channel,
-   - build the solution (x64, warnings as errors) and run the tests,
-   - publish and zip the CLI,
-   - publish the WinUI app unpackaged and pack it with Velopack,
-   - create a **draft** GitHub Release (marked prerelease for `dev`), upload
-     all assets and the generated changelog to it, then **publish** it — this
-     repository uses immutable releases, so everything must land while the
-     release is still a draft,
-   - push `gclo.Engine` to nuget.org (if `NUGET_API_KEY` is set),
-   - submit the winget manifest update (stable only, if `WINGET_TOKEN` is set).
+   tab. It runs three jobs, each gated on the previous one:
+   - **Verify tag** — validate the tag, derive version/channel, and check
+     that the tagged commit is contained in `main`. A tag on any other commit
+     fails here and nothing is built or published.
+   - **Gates** — the full `CI` workflow, exactly as a pull request runs it:
+     x64 build with warnings as errors, 100% line coverage on
+     `gclo.Engine` / `gclo.ViewModels` / `gclo`, the FlaUI UI smoke suite,
+     and the formatting gate. (The UI suite is *not* a required check on
+     `main` PRs yet; it **is** required for a release.)
+   - **Build, package, and publish**, which will, in order:
+     - publish and zip the CLI,
+     - publish the WinUI app unpackaged and pack it with Velopack,
+     - create a **draft** GitHub Release (marked prerelease for `dev`), upload
+       all assets and the generated changelog to it, then **publish** it — this
+       repository uses immutable releases, so everything must land while the
+       release is still a draft,
+     - push `gclo.Engine` to nuget.org (if `NUGET_API_KEY` is set),
+     - submit the winget manifest update (stable only, if `WINGET_TOKEN` is set).
 
 5. **Verify.** Check the new release on the
    [releases page](https://github.com/KofTwentyTwo/gclo/releases): the Setup
