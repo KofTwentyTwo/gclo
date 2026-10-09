@@ -1,0 +1,5 @@
+# Commits that only reformatted code; git blame --ignore-revs-file and GitHub skip them.
+# Keep this list in order; see CONTRIBUTING.md.
+
+# style: adopt the Kingsrook C# layout and the standard .NET quality gate (#70)
+50b3c134ebac5ade6457a758d022dd0cf47e7c54
