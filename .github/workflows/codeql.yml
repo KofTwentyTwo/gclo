@@ -1,59 +1,33 @@
-# CodeQL static analysis for C#.
-#
-# C# is a compiled language, so CodeQL needs a real build. We use build-mode
-# "manual" and run the same x64 solution build the CI workflow uses (without
-# -warnaserror - the CI workflow already gates warnings; this workflow's job is
-# security analysis, and it should still scan code that has a pending warning).
-name: CodeQL
+# Static analysis (K22-CI-22): CodeQL with the security-extended suite for C# and
+# for the workflows themselves, failing on alerts of high severity or above,
+# through the KofTwentyTwo standards' reusable workflow. C# is compiled, so the
+# analysis builds the solution exactly as CI does (x64, locked restore); the .NET
+# SDK comes from global.json.
+name: codeql
 
-# Runs on dev as well as main: feature PRs target dev (CONTRIBUTING.md), so
-# scanning only main would let code reach the integration branch unanalyzed.
 on:
-  push:
-    branches: [main, dev]
   pull_request:
-    branches: [main, dev]
+  push:
+    branches: [main]
   schedule:
-    # Weekly scan (Mondays 06:30 UTC) so new CodeQL queries run even when the
-    # code has not changed.
-    - cron: '30 6 * * 1'
+    - cron: "29 6 * * 1"
+  workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  analyze:
-    name: Analyze (csharp)
-    runs-on: windows-latest
-    timeout-minutes: 120
+  codeql:
+    uses: KofTwentyTwo/standards/.github/workflows/codeql.yml@855cf4409180d2f1aa58a062c8c140be2ac27917 # main 2026-10-09 (pre-1.0 draft)
     permissions:
-      # Required for github/codeql-action to upload scan results.
-      security-events: write
-      # Required to fetch public CodeQL packs.
-      packages: read
-      actions: read
       contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up .NET SDK
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: 10.0.x
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
-        with:
-          languages: csharp
-          build-mode: manual
-
-      - name: Build solution (x64)
-        run: dotnet build gclo.slnx -p:Platform=x64 -p:RestoreLockedMode=true
-
-      - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
-        with:
-          category: '/language:csharp'
+      security-events: write
+    with:
+      languages: '["csharp", "actions"]'
+      build-mode: manual
+      build-command: dotnet build gclo.slnx -p:Platform=x64 -p:RestoreLockedMode=true
+      runs-on: windows-latest
+      setup-dotnet: true

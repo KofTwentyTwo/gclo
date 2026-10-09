@@ -1,4 +1,4 @@
-# Weekly NuGet dependency updates, as a pull request against dev.
+# Weekly NuGet dependency updates, as a pull request against main.
 #
 # This replaces Dependabot's NuGet ecosystem for this repository. Dependabot's NuGet
 # updater cannot evaluate Windows-versioned target frameworks (the WinUI project's
@@ -9,17 +9,18 @@
 # another way". `dotnet list package --outdated` evaluates through real MSBuild and
 # NuGet, so the script below drives the bump from that instead.
 #
-# Flow: bump minor/patch versions in the .csproj files -> run the same gates CI
-# runs (zero-warning x64 build, both unit suites, format) -> open or update a single
-# PR on branch deps/nuget-weekly with the report and the gate results in its body.
-# Major bumps are listed in the report but not applied; run the workflow manually
-# with include-major to take them.
+# Flow: bump minor/patch versions in the .csproj files (skipping versions newer
+# than the 7-day cooldown, K22-DEP-20) -> run the same gates CI runs (zero-warning
+# x64 build, both unit suites, format) -> open or update a single PR on branch
+# build/nuget-weekly with the report and the gate results in its body. Major bumps
+# are listed in the report but not applied; run the workflow manually with
+# include-major to take them. See docs/adr/0004-nuget-updates-workflow.md.
 #
 # Token note: with the default GITHUB_TOKEN, GitHub does not start other workflows
 # for the PR this job creates, so the PR shows no CI checks of its own (the gates
-# were run here, and dev -> main still goes through the required checks). To get
-# checks on the PR itself, add a fine-grained PAT with contents + pull-requests
-# write as the DEPS_PAT repository secret; the step below prefers it when present.
+# were run here). To get checks on the PR itself, add a fine-grained PAT with
+# contents + pull-requests write as the DEPS_PAT repository secret; the step below
+# prefers it when present.
 name: NuGet updates
 
 on:
@@ -49,24 +50,27 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Checkout dev
+      - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: dev
+          ref: main
+          persist-credentials: false
 
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
           cache: true
           cache-dependency-path: '**/packages.lock.json'
 
       - name: Bump package versions
         id: bump
         shell: pwsh
+        env:
+          INCLUDE_MAJOR: ${{ inputs.include-major }}
         run: |
-          $params = @{ Solution = 'gclo.slnx'; ReportPath = 'nuget-update-report.md' }
-          if ('${{ inputs.include-major }}' -eq 'true') { $params.IncludeMajor = $true }
+          $params = @{ Solution = 'gclo.slnx'; ReportPath = 'nuget-update-report.md'; CooldownDays = 7 }
+          if ($env:INCLUDE_MAJOR -eq 'true') { $params.IncludeMajor = $true }
           ./.github/scripts/Update-NuGetPackages.ps1 @params
 
       # The committed lock files must follow the bump, or CI's locked restore
@@ -99,11 +103,17 @@ jobs:
         if: steps.bump.outputs.changed == 'true'
         id: format
         continue-on-error: true
-        run: dotnet format gclo.slnx --verify-no-changes --severity error
+        run: dotnet format gclo.slnx --verify-no-changes --severity warn --no-restore
 
       - name: Compose PR body
         if: steps.bump.outputs.changed == 'true'
         shell: pwsh
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          ENGINE_TESTS_OUTCOME: ${{ steps.engine-tests.outcome }}
+          CLI_TESTS_OUTCOME: ${{ steps.cli-tests.outcome }}
+          FORMAT_OUTCOME: ${{ steps.format.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           function Mark($outcome) {
             switch ($outcome) {
@@ -115,13 +125,13 @@ jobs:
           $gates = @(
             '### Gates (run in this workflow against the bumped tree)',
             '',
-            "- Build (x64, warnings as errors): $(Mark '${{ steps.build.outcome }}')",
-            "- Engine + ViewModels tests: $(Mark '${{ steps.engine-tests.outcome }}')",
-            "- CLI tests: $(Mark '${{ steps.cli-tests.outcome }}')",
-            "- Format: $(Mark '${{ steps.format.outcome }}')",
+            "- Build (x64, warnings as errors): $(Mark $env:BUILD_OUTCOME)",
+            "- Engine + ViewModels tests: $(Mark $env:ENGINE_TESTS_OUTCOME)",
+            "- CLI tests: $(Mark $env:CLI_TESTS_OUTCOME)",
+            "- Format: $(Mark $env:FORMAT_OUTCOME)",
             '',
-            'The UI smoke suite and the 100% coverage gate run when dev is merged to main.',
-            "Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            'The UI smoke suite, the 100% coverage gate, and the security scans run on the pull request.',
+            "Workflow run: $env:RUN_URL",
             ''
           )
           $report = Get-Content nuget-update-report.md -Raw
@@ -133,11 +143,11 @@ jobs:
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.DEPS_PAT || github.token }}
-          base: dev
-          branch: deps/nuget-weekly
+          base: main
+          branch: build/nuget-weekly
           delete-branch: true
-          commit-message: 'Deps: weekly NuGet package updates'
-          title: 'Deps: weekly NuGet package updates'
+          commit-message: 'build(deps): weekly NuGet package updates'
+          title: 'build(deps): weekly NuGet package updates'
           body-path: pr-body.md
           labels: |
             dependencies

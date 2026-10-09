@@ -1,0 +1,22 @@
+# KofTwentyTwo Trivy configuration for software composition analysis (K22-CI-21),
+# from KofTwentyTwo/standards configs/security/trivy.yaml. `trivy fs` loads it from
+# the working directory; the reusable security workflow passes severity and output
+# flags itself, so this file only holds what is repository-specific.
+
+scan:
+  scanners:
+    - vuln
+  skip-dirs:
+    - .trivycache
+    - node_modules
+    - "**/bin"
+    - "**/obj"
+
+vulnerability:
+  # Report unfixed vulnerabilities too: an unfixed HIGH still needs a decision
+  # (replace the dependency, or record a VEX statement and an exception).
+  ignore-unfixed: false
+
+# Accepted findings live in .trivyignore (or .trivyignore.yaml), one entry per
+# finding, each with the exception ID, the reason, and an expiry date, e.g.:
+#   CVE-2026-12345 exp:2026-12-31  # EX-0003: not reachable, see VEX statement

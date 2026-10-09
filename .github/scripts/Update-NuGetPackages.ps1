@@ -16,7 +16,9 @@
       - minor and patch bumps are applied;
       - major bumps are reported but NOT applied unless -IncludeMajor is given, so
         they get a deliberate review;
-      - prerelease versions are never applied to a package that is on a stable one.
+      - prerelease versions are never applied to a package that is on a stable one;
+      - a version published fewer than -CooldownDays days ago is held back
+        (K22-DEP-20), so the ecosystem has time to catch a bad release first.
 
     Versions are edited in place in each .csproj (the exact Include/Version pair),
     preserving the file's encoding and line endings.
@@ -30,6 +32,10 @@
 .PARAMETER IncludeMajor
     Also apply major-version bumps.
 
+.PARAMETER CooldownDays
+    Hold back versions published fewer than this many days ago. Default: 7.
+    When nuget.org cannot be asked for the publish date, the version is held.
+
 .OUTPUTS
     Writes `changed=true|false` and `report=<path>` to $env:GITHUB_OUTPUT when set.
     Exit code 0 on success (whether or not anything changed), non-zero on error.
@@ -38,7 +44,8 @@
 param(
     [string]$Solution = 'gclo.slnx',
     [string]$ReportPath = 'nuget-update-report.md',
-    [switch]$IncludeMajor
+    [switch]$IncludeMajor,
+    [int]$CooldownDays = 7
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,6 +63,18 @@ function Get-NumericVersion([string]$version) {
 
 function Test-Prerelease([string]$version) {
     return $version.Contains('-')
+}
+
+function Get-PublishedDate([string]$id, [string]$version) {
+    # nuget.org's registration leaf carries the publish timestamp of one version.
+    $url = "https://api.nuget.org/v3/registration5-gz-semver2/$($id.ToLowerInvariant())/$($version.ToLowerInvariant()).json"
+    try {
+        $leaf = Invoke-RestMethod -Uri $url -TimeoutSec 30
+        return [DateTimeOffset]::Parse($leaf.published, [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    catch {
+        return $null
+    }
 }
 
 Write-Host "Restoring $Solution"
@@ -106,6 +125,16 @@ foreach ($row in ($rows.Values | Sort-Object Project, Id)) {
     }
     elseif ($latest -le $current) {
         $reason = 'not newer than the requested version'
+    }
+    elseif ($CooldownDays -gt 0) {
+        $published = Get-PublishedDate $row.Id $row.Latest
+        if ($null -eq $published) {
+            $reason = "publish date unavailable from nuget.org; held for the $CooldownDays-day cooldown"
+        }
+        elseif ($published -gt [DateTimeOffset]::UtcNow.AddDays(-$CooldownDays)) {
+            $age = [int][math]::Floor(([DateTimeOffset]::UtcNow - $published).TotalDays)
+            $reason = "published $age day(s) ago; waits out the $CooldownDays-day cooldown"
+        }
     }
 
     if ($reason) {

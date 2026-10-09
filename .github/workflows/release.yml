@@ -22,6 +22,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     name: Verify tag
@@ -36,6 +40,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Derive version from tag
         id: version
@@ -75,8 +80,9 @@ jobs:
             exit 1
           fi
 
-  # The same gates a pull request must pass: zero-warning x64 build, 100% line
-  # coverage on Engine/ViewModels/Cli, and formatting. If any of those fails, this
+  # The same gates a pull request must pass (K22-CI-31): zero-warning x64 build,
+  # 100% line coverage on Engine/ViewModels/Cli, and formatting; the security
+  # scans and CodeQL run on the tagged commit when it reached main. If any of those fails, this
   # job fails and release is skipped. The FlaUI UI smoke suite runs too but is
   # advisory here, exactly as it is not a required check on main: hosted-runner UI
   # automation is not yet proven stable enough to hold an immutable tag hostage.
@@ -101,6 +107,13 @@ jobs:
       attestations: write
     env:
       REPO_URL: https://github.com/KofTwentyTwo/gclo
+      # The verify job's outputs, as plain environment variables: run: scripts
+      # read these instead of interpolating ${{ }} expressions (K22-CI-12).
+      VERSION: ${{ needs.verify.outputs.version }}
+      PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+      CHANNEL: ${{ needs.verify.outputs.channel }}
+      # SBOM generator (CycloneDX for .NET), pinned like the other release tooling.
+      CYCLONEDX_VERSION: 6.2.0
       # Pinned release tooling. vpk builds the installer and packages users
       # receive and wingetcreate is a binary fetched at run time; neither may
       # float. Bump deliberately, together with the Velopack package reference.
@@ -113,24 +126,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
+      # No restore cache here (K22-CI-15): a release never builds from a cache a
+      # pull request run could have written.
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.x
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
+          global-json-file: global.json
 
       # ----------------------------------------------------------------------
       # (a) CLI: self-contained single-file publish, zipped as a release asset.
       # ----------------------------------------------------------------------
       - name: Publish CLI (win-x64, single file)
-        run: dotnet publish gclo.Cli -c Release -r win-x64 --self-contained -p:Version=${{ needs.verify.outputs.version }} -p:PublishSingleFile=true -o publish/cli
+        run: dotnet publish gclo.Cli -c Release -r win-x64 --self-contained -p:Version=$env:VERSION -p:PublishSingleFile=true -p:RestoreLockedMode=true -o publish/cli
 
+      # Released artifacts carry the license (K22-REPO-01).
       - name: Zip CLI
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item LICENSE publish/cli/LICENSE
           Compress-Archive -Path publish/cli/* -DestinationPath artifacts/gclo-cli-win-x64.zip
 
       # ----------------------------------------------------------------------
@@ -139,7 +156,11 @@ jobs:
       # and attaches the Setup, portable, and delta assets to it.
       # ----------------------------------------------------------------------
       - name: Publish app for Velopack (unpackaged win-x64)
-        run: dotnet publish gclo/gclo.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained -p:Version=${{ needs.verify.outputs.version }} -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true -p:PublishTrimmed=false -o publish/app
+        run: dotnet publish gclo/gclo.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained -p:Version=$env:VERSION -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true -p:PublishTrimmed=false -p:RestoreLockedMode=true -o publish/app
+
+      - name: Add the license to the app payload
+        shell: pwsh
+        run: Copy-Item LICENSE publish/app/LICENSE
 
       - name: Install Velopack CLI
         run: dotnet tool install -g vpk --version $env:VPK_VERSION
@@ -154,35 +175,70 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $preFlag = @()
-          if ('${{ needs.verify.outputs.prerelease }}' -eq 'true') { $preFlag = @('--pre') }
-          vpk download github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ needs.verify.outputs.channel }} @preFlag
+          if ($env:PRERELEASE -eq 'true') { $preFlag = @('--pre') }
+          vpk download github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel $env:CHANNEL @preFlag
 
       - name: Velopack pack
-        run: vpk pack --packId gclo --packVersion ${{ needs.verify.outputs.version }} --packDir publish/app --mainExe gclo.exe --channel ${{ needs.verify.outputs.channel }} --icon gclo/Assets/Brand/gclo.ico
+        run: vpk pack --packId gclo --packVersion $env:VERSION --packDir publish/app --mainExe gclo.exe --channel $env:CHANNEL --icon gclo/Assets/Brand/gclo.ico
 
-      # SHA256SUMS.txt: one line per asset ('<sha256> *<name>'), so users and the
-      # Scoop autoupdate can verify downloads without computing hashes by hand.
-      - name: Write SHA256SUMS.txt
+      # ----------------------------------------------------------------------
+      # SBOM (K22-REL-06): one CycloneDX document per shipped artifact, from the
+      # resolved dependency graph of the project that produced it. File names
+      # carry the version (K22-REL-03).
+      # ----------------------------------------------------------------------
+      - name: Install CycloneDX
+        run: dotnet tool install -g CycloneDX --version $env:CYCLONEDX_VERSION
+
+      - name: Generate SBOMs
         shell: pwsh
         run: |
-          $files = @(Get-Item artifacts/gclo-cli-win-x64.zip) + @(Get-ChildItem Releases -File | Where-Object { $_.Extension -in '.exe', '.zip', '.nupkg' })
+          New-Item -ItemType Directory -Force -Path artifacts/sbom | Out-Null
+          dotnet CycloneDX gclo.Cli/gclo.Cli.csproj --output artifacts/sbom --filename "gclo-cli-win-x64-$env:VERSION.cdx.json" --output-format Json --spec-version 1.6 --set-name gclo-cli --set-version $env:VERSION --set-type Application --exclude-test-projects --disable-package-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet CycloneDX gclo/gclo.csproj --output artifacts/sbom --filename "gclo-app-$env:VERSION.cdx.json" --output-format Json --spec-version 1.6 --set-name gclo --set-version $env:VERSION --set-type Application --exclude-test-projects --disable-package-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem artifacts/sbom
+
+      # SHA256SUMS (K22-REL-04): one line per asset ('<sha256> *<name>'), so users
+      # and the Scoop autoupdate can verify downloads without computing hashes by
+      # hand. Fixed-name channel assets (the update feed) are listed too (K22-REL-03).
+      - name: Write SHA256SUMS
+        shell: pwsh
+        run: |
+          $files = @(Get-Item artifacts/gclo-cli-win-x64.zip) + @(Get-ChildItem artifacts/sbom -File) + @(Get-ChildItem Releases -File | Where-Object { $_.Extension -in '.exe', '.zip', '.nupkg', '.json' })
           $lines = $files | ForEach-Object { "{0} *{1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name }
-          [System.IO.File]::WriteAllText("artifacts/SHA256SUMS.txt", ($lines -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
-          Get-Content artifacts/SHA256SUMS.txt
+          [System.IO.File]::WriteAllText("artifacts/SHA256SUMS", ($lines -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+          Get-Content artifacts/SHA256SUMS
 
       # Provenance: a signed statement that THIS workflow run built these exact
       # bytes, verifiable with `gh attestation verify <file> -R KofTwentyTwo/gclo`.
-      # Not a code signature (see #57); it makes a release attributable to the
-      # workflow rather than only to whoever holds the account.
+      # Not a code signature (K22 exception EX-0002, #57); it makes a release
+      # attributable to the workflow rather than only to whoever holds the account.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |
             artifacts/gclo-cli-win-x64.zip
-            artifacts/SHA256SUMS.txt
+            artifacts/SHA256SUMS
+            artifacts/sbom/*.cdx.json
             Releases/*.exe
             Releases/*.zip
             Releases/*.nupkg
+
+      - name: Attest the CLI SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: artifacts/gclo-cli-win-x64.zip
+          sbom-path: artifacts/sbom/gclo-cli-win-x64-${{ needs.verify.outputs.version }}.cdx.json
+
+      - name: Attest the app SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: |
+            Releases/*.exe
+            Releases/*.zip
+            Releases/*.nupkg
+          sbom-path: artifacts/sbom/gclo-app-${{ needs.verify.outputs.version }}.cdx.json
 
       # This repo has immutable releases: assets freeze the moment a release is
       # PUBLISHED. So vpk creates a DRAFT (no --publish), every asset and the
@@ -193,20 +249,23 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $preFlag = @()
-          if ('${{ needs.verify.outputs.prerelease }}' -eq 'true') { $preFlag = @('--pre') }
-          vpk upload github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel ${{ needs.verify.outputs.channel }} --releaseName "gclo ${{ needs.verify.outputs.version }}" --tag $env:GITHUB_REF_NAME @preFlag
+          if ($env:PRERELEASE -eq 'true') { $preFlag = @('--pre') }
+          vpk upload github --repoUrl $env:REPO_URL --token $env:GITHUB_TOKEN --channel $env:CHANNEL --releaseName "gclo $env:VERSION" --tag $env:GITHUB_REF_NAME @preFlag
 
-      - name: Attach CLI zip and checksums to the draft release
+      - name: Attach the CLI zip, checksums, and SBOMs to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload $env:GITHUB_REF_NAME artifacts/gclo-cli-win-x64.zip artifacts/SHA256SUMS.txt --clobber
+        run: gh release upload $env:GITHUB_REF_NAME artifacts/gclo-cli-win-x64.zip artifacts/SHA256SUMS (Get-ChildItem artifacts/sbom -File).FullName --clobber
 
-      # Auto-generated changelog (categorized by labels via .github/release.yml).
-      - name: Generate release changelog
+      # Release notes from the Conventional Commit titles merged since the previous
+      # release, breaking changes and security fixes first (K22-REL-02).
+      - name: Generate release notes
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          gh api "repos/${{ github.repository }}/releases/generate-notes" -f tag_name=$env:GITHUB_REF_NAME --jq .body | Out-File -FilePath notes.md -Encoding utf8
+          ./.github/scripts/New-ReleaseNotes.ps1 -Tag $env:GITHUB_REF_NAME -Repository $env:REPOSITORY -OutputPath notes.md
+          Get-Content notes.md
           gh release edit $env:GITHUB_REF_NAME --notes-file notes.md
 
       - name: Publish the completed release
@@ -222,7 +281,7 @@ jobs:
       # package is deterministic and SourceLink step-through works; the .snupkg
       # beside it carries the symbols.
       - name: Pack gclo.Engine
-        run: dotnet pack gclo.Engine -c Release -p:Version=${{ needs.verify.outputs.version }} -p:ContinuousIntegrationBuild=true -o artifacts/nuget
+        run: dotnet pack gclo.Engine -c Release -p:Version=$env:VERSION -p:ContinuousIntegrationBuild=true -p:RestoreLockedMode=true -o artifacts/nuget
 
       # The secrets context is not available in a step's `if`, so one step turns
       # "is it configured?" into outputs; it is the only step besides the two
@@ -271,24 +330,22 @@ jobs:
           }
           # Velopack names the installer '<packId>-<channel>-Setup.exe'.
           $setupUrl = "$env:REPO_URL/releases/download/$env:GITHUB_REF_NAME/gclo-stable-Setup.exe"
-          .\wingetcreate.exe update KofTwentyTwo.gclo --urls $setupUrl --version ${{ needs.verify.outputs.version }} --submit --token $env:WINGET_TOKEN
+          .\wingetcreate.exe update KofTwentyTwo.gclo --urls $setupUrl --version $env:VERSION --submit --token $env:WINGET_TOKEN
 
       # ----------------------------------------------------------------------
       # (e) Scoop + Chocolatey (#9), STABLE releases only. The repository is its
       # own Scoop bucket (bucket/gclo.json) and ships the Chocolatey package
       # source (packaging/chocolatey). Both are pointed at this release's CLI
       # zip; the Chocolatey package is pushed when CHOCO_API_KEY is configured,
-      # and the updated manifests are proposed as a pull request against MAIN:
-      # Scoop reads bucket/gclo.json from the default branch, so a PR against
-      # dev would leave `scoop install` on the previous version until the next
-      # dev->main merge. Merge the PR, then merge main back into dev. (With only
-      # GITHUB_TOKEN the PR triggers no checks; DEPS_PAT fixes that, see #7.)
+      # and the updated manifests are proposed as a pull request against main,
+      # where Scoop reads bucket/gclo.json from. (With only GITHUB_TOKEN the PR
+      # triggers no checks; DEPS_PAT fixes that, see #7.)
       # ----------------------------------------------------------------------
       - name: Point the Scoop and Chocolatey manifests at this release
         if: needs.verify.outputs.prerelease == 'false'
         id: manifests
         shell: pwsh
-        run: ./.github/scripts/Update-PackageManifests.ps1 -Version ${{ needs.verify.outputs.version }} -CliZipPath artifacts/gclo-cli-win-x64.zip
+        run: ./.github/scripts/Update-PackageManifests.ps1 -Version $env:VERSION -CliZipPath artifacts/gclo-cli-win-x64.zip
 
       - name: Pack the Chocolatey package
         if: needs.verify.outputs.prerelease == 'false'
@@ -313,8 +370,8 @@ jobs:
           base: main
           branch: packaging/v${{ needs.verify.outputs.version }}
           delete-branch: true
-          commit-message: 'Packaging: point the Scoop and Chocolatey manifests at v${{ needs.verify.outputs.version }}'
-          title: 'Packaging: Scoop and Chocolatey manifests for v${{ needs.verify.outputs.version }}'
+          commit-message: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.verify.outputs.version }}'
+          title: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.verify.outputs.version }}'
           body: |
             Generated by the Release workflow for tag `${{ github.ref_name }}`.
 
@@ -324,7 +381,6 @@ jobs:
             - `scoop update gclo` picks this up as soon as this PR is merged (Scoop
               reads the manifest from `main`); the Chocolatey package
               was ${{ steps.secrets.outputs.choco == 'true' && 'pushed to chocolatey.org' || 'packed but not pushed (CHOCO_API_KEY not configured)' }}.
-            - After merging, merge `main` back into `dev` so the branches agree.
 
             Relates to #9.
           labels: |

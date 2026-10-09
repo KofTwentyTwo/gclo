@@ -1,3 +1,7 @@
+# Superseded by pr-gates.yml (`pr / dependency-review`, K22-CI-01); kept only
+# until the protect-main ruleset lists the new required contexts (#66), then
+# removed.
+#
 # Blocks pull requests that add dependencies with known vulnerabilities or with
 # licenses outside the allowlist below. Only dependencies *added or changed* by
 # the PR are checked (via the GitHub dependency graph diff), so existing
@@ -23,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Dependency review
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0

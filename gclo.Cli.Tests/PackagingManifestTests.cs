@@ -37,7 +37,7 @@ public sealed class PackagingManifestTests
         Assert.Equal("github", root.GetProperty("checkver").GetString());
         string autoupdateUrl = root.GetProperty("autoupdate").GetProperty("architecture").GetProperty("64bit").GetProperty("url").GetString()!;
         Assert.Contains("v$version/gclo-cli-win-x64.zip", autoupdateUrl);
-        Assert.Contains("SHA256SUMS.txt", root.GetProperty("autoupdate").GetProperty("architecture").GetProperty("64bit").GetProperty("hash").GetProperty("url").GetString());
+        Assert.EndsWith("/SHA256SUMS", root.GetProperty("autoupdate").GetProperty("architecture").GetProperty("64bit").GetProperty("hash").GetProperty("url").GetString());
         return (root.GetProperty("version").GetString()!, x64.GetProperty("url").GetString()!, x64.GetProperty("hash").GetString()!);
     }
 

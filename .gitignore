@@ -62,6 +62,7 @@ BenchmarkDotNet.Artifacts/
 
 # .NET
 project.lock.json
+.trivycache/
 project.fragment.lock.json
 artifacts/
 

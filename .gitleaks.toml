@@ -1,0 +1,18 @@
+# KofTwentyTwo gitleaks configuration (K22-CI-20, K22-REPO-04), from
+# KofTwentyTwo/standards configs/security/.gitleaks.toml.
+#
+# Starts from gitleaks' full default rule set and adds nothing to ignore except
+# test fixtures. A real secret is never allowlisted: it is rotated (K22-REPO-04).
+# A false positive outside test fixtures is suppressed inline with a
+# `gitleaks:allow` comment and a reason, which keeps the decision reviewable.
+
+title = "KofTwentyTwo gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deliberately fake credentials used as test fixtures"
+paths = [
+  '''(^|/)(test|tests|__tests__|testdata|fixtures)/.*\.(json|ya?ml|txt|env\.example)$''',
+]

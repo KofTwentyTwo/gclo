@@ -1,0 +1,11 @@
+# KofTwentyTwo zizmor configuration (K22-CI-23), from KofTwentyTwo/standards
+# configs/security/zizmor.yml.
+#
+# Every audit is enabled. Ignore a finding only for a specific workflow and line,
+# with a comment citing the reason or exception ID, for example:
+#
+# rules:
+#   template-injection:
+#     ignore:
+#       - release.yml:42   # EX-0007: input is a validated semver tag
+rules: {}
