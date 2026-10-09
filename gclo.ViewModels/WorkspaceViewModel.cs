@@ -18,6 +18,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 {
     private readonly IRepositoryLister _lister;
     private readonly IGitClient _git;
+    private readonly IWslCloner _wsl;
+
+    /// <summary>Result of the one-time WSL probe; null until the first path recovery asks for it.</summary>
+    private WslAvailability? _wslAvailability;
     private readonly IOrganizationLister _orgLister;
     private readonly Func<Action<RepoProgress>, IProgress<RepoProgress>> _progressFactory;
     private readonly TimeSpan _orgLookupDebounce;
@@ -86,10 +90,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         IActivityLog? log = null,
         Account? account = null,
         ITokenVault? tokenVault = null,
-        AccountsStore? accountsStore = null)
+        AccountsStore? accountsStore = null,
+        IWslCloner? wsl = null)
     {
         _lister = lister ?? new GitHubRepositoryLister();
         _git = git ?? new LibGit2GitClient();
+        _wsl = wsl ?? new WslCloner();
         _orgLister = orgLister ?? new GitHubOrganizationLister();
         _progressFactory = progressFactory ?? (handler => new Progress<RepoProgress>(handler));
         _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
@@ -832,8 +838,35 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     /// Raised when the user asks to resolve a row's Windows-invalid paths. The view
     /// subscribes and shows recovery UI (the VM stays UI-free), returning the user's
     /// decision, or null when they cancel. With no subscriber the command does nothing.
+    /// <see cref="IsWslCloneAvailable"/> is settled before the interaction runs, so the
+    /// view can decide whether to offer "Clone in WSL instead".
     /// </summary>
-    public Func<RepoItemViewModel, Task<PathRecovery?>>? RecoveryInteraction { get; set; }
+    public Func<RepoItemViewModel, Task<PathRecoveryDecision?>>? RecoveryInteraction { get; set; }
+
+    /// <summary>
+    /// True when a clone into WSL can be offered as a recovery (#8): wsl.exe exists, the
+    /// default distribution starts, and git runs inside it. Probed once, lazily, the
+    /// first time path recovery is requested; false until then.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsWslCloneAvailable { get; private set; }
+
+    /// <summary>Why <see cref="IsWslCloneAvailable"/> is false (or the git version when true), for the log and the dialog.</summary>
+    public string WslAvailabilityDetail => _wslAvailability?.Detail ?? "";
+
+    private async Task EnsureWslProbedAsync(CancellationToken cancellationToken)
+    {
+        if (_wslAvailability is not null)
+        {
+            return;
+        }
+        WslAvailability availability = await _wsl.ProbeAsync(cancellationToken);
+        _wslAvailability = availability;
+        IsWslCloneAvailable = availability.Available;
+        _log.Info(availability.Available
+            ? $"WSL clone available ({availability.Detail})."
+            : $"WSL clone not available: {availability.Detail}");
+    }
 
     private bool CanResolvePaths(RepoItemViewModel item)
         => item is not null && item.HasPathIssue && !IsRunning && !IsResolvingPaths;
@@ -851,15 +884,38 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         }
 
         _log.Info($"{item.Name}: path recovery requested ({item.InvalidPaths?.Count ?? 0} invalid paths).");
-        PathRecovery? recovery = await interaction(item);
-        if (recovery is null)
+        await EnsureWslProbedAsync(_lifetimeCts.Token);
+        PathRecoveryDecision? decision = await interaction(item);
+        if (decision is null)
         {
             _log.Info($"{item.Name}: path recovery canceled; the repository stays failed.");
             return; // user canceled; the row keeps its Failed state and payload
         }
 
-        string path = Path.Combine(EffectiveTargetRoot, item.Name);
         IsResolvingPaths = true;
+        try
+        {
+            if (decision is PathRecoveryDecision.CloneInWsl)
+            {
+                await CloneInWslAsync(item);
+            }
+            else
+            {
+                await ApplyRecoveryAsync(item, ((PathRecoveryDecision.Apply)decision).Recovery);
+            }
+        }
+        finally
+        {
+            IsResolvingPaths = false;
+        }
+        RecomputeCompletedCount();
+        UpdateFilteredMembership(item);
+        RetryFailedCommand.NotifyCanExecuteChanged();
+    }
+
+    private async Task ApplyRecoveryAsync(RepoItemViewModel item, PathRecovery recovery)
+    {
+        string path = Path.Combine(EffectiveTargetRoot, item.Name);
         try
         {
             _log.Info($"{item.Name}: applying path recovery "
@@ -883,13 +939,37 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             item.InvalidPaths = (ex as InvalidRepositoryPathsException)?.Paths;
             _log.Error($"{item.Name}: path recovery failed: {ex.Message}", ex);
         }
-        finally
+    }
+
+    /// <summary>
+    /// The "Clone in WSL instead" recovery (#8): the repository is cloned by the default
+    /// WSL distribution's git into ~/gclo/&lt;org&gt;/&lt;repo&gt;, where its paths are
+    /// legal. The fetched-but-unchecked-out Windows copy is left as it is (a later
+    /// Windows sync reports the same invalid paths again, by design: nothing on the
+    /// Windows side changed). On failure the row keeps its payload so the user can pick
+    /// the other recovery.
+    /// </summary>
+    private async Task CloneInWslAsync(RepoItemViewModel item)
+    {
+        try
         {
-            IsResolvingPaths = false;
+            _log.Info($"{item.Name}: cloning in WSL instead.");
+            item.Status = SyncStatus.Pulling; // indeterminate bar; git in WSL reports no percentage here
+            WslCloneResult result = await _wsl.CloneAsync(
+                item.Descriptor.CloneUrl, Organization.Trim(), item.Name, Token.Trim(), _lifetimeCts.Token);
+
+            item.Status = SyncStatus.Done;
+            item.Error = null;
+            item.InvalidPaths = null;
+            item.Note = $"Cloned in WSL ({result.Distribution}): {result.WindowsPath}";
+            _log.Info($"{item.Name}: cloned in WSL ({result.Distribution}) at {result.LinuxPath}.");
         }
-        RecomputeCompletedCount();
-        UpdateFilteredMembership(item);
-        RetryFailedCommand.NotifyCanExecuteChanged();
+        catch (Exception ex)
+        {
+            item.Status = SyncStatus.Failed;
+            item.Error = ex.Message;
+            _log.Error($"{item.Name}: clone in WSL failed: {ex.Message}", ex);
+        }
     }
 
     // ---------------------------------------------------------------- sorting

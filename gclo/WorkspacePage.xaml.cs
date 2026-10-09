@@ -5,8 +5,10 @@ using System.Threading.Tasks;
 using gclo.Engine;
 using gclo.ViewModels;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using WinUI.TableView;
 
 namespace gclo
 {
@@ -111,30 +113,74 @@ namespace gclo
         }
 
         /// <summary>
-        /// Sort-direction arrow (visual only; the header button's automation name
-        /// carries the state) for the active sort column: chevron up = ascending.
-        /// </summary>
-        public string SortGlyph(string column, string? sortColumn, bool sortDescending)
-            => column == sortColumn ? (sortDescending ? "" : "") : "";
-
-        /// <summary>Shows the sort arrow only on the column the table is sorted by.</summary>
-        public Visibility SortGlyphVisibility(string column, string? sortColumn)
-            => column == sortColumn ? Visibility.Visible : Visibility.Collapsed;
-
-        /// <summary>
         /// Composed automation name for a sortable column header, e.g.
         /// "Name, sorted ascending" or "Branch, not sorted".
         /// </summary>
-        public string SortAutomationName(string column, string? sortColumn, bool sortDescending)
+        public static string SortAutomationName(string column, string? sortColumn, bool sortDescending)
             => column != sortColumn
                 ? $"{column}, not sorted"
                 : sortDescending
                     ? $"{column}, sorted descending"
                     : $"{column}, sorted ascending";
 
+        // ---- TableView bridge (#33): the control raises sort requests, the view model
+        // decides. Sorting (first and second click) and ClearSorting (the control's
+        // third-click "unsorted" step) both hand the column to SortCommand, which
+        // cycles ascending <-> descending; the indicator and the header's automation
+        // name are then written back from SortColumn/SortDescending.
+
+        private void RepoTable_Sorting(object sender, TableViewSortingEventArgs e)
+        {
+            e.Handled = true; // never let the control re-sort its own collection view
+            if (e.Column?.Tag is string column)
+            {
+                ViewModel.SortCommand.Execute(column);
+            }
+        }
+
+        private void RepoTable_ClearSorting(object sender, TableViewClearSortingEventArgs e)
+        {
+            e.Handled = true;
+            if (e.Column?.Tag is string column)
+            {
+                ViewModel.SortCommand.Execute(column);
+            }
+        }
+
+        private void RepoTable_Loaded(object sender, RoutedEventArgs e) => SyncSortIndicators();
+
+        /// <summary>
+        /// Writes the view model's sort state onto the columns: the header's sort
+        /// indicator and its composed automation name ("Name, sorted ascending").
+        /// Columns whose header control is not realized yet keep the static name from
+        /// their HeaderStyle until the next call.
+        /// </summary>
+        private void SyncSortIndicators()
+        {
+            foreach (TableViewColumn column in RepoTable.Columns)
+            {
+                if (column.Tag is not string key || !column.CanSort)
+                {
+                    continue;
+                }
+                bool active = key == ViewModel.SortColumn;
+                column.SortDirection = active
+                    ? (ViewModel.SortDescending ? SortDirection.Descending : SortDirection.Ascending)
+                    : null;
+                if (column.HeaderControl is { } header)
+                {
+                    AutomationProperties.SetName(header, SortAutomationName(key, ViewModel.SortColumn, ViewModel.SortDescending));
+                }
+            }
+        }
+
         private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == nameof(WorkspaceViewModel.StatusText))
+            if (e.PropertyName is nameof(WorkspaceViewModel.SortColumn) or nameof(WorkspaceViewModel.SortDescending))
+            {
+                SyncSortIndicators();
+            }
+            else if (e.PropertyName == nameof(WorkspaceViewModel.StatusText))
             {
                 // LiveSetting alone does not announce: XAML never raises
                 // LiveRegionChanged automatically, so each StatusText update must raise
@@ -344,8 +390,8 @@ namespace gclo
                 return;
             }
 
-            var peer = Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(RepoListView)
-                ?? Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(RepoListView);
+            var peer = Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(RepoTable)
+                ?? Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(RepoTable);
             peer?.RaiseNotificationEvent(
                 Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationKind.ActionCompleted,
                 Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationProcessing.ImportantMostRecent,
@@ -358,16 +404,16 @@ namespace gclo
         /// blocked by Windows-invalid paths. Returns the user's recovery choice, or null
         /// when the dialog was dismissed (or the row carries no path details).
         /// </summary>
-        private async Task<PathRecovery?> ShowPathRecoveryDialogAsync(RepoItemViewModel item)
+        private async Task<PathRecoveryDecision?> ShowPathRecoveryDialogAsync(RepoItemViewModel item)
         {
             if (item.InvalidPaths is not { Count: > 0 } paths)
             {
                 return null;
             }
 
-            var dialog = new PathRecoveryDialog(item.Name, paths) { XamlRoot = XamlRoot };
+            var dialog = new PathRecoveryDialog(item.Name, paths, ViewModel.IsWslCloneAvailable) { XamlRoot = XamlRoot };
             await DialogGuard.ShowAsync(dialog);
-            return dialog.Result; // blocked by another open dialog reads as dismissed
+            return dialog.Decision; // blocked by another open dialog reads as dismissed
         }
 
         private async void OpenFolderButton_Click(object sender, RoutedEventArgs e)

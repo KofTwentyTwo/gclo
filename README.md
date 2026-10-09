@@ -28,7 +28,18 @@ Plain version tags (`v1.2.3`) are **stable** releases; pre-release tags (`v1.2.3
 
 > **Upgrading from a beta?** Channels don't cross: a dev/beta install never auto-updates to a stable release (its **Check for updates** only looks at the dev channel). To move to stable, install `gclo-stable-Setup.exe` once — it takes over the existing install and self-updates within the stable channel from then on.
 
-`winget` support is planned (tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7)); until then, install from the Releases page above.
+**Package managers (CLI):**
+
+```powershell
+# Scoop: this repository is its own bucket
+scoop bucket add gclo https://github.com/KofTwentyTwo/gclo
+scoop install gclo
+
+# Chocolatey (once the package has cleared moderation; see #7)
+choco install gclo
+```
+
+Every release also attaches `SHA256SUMS.txt`, and every asset carries a build-provenance attestation you can check with `gh attestation verify <file> -R KofTwentyTwo/gclo`. `winget` support for the desktop app is tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7).
 
 ## Getting a token
 
@@ -70,7 +81,7 @@ On launch, gclo shows a brief branded splash, then the **Quick Sync** connect ca
 
 8. **Cancel** at any time: in-flight repos stop cleanly, unstarted repos are marked Canceled, and the summary still appears. After a run, **Retry failed** re-runs exactly the failed rows, and **Open folder** opens the target folder in Explorer.
 
-**When something goes wrong:** failures are isolated per repository — one broken repo never stops the rest, and a failed row shows its error message inline. Failed clones are cleaned up, and a clone whose checkout never finished (a crash, a kill, a cleanup that could not delete the folder) is flagged inside its `.git`, so a partial working tree is never mistaken for an up-to-date repo on the next run — gclo completes the checkout instead. Repositories with Windows-impossible paths are the deliberate exception: gclo checks every path in the incoming tree against Windows file-system rules *before* checkout — invalid characters, reserved device names like `CON`, trailing spaces or dots, names that differ only by case — and when it finds any, the repo is marked Failed with a per-path list of reasons, but the fully fetched `.git` is **kept** (nothing was ever checked out). Recovery happens in place, with no re-download: click the row's **Resolve…** link to rename each offending path (safe names are pre-suggested) or skip it, and gclo materializes the working tree right there; the CLI does the same automatically with [`--sanitize-paths`](docs/CLI.md#windows-invalid-paths-and---sanitize-paths). Long paths beyond the classic 260-character limit are handled automatically (`core.longpaths`).
+**When something goes wrong:** failures are isolated per repository — one broken repo never stops the rest, and a failed row shows its error message inline. Failed clones are cleaned up, and a clone whose checkout never finished (a crash, a kill, a cleanup that could not delete the folder) is flagged inside its `.git`, so a partial working tree is never mistaken for an up-to-date repo on the next run — gclo completes the checkout instead. Repositories with Windows-impossible paths are the deliberate exception: gclo checks every path in the incoming tree against Windows file-system rules *before* checkout — invalid characters, reserved device names like `CON`, trailing spaces or dots, names that differ only by case — and when it finds any, the repo is marked Failed with a per-path list of reasons, but the fully fetched `.git` is **kept** (nothing was ever checked out). Recovery happens in place, with no re-download: click the row's **Resolve…** link to rename each offending path (safe names are pre-suggested) or skip it, and gclo materializes the working tree right there; the CLI does the same automatically with [`--sanitize-paths`](docs/CLI.md#windows-invalid-paths-and---sanitize-paths). When WSL is installed with git in its default distribution, the same dialog offers **Clone in WSL instead**: the repository is cloned unchanged into `~/gclo/<org>/<repo>` inside WSL (reachable from Explorer as `\wsl.localhost\<distro>\home\...`), the token travels only through the environment, and the Windows copy is left as it is. Long paths beyond the classic 260-character limit are handled automatically (`core.longpaths`).
 
 **Settings** (File > Settings…) let you set a default GitHub token (stored in the Windows Credential Manager), the default target folder (with a folder picker), the default parallelism, and the theme (System, Light, or Dark); an Advanced section toggles the startup splash and its duration.
 

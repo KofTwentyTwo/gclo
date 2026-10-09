@@ -14,6 +14,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
     private readonly FakeRepositoryLister _lister = new();
     private readonly FakeGitClient _git = new();
     private readonly FakeOrganizationLister _orgs = new();
+    private readonly FakeWslCloner _wsl = new();
 
     /// <summary>Every view model the test created, disposed and cleaned up after it — pass or fail.</summary>
     private readonly List<WorkspaceViewModel> _created = new();
@@ -56,7 +57,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
                handler => new SyncProgress(handler),
                debounce ?? TimeSpan.FromMilliseconds(1),
                new NullActivityLog(),
-               account, vault, store));
+               account, vault, store, _wsl));
 
     private WorkspaceViewModel Track(WorkspaceViewModel vm)
     {
@@ -621,7 +622,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
         vm.RecoveryInteraction = item =>
         {
             asked.Add(item);
-            return Task.FromResult<PathRecovery?>(recovery);
+            return Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.Apply(recovery));
         };
 
         await vm.ResolvePathsCommand.ExecuteAsync(row);
@@ -651,8 +652,8 @@ public sealed class WorkspaceViewModelTests : IDisposable
         var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
         await vm.SyncCommand.ExecuteAsync(null);
         RepoItemViewModel row = vm.Repos[0];
-        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(
-            new PathRecovery(new Dictionary<string, string>(), new HashSet<string>()));
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(
+            new PathRecoveryDecision.Apply(new PathRecovery(new Dictionary<string, string>(), new HashSet<string>())));
 
         Task resolve = vm.ResolvePathsCommand.ExecuteAsync(row);
         await WaitUntilAsync(() => row.Status == SyncStatus.Pulling, "the in-flight recovery to show");
@@ -674,7 +675,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
         var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
         await vm.SyncCommand.ExecuteAsync(null);
         RepoItemViewModel row = vm.Repos[0];
-        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(null);
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(null);
 
         await vm.ResolvePathsCommand.ExecuteAsync(row);
 
@@ -698,8 +699,8 @@ public sealed class WorkspaceViewModelTests : IDisposable
         var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
         await vm.SyncCommand.ExecuteAsync(null);
         RepoItemViewModel row = vm.Repos[0];
-        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(
-            new PathRecovery(new Dictionary<string, string>(), new HashSet<string>()));
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(
+            new PathRecoveryDecision.Apply(new PathRecovery(new Dictionary<string, string>(), new HashSet<string>())));
 
         await vm.ResolvePathsCommand.ExecuteAsync(row);
 
@@ -720,8 +721,8 @@ public sealed class WorkspaceViewModelTests : IDisposable
         var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
         await vm.SyncCommand.ExecuteAsync(null);
         RepoItemViewModel row = vm.Repos[0];
-        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(
-            new PathRecovery(new Dictionary<string, string>(), new HashSet<string>()));
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(
+            new PathRecoveryDecision.Apply(new PathRecovery(new Dictionary<string, string>(), new HashSet<string>())));
 
         await vm.ResolvePathsCommand.ExecuteAsync(row);
 
@@ -729,6 +730,153 @@ public sealed class WorkspaceViewModelTests : IDisposable
         Assert.Equal("disk full", row.Error);
         Assert.False(row.HasPathIssue); // renaming again would not help
 
+    }
+
+    // ---------------------------------------------------------------- clone in WSL (#8)
+
+    [Fact]
+    public async Task ResolvePaths_ProbesWslOnce_BeforeTheInteraction_AndExposesAvailability()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        _wsl.Availability = new WslAvailability(true, "git version 2.53.0");
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        Assert.False(vm.IsWslCloneAvailable); // not probed until recovery is requested
+        Assert.Equal("", vm.WslAvailabilityDetail);
+
+        bool? seenDuringInteraction = null;
+        vm.RecoveryInteraction = _ =>
+        {
+            seenDuringInteraction = vm.IsWslCloneAvailable;
+            return Task.FromResult<PathRecoveryDecision?>(null);
+        };
+
+        await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+        await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+
+        Assert.True(seenDuringInteraction);
+        Assert.True(vm.IsWslCloneAvailable);
+        Assert.Equal("git version 2.53.0", vm.WslAvailabilityDetail);
+        Assert.Equal(1, _wsl.Probes); // cached after the first request
+    }
+
+    [Fact]
+    public async Task ResolvePaths_WslUnavailable_StaysUnavailable_WithTheReason()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        _wsl.Availability = new WslAvailability(false, "wsl.exe is not installed");
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(null);
+
+        await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+
+        Assert.False(vm.IsWslCloneAvailable);
+        Assert.Equal("wsl.exe is not installed", vm.WslAvailabilityDetail);
+    }
+
+    [Fact]
+    public async Task ResolvePaths_CloneInWsl_ClonesWithTheRowsUrlAndTheWorkspaceToken_AndMarksRowDone()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        _wsl.Availability = new WslAvailability(true, "git version 2.53.0");
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        RepoItemViewModel row = vm.Repos[0];
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.CloneInWsl());
+
+        await vm.ResolvePathsCommand.ExecuteAsync(row);
+
+        WslCloneCall call = Assert.Single(_wsl.CloneCalls);
+        Assert.Equal(row.Descriptor.CloneUrl, call.Url);
+        Assert.Equal(vm.Organization, call.Organization);
+        Assert.Equal("alpha", call.RepositoryName);
+        Assert.Equal(vm.Token, call.Token);
+        Assert.Empty(_git.ApplyRecoveryCalls); // the Windows copy is left alone
+
+        Assert.Equal(SyncStatus.Done, row.Status);
+        Assert.Null(row.Error);
+        Assert.Null(row.InvalidPaths);
+        Assert.False(row.HasPathIssue);
+        Assert.True(row.HasNote);
+        Assert.Equal(@"Cloned in WSL (Ubuntu): \\wsl.localhost\Ubuntu\home\me\gclo\" + vm.Organization + @"\alpha", row.Note);
+        Assert.False(vm.ResolvePathsCommand.CanExecute(row));
+        Assert.False(vm.RetryFailedCommand.CanExecute(null));
+        Assert.False(vm.IsResolvingPaths);
+    }
+
+    [Fact]
+    public async Task ResolvePaths_CloneInWsl_ShowsAnIndeterminateBar_AndLocksTheWorkspace_WhileInFlight()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        _wsl.Availability = new WslAvailability(true, "git");
+        var gate = new TaskCompletionSource<WslCloneResult>();
+        _wsl.CloneHandler = (_, _) => gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        RepoItemViewModel row = vm.Repos[0];
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.CloneInWsl());
+
+        Task resolve = vm.ResolvePathsCommand.ExecuteAsync(row);
+        await WaitUntilAsync(() => row.Status == SyncStatus.Pulling, "the in-flight WSL clone to show");
+
+        Assert.True(row.IsIndeterminate);
+        Assert.True(vm.IsResolvingPaths);
+        Assert.False(vm.SyncCommand.CanExecute(null));
+
+        gate.SetResult(new WslCloneResult("Ubuntu", "/home/me/gclo/o/alpha", @"\\wsl.localhost\Ubuntu\home\me\gclo\o\alpha"));
+        await resolve;
+
+        Assert.Equal(SyncStatus.Done, row.Status);
+        Assert.False(vm.IsResolvingPaths);
+        Assert.True(vm.SyncCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task ResolvePaths_CloneInWslFails_KeepsRowFailed_WithPayload_ForAnotherAttempt()
+    {
+        MakeAlphaFailWithInvalidPaths();
+        _wsl.Availability = new WslAvailability(true, "git");
+        _wsl.CloneHandler = (_, _) => Task.FromException<WslCloneResult>(
+            new WslCloneException("Clone in WSL failed: fatal: Authentication failed"));
+        var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+        await vm.SyncCommand.ExecuteAsync(null);
+        RepoItemViewModel row = vm.Repos[0];
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.CloneInWsl());
+
+        await vm.ResolvePathsCommand.ExecuteAsync(row);
+
+        Assert.Equal(SyncStatus.Failed, row.Status);
+        Assert.Equal("Clone in WSL failed: fatal: Authentication failed", row.Error);
+        Assert.True(row.HasPathIssue); // the rename/skip route is still open
+        Assert.False(row.HasNote);
+        Assert.True(vm.ResolvePathsCommand.CanExecute(row));
+        Assert.True(vm.RetryFailedCommand.CanExecute(null));
+        Assert.False(vm.IsResolvingPaths);
+    }
+
+    [Fact]
+    public void RepoItem_Note_RaisesHasNote()
+    {
+        var item = new RepoItemViewModel(Repo("alpha"));
+        var changed = new List<string?>();
+        item.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        Assert.False(item.HasNote);
+
+        item.Note = "Cloned in WSL";
+
+        Assert.True(item.HasNote);
+        Assert.True(item.HasDetails); // the row-details strip shows for a note alone
+        Assert.Contains(nameof(RepoItemViewModel.Note), changed);
+        Assert.Contains(nameof(RepoItemViewModel.HasNote), changed);
+        Assert.Contains(nameof(RepoItemViewModel.HasDetails), changed);
+
+        changed.Clear();
+        item.Note = null;
+        Assert.False(item.HasDetails);
+        item.Error = "boom";
+        Assert.True(item.HasDetails); // and for an error alone
+        Assert.Contains(nameof(RepoItemViewModel.HasDetails), changed);
     }
 
     [Fact]
@@ -1771,8 +1919,8 @@ public sealed class WorkspaceViewModelTests : IDisposable
             await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
         var vm = await CreateLoadedViewModelAsync(Repo("alpha"));
         await vm.SyncCommand.ExecuteAsync(null);
-        vm.RecoveryInteraction = _ => Task.FromResult<PathRecovery?>(
-            new PathRecovery(new Dictionary<string, string>(), new HashSet<string>()));
+        vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(
+            new PathRecoveryDecision.Apply(new PathRecovery(new Dictionary<string, string>(), new HashSet<string>())));
 
         Task resolve = vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
         await WaitUntilAsync(() => vm.IsResolvingPaths, "the recovery to start");

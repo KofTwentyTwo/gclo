@@ -427,7 +427,11 @@ namespace gclo
             {
                 // Quick Sync: no account behind it. A saved default token (Settings)
                 // pre-fills the connect card; setting Token also starts the org lookup.
-                var quickSync = new WorkspaceViewModel(log: _log);
+                var quickSync = new WorkspaceViewModel(
+                    UiTestFixture.WrapRepositoryLister(new GitHubRepositoryLister()),
+                    UiTestFixture.WrapGitClient(new LibGit2GitClient()),
+                    UiTestFixture.WrapOrganizationLister(new GitHubOrganizationLister()),
+                    log: _log);
                 if (_tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId) is { Length: > 0 } defaultToken)
                 {
                     quickSync.Token = defaultToken;
@@ -442,6 +446,9 @@ namespace gclo
                 return null;
             }
             return new WorkspaceViewModel(
+                UiTestFixture.WrapRepositoryLister(new GitHubRepositoryLister()),
+                UiTestFixture.WrapGitClient(new LibGit2GitClient()),
+                UiTestFixture.WrapOrganizationLister(new GitHubOrganizationLister()),
                 account: account,
                 tokenVault: _tokenVault,
                 accountsStore: _accountsStore,

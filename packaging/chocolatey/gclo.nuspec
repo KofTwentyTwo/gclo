@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chocolatey package for the gclo CLI. The version, download URL, and checksum
+     are kept at the latest STABLE release by .github/scripts/Update-PackageManifests.ps1,
+     which the release workflow runs before `choco pack`; the same script keeps
+     bucket/gclo.json (Scoop) in step. -->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>gclo</id>
+    <version>1.0.0</version>
+    <title>gclo (Git Clone Large Organizations)</title>
+    <authors>James Maes</authors>
+    <owners>KofTwentyTwo</owners>
+    <projectUrl>https://github.com/KofTwentyTwo/gclo</projectUrl>
+    <projectSourceUrl>https://github.com/KofTwentyTwo/gclo</projectSourceUrl>
+    <packageSourceUrl>https://github.com/KofTwentyTwo/gclo/tree/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://github.com/KofTwentyTwo/gclo/blob/main/docs/CLI.md</docsUrl>
+    <bugTrackerUrl>https://github.com/KofTwentyTwo/gclo/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/KofTwentyTwo/gclo/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <iconUrl>https://raw.githubusercontent.com/KofTwentyTwo/gclo/main/gclo/Assets/Brand/gclo-icon.svg</iconUrl>
+    <tags>git github clone mirror organization cli</tags>
+    <summary>Clone or update every repository of a GitHub organization in one pass (CLI).</summary>
+    <description><![CDATA[
+**gclo** (Git Clone Large Organizations) mirrors every repository of a GitHub organization or user account into a local folder in one pass: it clones the repositories that are missing and fast-forwards the ones that already exist, with bounded parallelism and per-repository failure isolation.
+
+This package installs the self-contained command-line edition (`gclo.exe`, no .NET runtime required).
+
+- `gclo sync --org <name> --target <folder>` — mirror an organization
+- `gclo repos --org <name>` — list what a sync would see
+- `gclo orgs` — list the organizations a token can see
+- `gclo accounts` — saved profiles with tokens in Windows Credential Manager
+- `--json` / `--json-lines` for scripts; exit codes distinguish auth, transient, and usage errors
+
+A GitHub personal access token is required: set `GITHUB_TOKEN`, or use `--token-env`, `--token-file`, or `--token-stdin` (there is deliberately no `--token <value>` option). Full reference: https://github.com/KofTwentyTwo/gclo/blob/main/docs/CLI.md
+
+The desktop app (WinUI 3) is a separate download from the GitHub Releases page.
+]]></description>
+    <releaseNotes>https://github.com/KofTwentyTwo/gclo/releases/tag/v1.0.0</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

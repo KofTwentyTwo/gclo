@@ -155,3 +155,69 @@ public sealed class RecordingProgress : IProgress<RepoProgress>
     public RepoProgress? LastFor(string repoName)
         => _reports.LastOrDefault(r => r.RepoName == repoName);
 }
+
+/// <summary>One scripted <see cref="IProcessRunner"/> invocation, as recorded by <see cref="FakeProcessRunner"/>.</summary>
+public sealed record ProcessCall(
+    string FileName,
+    IReadOnlyList<string> Arguments,
+    IReadOnlyDictionary<string, string>? Environment,
+    string? StandardInput);
+
+/// <summary>An <see cref="IProcessRunner"/> that records calls and answers from a delegate.</summary>
+public sealed class FakeProcessRunner : IProcessRunner
+{
+    private readonly ConcurrentQueue<ProcessCall> _calls = new();
+
+    /// <summary>Answers each call; default: exit 0 with empty output.</summary>
+    public Func<ProcessCall, CancellationToken, Task<ProcessResult>> Handler { get; set; }
+        = (_, _) => Task.FromResult(new ProcessResult(0, "", ""));
+
+    public IReadOnlyList<ProcessCall> Calls => _calls.ToArray();
+
+    public Task<ProcessResult> RunAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? environment,
+        string? standardInput,
+        CancellationToken cancellationToken)
+    {
+        var call = new ProcessCall(fileName, arguments, environment, standardInput);
+        _calls.Enqueue(call);
+        return Handler(call, cancellationToken);
+    }
+}
+
+public sealed record WslCloneCall(string Url, string Organization, string RepositoryName, string Token);
+
+/// <summary>An <see cref="IWslCloner"/> with scripted availability and clone outcome.</summary>
+public sealed class FakeWslCloner : IWslCloner
+{
+    private readonly ConcurrentQueue<WslCloneCall> _cloneCalls = new();
+    private int _probes;
+
+    /// <summary>What <see cref="ProbeAsync"/> reports; default: not available.</summary>
+    public WslAvailability Availability { get; set; } = new(false, "wsl.exe is not installed (test default)");
+
+    /// <summary>Body of <see cref="CloneAsync"/>; default: a successful clone into /home/me/gclo/org/repo.</summary>
+    public Func<WslCloneCall, CancellationToken, Task<WslCloneResult>> CloneHandler { get; set; }
+        = (call, _) => Task.FromResult(new WslCloneResult(
+            "Ubuntu",
+            $"/home/me/gclo/{call.Organization}/{call.RepositoryName}",
+            $@"\\wsl.localhost\Ubuntu\home\me\gclo\{call.Organization}\{call.RepositoryName}"));
+
+    public int Probes => _probes;
+    public IReadOnlyList<WslCloneCall> CloneCalls => _cloneCalls.ToArray();
+
+    public Task<WslAvailability> ProbeAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _probes);
+        return Task.FromResult(Availability);
+    }
+
+    public Task<WslCloneResult> CloneAsync(string url, string organization, string repositoryName, string token, CancellationToken cancellationToken)
+    {
+        var call = new WslCloneCall(url, organization, repositoryName, token);
+        _cloneCalls.Enqueue(call);
+        return CloneHandler(call, cancellationToken);
+    }
+}

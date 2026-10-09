@@ -74,6 +74,21 @@ public sealed partial class RepoItemViewModel : ObservableObject
     /// <summary>True when there is an error message to show inline.</summary>
     public bool HasError => !string.IsNullOrEmpty(Error);
 
+    /// <summary>
+    /// A non-error remark shown under the row, e.g. where a repository was cloned when
+    /// it lives outside the target folder (in WSL, #8). Cleared by the next run.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasNote))]
+    [NotifyPropertyChangedFor(nameof(HasDetails))]
+    public partial string? Note { get; set; }
+
+    /// <summary>True when there is a remark to show inline.</summary>
+    public bool HasNote => !string.IsNullOrEmpty(Note);
+
+    /// <summary>True when the row has anything to show under its cells (error, note, or both).</summary>
+    public bool HasDetails => HasError || HasNote;
+
     partial void OnStatusChanged(SyncStatus value)
     {
         OnPropertyChanged(nameof(StatusText));
@@ -94,7 +109,11 @@ public sealed partial class RepoItemViewModel : ObservableObject
         OnPropertyChanged(nameof(ProgressValue));
     }
 
-    partial void OnErrorChanged(string? value) => OnPropertyChanged(nameof(HasError));
+    partial void OnErrorChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasError));
+        OnPropertyChanged(nameof(HasDetails));
+    }
 
     partial void OnInvalidPathsChanged(IReadOnlyList<InvalidPathInfo>? value)
         => OnPropertyChanged(nameof(HasPathIssue));
