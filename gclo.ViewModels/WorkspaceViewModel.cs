@@ -55,6 +55,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     /// <summary>Breaks the AllSelected &lt;-&gt; item.IsSelected feedback loop while one side updates the other.</summary>
     private bool _syncingSelection;
 
+    /// <summary>False until the constructor finished seeding properties; gates user-action logging.</summary>
+    private readonly bool _constructed;
+
     /// <summary>First repository name from the last load; makes <see cref="TargetPreview"/> concrete.</summary>
     private string? _sampleRepoName;
 
@@ -115,6 +118,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             // The Token setter's existing org lookup fires naturally with the vault token.
             Token = tokenVault?.TryRetrieve(account.Id) ?? "";
         }
+        _constructed = true;
     }
 
     /// <summary>Id of the account this workspace was created for, or null for Quick Sync.</summary>
@@ -399,7 +403,22 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
     // Runs on the UI thread (Token is only set from UI handlers), so the async
     // continuations below stay on the UI thread and may touch Organizations directly.
-    partial void OnTokenChanged(string value) => _ = RefreshOrganizationsAsync();
+    partial void OnTokenChanged(string value)
+    {
+        // The value itself never reaches the log; its length is enough to tell a
+        // paste from a cleared box when reading back a session (#40). Construction
+        // seeds the property (empty, or the vault token) and is not a user action.
+        if (_constructed)
+        {
+            _log.Info(value.Length == 0
+                ? $"Token cleared in workspace '{DisplayName}'."
+                : $"Token entered in workspace '{DisplayName}' ({value.Length} characters).");
+        }
+        _ = RefreshOrganizationsAsync();
+    }
+
+    /// <summary>Records that the user opened the target folder from the results bar (#40).</summary>
+    public void NoteFolderOpened() => _log.Info($"Opened folder '{EffectiveTargetRoot}'.");
 
     /// <summary>Stops the in-flight org lookup and path recovery, if any.</summary>
     public void Dispose()
@@ -434,8 +453,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         {
             await Task.Delay(_orgLookupDebounce, lookupToken); // debounce keystrokes / rapid pastes
             IsLoadingOrgs = true;
+            _log.Info("Organization lookup started.");
             var orgs = await _orgLister.ListOrganizationsAsync(token, lookupToken);
             lookupToken.ThrowIfCancellationRequested();
+            _log.Info($"Organization lookup finished: {orgs.Count} organizations and accounts visible.");
 
             // An editable ComboBox resets its Text when its ItemsSource is mutated,
             // and the TwoWay binding would wipe a value that was already set — an
@@ -465,6 +486,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
         {
             if (_orgLoadCts == cts)
             {
+                _log.Error($"Organization lookup failed: {ex.Message}", ex);
                 ShowLoadError("Could not list organizations", ex.Message);
             }
         }
@@ -762,6 +784,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(CanRetryFailed))]
     private async Task RetryFailedAsync()
     {
+        _log.Info($"Retrying {Repos.Count(r => r.Status == SyncStatus.Failed)} failed repositories.");
         // One batch: per-row recounts and command re-queries would be O(n^2) (#30).
         _syncingSelection = true;
         try
@@ -807,9 +830,11 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
+        _log.Info($"{item.Name}: path recovery requested ({item.InvalidPaths?.Count ?? 0} invalid paths).");
         PathRecovery? recovery = await interaction(item);
         if (recovery is null)
         {
+            _log.Info($"{item.Name}: path recovery canceled; the repository stays failed.");
             return; // user canceled; the row keeps its Failed state and payload
         }
 

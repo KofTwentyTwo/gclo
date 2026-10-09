@@ -34,7 +34,10 @@ namespace gclo
         private const int MinWindowHeight = 520;
 
         private readonly AppSettings _settings;
-        private readonly UpdateService _updateService = new();
+        private readonly UpdateService _updateService;
+
+        /// <summary>Guards Help > Check for updates against re-entry while a check or download runs.</summary>
+        private bool _updateInFlight;
 
         // One log, vault, and store shared by every workspace (and the log viewer),
         // so all workspaces write to the same file and read the same accounts.
@@ -83,6 +86,8 @@ namespace gclo
         {
             _log = new FileActivityLog(System.IO.Path.Combine(GcloPaths.DataRoot, "logs"));
             App.CrashLog = _log; // the unhandled-exception net now reaches the activity log
+            _log.Info($"gclo {BuildVersion.Describe(typeof(MainWindow).Assembly)} starting.");
+            _updateService = new UpdateService(_log);
             _tokenVault = new CredentialManagerVault();
             _accountsStore = new AccountsStore(_tokenVault, log: _log);
 
@@ -131,6 +136,7 @@ namespace gclo
             {
                 _logWindow?.Close(); // a log-only process would linger otherwise
                 DisposeWorkspaces();
+                _log.Info("gclo closing.");
             };
 
             // The splash overlay honors Settings → Advanced: skipped entirely when
@@ -213,9 +219,10 @@ namespace gclo
                     ReleasePageIfIdle(_currentWorkspaceId);
                 }
                 ShowWorkspace(id);
-                if (_workspaces.ContainsKey(id))
+                if (_workspaces.TryGetValue(id, out WorkspaceEntry? shown))
                 {
                     _currentWorkspaceId = id;
+                    _log.Info($"Showing workspace '{shown.ViewModel.DisplayName}'.");
                 }
             }
         }
@@ -514,15 +521,17 @@ namespace gclo
         {
             string? existingToken = existing is null ? null : _tokenVault.TryRetrieve(existing.Id);
             var viewModel = new AccountWizardViewModel(
-                _accountsStore, new GitHubOrganizationLister(), _settings, existing, existingToken);
+                _accountsStore, new GitHubOrganizationLister(), _settings, existing, existingToken, _log);
             var dialog = new AccountWizardDialog(
                 viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
             {
                 XamlRoot = Content.XamlRoot,
             };
+            _log.Info(existing is null ? "Account wizard opened (add)." : $"Account wizard opened (edit '{existing.Name}').");
             await DialogGuard.ShowAsync(dialog);
             if (!dialog.Saved)
             {
+                _log.Info("Account wizard canceled.");
                 return;
             }
 
@@ -552,16 +561,21 @@ namespace gclo
         /// </summary>
         private async Task ShowSeededAccountWizardAsync(AccountWizardSeed seed)
         {
-            var viewModel = new AccountWizardViewModel(_accountsStore, new GitHubOrganizationLister(), seed);
+            var viewModel = new AccountWizardViewModel(_accountsStore, new GitHubOrganizationLister(), seed, _log);
             var dialog = new AccountWizardDialog(
                 viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
             {
                 XamlRoot = Content.XamlRoot,
             };
+            _log.Info($"Account wizard opened (save Quick Sync connection to '{seed.Organization}' as an account).");
             await DialogGuard.ShowAsync(dialog);
             if (dialog.Saved)
             {
                 OnAccountAdded(viewModel);
+            }
+            else
+            {
+                _log.Info("Account wizard canceled.");
             }
         }
 
@@ -638,12 +652,13 @@ namespace gclo
             };
             if (await DialogGuard.ShowAsync(confirm) != ContentDialogResult.Primary)
             {
+                _log.Info($"Delete of account '{account.Name}' canceled.");
                 return;
             }
 
             try
             {
-                _accountsStore.Delete(id);
+                _accountsStore.Delete(id); // the store logs the deletion
             }
             catch (Exception ex)
             {
@@ -666,7 +681,6 @@ namespace gclo
                 _currentWorkspaceId = Guid.Empty;
                 WorkspaceNav.SelectedItem = QuickSyncNavItem; // SelectionChanged shows it
             }
-            _log.Info($"Account '{account.Name}' deleted.");
         }
 
         /// <summary>
@@ -712,9 +726,11 @@ namespace gclo
         {
             if (_cancelSyncAll is not null)
             {
+                _log.Info("Sync all: cancel requested; the account in flight will finish.");
                 _cancelSyncAll();
                 return;
             }
+            _log.Info("Sync all requested.");
 
             // Account workspaces in pane order, created (not shown) when never visited.
             var accountWorkspaces = new List<WorkspaceViewModel>();
@@ -814,15 +830,20 @@ namespace gclo
         private async void SettingsMenuItem_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new SettingsDialog(
-                _settings, _tokenVault, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
+                _settings, _tokenVault, () => WinRT.Interop.WindowNative.GetWindowHandle(this), _log)
             {
                 XamlRoot = Content.XamlRoot,
             };
+            _log.Info("Settings opened.");
             int concurrencyBefore = _settings.DefaultMaxConcurrency;
             if (await DialogGuard.ShowAsync(dialog) == ContentDialogResult.Primary)
             {
-                dialog.ApplyAndSave();
+                dialog.ApplyAndSave(); // logs what changed
                 ApplySettings(seedQuickSyncConcurrency: _settings.DefaultMaxConcurrency != concurrencyBefore);
+            }
+            else
+            {
+                _log.Info("Settings closed without saving.");
             }
         }
 
@@ -839,69 +860,119 @@ namespace gclo
             {
                 _logWindow = new LogWindow(_log);
                 _logWindow.Closed += (_, _) => _logWindow = null;
+                _log.Info("Activity log window opened.");
             }
             _logWindow.Activate();
         }
 
         private async void GitHubMenuItem_Click(object sender, RoutedEventArgs e)
         {
+            _log.Info($"Opening {RepoUrl} in the browser.");
             await Windows.System.Launcher.LaunchUriAsync(new Uri(RepoUrl));
         }
 
         private async void AboutMenuItem_Click(object sender, RoutedEventArgs e)
         {
+            _log.Info("About dialog opened.");
             var dialog = new AboutDialog { XamlRoot = Content.XamlRoot };
             await DialogGuard.ShowAsync(dialog);
         }
 
+        /// <summary>
+        /// Help > Check for updates: every phase is visible in <c>UpdateBar</c> (#39) —
+        /// checking with an indeterminate bar, the outcome inline (up to date / failed),
+        /// then, after the user confirms, a determinate download bar until the process
+        /// restarts. The menu item is disabled for the duration so it cannot be re-run.
+        /// Only "update available" still asks with a dialog, because that is a decision.
+        /// </summary>
         private async void CheckForUpdatesMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            if (!_updateService.IsSupported)
-            {
-                await ShowMessageAsync(
-                    "Check for updates",
-                    "Updates are only available in installed builds.");
-                return;
-            }
-
-            var result = await _updateService.CheckAsync();
-            if (result.Error is not null)
-            {
-                await ShowMessageAsync(
-                    "Check for updates",
-                    $"Could not check for updates.\n{result.Error}");
-                return;
-            }
-
-            if (result.AvailableVersion is null)
-            {
-                string current = _updateService.CurrentVersion is string v ? $" (v{v})" : "";
-                await ShowMessageAsync("Check for updates", $"You are up to date{current}.");
-                return;
-            }
-
-            var confirm = new ContentDialog
-            {
-                Title = "Update available",
-                Content = $"gclo v{result.AvailableVersion} is available. "
-                    + "The app will restart to finish installing the update.",
-                PrimaryButtonText = "Update and restart",
-                CloseButtonText = "Not now",
-                DefaultButton = ContentDialogButton.Primary,
-                XamlRoot = Content.XamlRoot,
-            };
-            if (await DialogGuard.ShowAsync(confirm) != ContentDialogResult.Primary)
+            if (_updateInFlight)
             {
                 return;
             }
-
-            // On success this exits the process to restart into the new version,
-            // so reaching the line below means the update did not go through.
-            string? error = await _updateService.DownloadAndApplyAsync();
-            if (error is not null)
+            _updateInFlight = true;
+            CheckUpdatesMenuItem.IsEnabled = false;
+            try
             {
-                await ShowMessageAsync("Update failed", error);
+                if (!_updateService.IsSupported)
+                {
+                    _log.Info("Update check requested, but this is not an installed build.");
+                    ShowUpdateBar(InfoBarSeverity.Informational, "Updates are only available in installed builds.", busy: false);
+                    return;
+                }
+
+                ShowUpdateBar(InfoBarSeverity.Informational, "Checking for updates…", busy: true);
+                UpdateCheckResult result = await _updateService.CheckAsync();
+                if (result.Error is not null)
+                {
+                    ShowUpdateBar(InfoBarSeverity.Error, $"Could not check for updates. {result.Error}", busy: false);
+                    return;
+                }
+
+                if (result.AvailableVersion is null)
+                {
+                    string current = _updateService.CurrentVersion is string v ? $" (v{v})" : "";
+                    ShowUpdateBar(InfoBarSeverity.Success, $"You are up to date{current}.", busy: false);
+                    return;
+                }
+
+                ShowUpdateBar(
+                    InfoBarSeverity.Informational,
+                    $"gclo v{result.AvailableVersion} is available.",
+                    busy: false);
+                var confirm = new ContentDialog
+                {
+                    Title = "Update available",
+                    Content = $"gclo v{result.AvailableVersion} is available. "
+                        + "The app will restart to finish installing the update.",
+                    PrimaryButtonText = "Update and restart",
+                    CloseButtonText = "Not now",
+                    DefaultButton = ContentDialogButton.Primary,
+                    XamlRoot = Content.XamlRoot,
+                };
+                if (await DialogGuard.ShowAsync(confirm) != ContentDialogResult.Primary)
+                {
+                    _log.Info($"Update to v{result.AvailableVersion} declined for now.");
+                    ShowUpdateBar(
+                        InfoBarSeverity.Informational,
+                        $"gclo v{result.AvailableVersion} is available. Run Help > Check for updates again when you are ready to install it.",
+                        busy: false);
+                    return;
+                }
+
+                string version = result.AvailableVersion;
+                ShowUpdateBar(InfoBarSeverity.Informational, $"Downloading gclo v{version}…", busy: true, determinate: true);
+                var progress = new Progress<int>(percent =>
+                {
+                    UpdateProgressBar.Value = percent;
+                    UpdateBar.Message = $"Downloading gclo v{version}… {percent}%";
+                });
+
+                // On success this exits the process to restart into the new version,
+                // so reaching the line below means the update did not go through.
+                string? error = await _updateService.DownloadAndApplyAsync(progress);
+                if (error is not null)
+                {
+                    ShowUpdateBar(InfoBarSeverity.Error, $"Update failed. {error}", busy: false);
+                }
             }
+            finally
+            {
+                _updateInFlight = false;
+                CheckUpdatesMenuItem.IsEnabled = true;
+            }
+        }
+
+        private void ShowUpdateBar(InfoBarSeverity severity, string message, bool busy, bool determinate = false)
+        {
+            UpdateBar.Severity = severity;
+            UpdateBar.Message = message;
+            UpdateBar.IsClosable = !busy;
+            UpdateProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+            UpdateProgressBar.IsIndeterminate = busy && !determinate;
+            UpdateProgressBar.Value = 0;
+            UpdateBar.IsOpen = true;
         }
 
         private async Task ShowMessageAsync(string title, string message)

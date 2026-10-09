@@ -15,6 +15,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
 {
     private readonly AccountsStore _store;
     private readonly IOrganizationLister _orgLister;
+    private readonly IActivityLog _log;
     private readonly Account? _existing;
 
     /// <summary>What the token box was seeded with; unchanged means "leave the vault alone".</summary>
@@ -31,8 +32,9 @@ public sealed partial class AccountWizardViewModel : ObservableObject
         IOrganizationLister orgLister,
         AppSettings defaults,
         Account? existing = null,
-        string? existingToken = null)
-        : this(store, orgLister, existing, existingToken ?? "")
+        string? existingToken = null,
+        IActivityLog? log = null)
+        : this(store, orgLister, existing, existingToken ?? "", log)
     {
         ArgumentNullException.ThrowIfNull(defaults);
 
@@ -63,8 +65,9 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     /// matter of naming it (#30). The token is treated as freshly typed, so it is
     /// always written to the vault on save.
     /// </summary>
-    public AccountWizardViewModel(AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed)
-        : this(store, orgLister, existing: null, seededToken: "")
+    public AccountWizardViewModel(
+        AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed, IActivityLog? log = null)
+        : this(store, orgLister, existing: null, seededToken: "", log)
     {
         ArgumentNullException.ThrowIfNull(seed);
         Name = "";
@@ -77,12 +80,13 @@ public sealed partial class AccountWizardViewModel : ObservableObject
     }
 
     private AccountWizardViewModel(
-        AccountsStore store, IOrganizationLister orgLister, Account? existing, string seededToken)
+        AccountsStore store, IOrganizationLister orgLister, Account? existing, string seededToken, IActivityLog? log)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(orgLister);
         _store = store;
         _orgLister = orgLister;
+        _log = log ?? new NullActivityLog();
         _existing = existing;
         _seededToken = seededToken;
 
@@ -210,6 +214,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
                     // The lister is the validation: it fails on a rejected or rate-limited
                     // token and returns the organizations the dropdown offers otherwise.
                     IsValidatingToken = true;
+                    _log.Info("Account wizard: validating the token.");
                     try
                     {
                         var organizations = await _orgLister.ListOrganizationsAsync(Token.Trim());
@@ -219,10 +224,12 @@ public sealed partial class AccountWizardViewModel : ObservableObject
                             Organizations.Add(organization);
                         }
                         TokenError = "";
+                        _log.Info($"Account wizard: token accepted; {organizations.Count} organizations and accounts visible.");
                     }
                     catch (Exception ex)
                     {
                         TokenError = ex.Message;
+                        _log.Error($"Account wizard: token rejected: {ex.Message}", ex);
                         return false;
                     }
                     finally

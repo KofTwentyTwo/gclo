@@ -417,6 +417,7 @@ namespace gclo
             string root = ViewModel.EffectiveTargetRoot;
             if (Directory.Exists(root))
             {
+                ViewModel.NoteFolderOpened();
                 await Windows.System.Launcher.LaunchFolderPathAsync(root);
             }
         }

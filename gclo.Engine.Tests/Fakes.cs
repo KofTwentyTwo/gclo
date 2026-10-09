@@ -95,6 +95,27 @@ public sealed class FakeGitClient : IGitClient
     }
 }
 
+/// <summary>
+/// An <see cref="IActivityLog"/> that keeps every entry, for asserting that actions
+/// are logged (#40) and that no entry ever carries a token.
+/// </summary>
+public sealed class RecordingActivityLog : IActivityLog
+{
+    private readonly ConcurrentQueue<(string Level, string Message)> _entries = new();
+
+    public IReadOnlyList<(string Level, string Message)> Entries => _entries.ToArray();
+
+    public IReadOnlyList<string> Messages => _entries.Select(e => e.Message).ToArray();
+
+    public void Info(string message) => _entries.Enqueue(("INFO", message));
+
+    public void Error(string message, Exception? exception = null) => _entries.Enqueue(("ERROR", message));
+
+    public string LogDirectory => "";
+
+    public string CurrentLogFilePath => "";
+}
+
 /// <summary>An <see cref="IOrganizationLister"/> whose behavior is configured with a delegate.</summary>
 public sealed class FakeOrganizationLister : IOrganizationLister
 {
