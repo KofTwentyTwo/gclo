@@ -1816,6 +1816,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
       WorkspaceViewModel vm = CreateViewModel(account: account, vault: vault);
 
       Assert.Equal("default-token-1234567890", vm.Token);
+      Assert.True(vm.UsesDefaultToken);
       await WaitUntilAsync(() => lookedUpToken is not null, "org lookup to fire");
       Assert.Equal("default-token-1234567890", lookedUpToken);
    }

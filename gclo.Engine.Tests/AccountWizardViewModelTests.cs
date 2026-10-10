@@ -390,6 +390,206 @@ public sealed class AccountWizardViewModelTests : IDisposable
 
 
 
+   // ---------------------------------------------------------------- default token (#102)
+
+   private AccountWizardViewModel NewWizardWithDefault(string? defaultToken, Account? existing = null, string? existingToken = null)
+       => new(_store, _orgs, _defaults, existing, () => existingToken, defaultToken: () => defaultToken);
+
+
+
+   [Fact]
+   public void NewWizard_WithoutADefaultToken_OffersNoChoice_AndUsesAnOwnToken()
+   {
+      AccountWizardViewModel wizard = NewWizardWithDefault(defaultToken: null);
+
+      Assert.False(wizard.HasDefaultToken);
+      Assert.False(wizard.UseDefaultToken);
+      Assert.True(wizard.IsOwnTokenSelected);
+      Assert.Equal(1, wizard.TokenChoiceIndex);
+   }
+
+
+
+   [Fact]
+   public void NewWizard_WithADefaultToken_PreselectsIt()
+   {
+      AccountWizardViewModel wizard = NewWizardWithDefault("ghp_default");
+
+      Assert.True(wizard.HasDefaultToken);
+      Assert.True(wizard.UseDefaultToken);
+      Assert.False(wizard.IsOwnTokenSelected);
+      Assert.Equal(0, wizard.TokenChoiceIndex);
+      Assert.Equal("", wizard.Token); // the default token is never loaded into the box
+      Assert.StartsWith("Used by Quick Sync.", wizard.DefaultTokenCaption, StringComparison.Ordinal);
+   }
+
+
+
+   [Fact]
+   public void TokenChoiceIndex_RoundTripsToUseDefaultToken_AndNotifies()
+   {
+      AccountWizardViewModel wizard = NewWizardWithDefault("ghp_default");
+      var changed = new List<string?>();
+      wizard.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+      wizard.TokenChoiceIndex = 1;
+
+      Assert.False(wizard.UseDefaultToken);
+      Assert.Contains(changed, n => string.Equals(n, nameof(AccountWizardViewModel.IsOwnTokenSelected), StringComparison.Ordinal));
+      Assert.Contains(changed, n => string.Equals(n, nameof(AccountWizardViewModel.TokenChoiceIndex), StringComparison.Ordinal));
+      Assert.Contains(changed, n => string.Equals(n, nameof(AccountWizardViewModel.DefaultTokenCaption), StringComparison.Ordinal));
+
+      wizard.TokenChoiceIndex = 0;
+      Assert.True(wizard.UseDefaultToken);
+   }
+
+
+
+   [Fact]
+   public async Task NewWizard_UsingTheDefaultToken_ValidatesWithIt_AndSavesWithoutAnOwnEntry()
+   {
+      AccountWizardViewModel wizard = NewWizardWithDefault("ghp_default");
+      wizard.Name = "Shared";
+      string? validated = null;
+      _orgs.Handler = (token, _) =>
+      {
+         validated = token;
+         return Task.FromResult<IReadOnlyList<string>>(["acme"]);
+      };
+
+      await AdvanceToStepAsync(wizard, 3);
+      Assert.Equal("ghp_default", validated);
+      Assert.Equal("", wizard.TokenError);
+      wizard.Organization = "acme";
+      wizard.TargetRoot = @"C:\repos";
+      await AdvanceToStepAsync(wizard, 4);
+      await wizard.SaveAsync();
+
+      Account saved = Assert.Single(_store.GetAll());
+      Assert.True(saved.UsesDefaultToken);
+      Assert.Null(_vault.TryRetrieve(saved.Id));
+      Assert.Equal(1, _store.CountUsingDefaultToken());
+   }
+
+
+
+   [Fact]
+   public async Task NewWizard_UsingTheDefaultToken_WhenItWasRemovedMeanwhile_StaysOnStepTwo()
+   {
+      string? liveDefault = "ghp_default";
+      var wizard = new AccountWizardViewModel(_store, _orgs, _defaults, defaultToken: () => liveDefault);
+      wizard.Name = "Shared";
+      await AdvanceToStepAsync(wizard, 2);
+      liveDefault = null; // removed in Settings while the wizard is open
+
+      Assert.False(await wizard.TryAdvanceAsync());
+
+      Assert.Equal(2, wizard.Step);
+      Assert.Contains("default token is no longer saved", wizard.TokenError);
+      Assert.Contains("Settings", wizard.TokenError);
+   }
+
+
+
+   [Fact]
+   public async Task NewWizard_ChoosingAnOwnToken_IgnoresTheDefault_AndStoresTheTypedOne()
+   {
+      AccountWizardViewModel wizard = NewWizardWithDefault("ghp_default");
+      wizard.Name = "Mine";
+      wizard.UseDefaultToken = false;
+      wizard.Token = "ghp_mine";
+      string? validated = null;
+      _orgs.Handler = (token, _) =>
+      {
+         validated = token;
+         return Task.FromResult<IReadOnlyList<string>>(["acme"]);
+      };
+
+      await AdvanceToStepAsync(wizard, 3);
+      wizard.Organization = "acme";
+      wizard.TargetRoot = @"C:\repos";
+      await AdvanceToStepAsync(wizard, 4);
+      await wizard.SaveAsync();
+
+      Assert.Equal("ghp_mine", validated);
+      Account saved = Assert.Single(_store.GetAll());
+      Assert.False(saved.UsesDefaultToken);
+      Assert.Equal("ghp_mine", _vault.TryRetrieve(saved.Id));
+   }
+
+
+
+   [Fact]
+   public async Task EditWizard_DefaultTokenAccount_StartsOnTheDefault_AndCanSwitchToAnOwnToken()
+   {
+      Account existing = MakeAccount("Shared") with { TokenSource = TokenSource.Default };
+      _store.Save(existing, null);
+      AccountWizardViewModel wizard = NewWizardWithDefault("ghp_default", existing);
+      Assert.True(wizard.UseDefaultToken);
+      Assert.StartsWith("Used by Quick Sync.", wizard.DefaultTokenCaption, StringComparison.Ordinal); // itself excluded
+
+      wizard.UseDefaultToken = false;
+      await AdvanceToStepAsync(wizard, 2);
+      Assert.False(await wizard.TryAdvanceAsync()); // no own token typed yet
+      Assert.Contains("instead of the default one", wizard.TokenError);
+
+      wizard.Token = "ghp_mine";
+      await AdvanceToStepAsync(wizard, 4);
+      await wizard.SaveAsync();
+
+      Account saved = Assert.Single(_store.GetAll());
+      Assert.False(saved.UsesDefaultToken);
+      Assert.Equal("ghp_mine", _vault.TryRetrieve(saved.Id));
+   }
+
+
+
+   [Fact]
+   public async Task EditWizard_OwnTokenAccount_SwitchingToTheDefault_RemovesItsOwnEntry_AndSaysSo()
+   {
+      Account existing = MakeAccount("Work");
+      _store.Save(existing, "ghp_own");
+      _store.Save(MakeAccount("Other") with { TokenSource = TokenSource.Default }, null);
+      AccountWizardViewModel wizard = NewWizardWithDefault("ghp_default", existing, "ghp_own");
+      Assert.False(wizard.UseDefaultToken);
+
+      wizard.UseDefaultToken = true;
+
+      Assert.Contains("1 other account", wizard.DefaultTokenCaption);
+      Assert.Contains("own token will be removed", wizard.DefaultTokenCaption);
+      await AdvanceToStepAsync(wizard, 4);
+      await wizard.SaveAsync();
+      Account saved = _store.FindByName("Work")!;
+      Assert.True(saved.UsesDefaultToken);
+      Assert.Null(_vault.TryRetrieve(saved.Id));
+   }
+
+
+
+   [Fact]
+   public void DefaultTokenCaption_CountsOtherAccounts()
+   {
+      _store.Save(MakeAccount("A") with { TokenSource = TokenSource.Default }, null);
+      _store.Save(MakeAccount("B") with { TokenSource = TokenSource.Default }, null);
+
+      Assert.Contains("2 other accounts", NewWizardWithDefault("ghp_default").DefaultTokenCaption);
+   }
+
+
+
+   [Fact]
+   public void SeededWizard_PreselectsTheDefault_OnlyWhenTheSeedTokenIsTheDefaultToken()
+   {
+      var onDefault = new AccountWizardSeed("ghp_default", "acme", @"C:\src", CreateOrgSubfolder: false, MaxConcurrency: 8);
+      var other = new AccountWizardSeed("ghp_other", "acme", @"C:\src", CreateOrgSubfolder: false, MaxConcurrency: 8);
+
+      Assert.True(new AccountWizardViewModel(_store, _orgs, onDefault, defaultToken: () => "ghp_default").UseDefaultToken);
+      Assert.False(new AccountWizardViewModel(_store, _orgs, other, defaultToken: () => "ghp_default").UseDefaultToken);
+      Assert.False(new AccountWizardViewModel(_store, _orgs, onDefault).UseDefaultToken);
+   }
+
+
+
    [Fact]
    public void SeededWizard_NullSeed_Throws()
    {
