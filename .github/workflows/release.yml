@@ -145,7 +145,7 @@ jobs:
   release:
     name: Release
     needs: [verify, gates, smoke]
-    uses: KofTwentyTwo/standards/.github/workflows/release-velopack.yml@e8ab30f8c60df437440ffd786c87678207246f5c # main 2026-10-09 (pre-1.0 draft, standards#5)
+    uses: KofTwentyTwo/standards/.github/workflows/release-velopack.yml@40ecebae5c32d5550afb4af157eee69572bd267a # main 2026-10-10 (signs only unsigned binaries, standards#29)
     permissions:
       contents: write      # create and publish the GitHub release
       id-token: write      # sign attestations; Azure OIDC when signing
