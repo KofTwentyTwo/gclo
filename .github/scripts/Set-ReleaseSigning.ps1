@@ -89,8 +89,14 @@ if($certProfile.properties.status -ne 'Active')
 {
    throw "Certificate profile '$ProfileName' is '$($certProfile.properties.status)', not Active."
 }
-$endpoint = $account.properties.accountUri
-$subjectName = $certProfile.properties.commonName
+$endpoint = $account.properties.accountUri.TrimEnd('/')
+# The validated publisher is on the issued certificate (subjectName), not on the profile.
+$certificate = $certProfile.properties.certificates | Where-Object { $_.status -eq 'Active' } | Select-Object -First 1
+if($null -eq $certificate)
+{
+   throw "Certificate profile '$ProfileName' has no active certificate."
+}
+$subjectName = (($certificate.subjectName -split ',\s*') | Where-Object { $_ -like 'CN=*' } | Select-Object -First 1) -replace '^CN='
 Write-Output "Signing account '$AccountName' in $($account.location): endpoint $endpoint."
 Write-Output "Profile '$ProfileName' is Active (type $($certProfile.properties.profileType)); certificate subject CN='$subjectName'."
 
