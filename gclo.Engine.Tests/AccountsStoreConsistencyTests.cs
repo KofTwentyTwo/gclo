@@ -388,6 +388,67 @@ public sealed class AccountsStoreConsistencyTests : IDisposable
    /// Delete can be made to throw (from a given call number on) without changing
    /// state — the contract a real secret store keeps on failure.
    /// </summary>
+   // ---------------------------------------------------------------- save: switching to the default token (#102)
+
+   [Fact]
+   public void Save_SwitchToDefaultToken_MetadataWriteFails_RestoresTheOwnToken()
+   {
+      AccountsStore store = NewStore();
+      Account account = MakeAccount("Work");
+      store.Save(account, OldToken);
+      BlockMetadataWrites();
+      _vault.ResetCounters();
+
+      Assert.Throws<UnauthorizedAccessException>(() => store.Save(account with { TokenSource = TokenSource.Default }, null));
+
+      Assert.Equal(OldToken, _vault.TryRetrieve(account.Id));
+      Assert.Equal(1, _vault.DeleteCalls);
+      Assert.Equal(1, _vault.StoreCalls);
+      Assert.False(Assert.Single(store.GetAll()).UsesDefaultToken);
+      Assert.False(Assert.Single(OnDisk()).UsesDefaultToken);
+   }
+
+
+
+   [Fact]
+   public void Save_SwitchToDefaultToken_MetadataWriteFails_WithNoOwnToken_JustPropagates()
+   {
+      AccountsStore store = NewStore();
+      Account account = MakeAccount("Work");
+      store.Save(account, OldToken);
+      _vault.Delete(account.Id); // nothing of its own to put back
+      BlockMetadataWrites();
+      _vault.ResetCounters();
+
+      Assert.Throws<UnauthorizedAccessException>(() => store.Save(account with { TokenSource = TokenSource.Default }, null));
+
+      Assert.Equal(0, _vault.DeleteCalls);
+      Assert.Equal(0, _vault.StoreCalls);
+   }
+
+
+
+   [Fact]
+   public void Save_SwitchToDefaultToken_MetadataWriteFails_AndRestoreFails_ReportsBoth()
+   {
+      AccountsStore store = NewStore();
+      Account account = MakeAccount("Work");
+      store.Save(account, OldToken);
+      BlockMetadataWrites();
+      _vault.StoreFailure = new InvalidOperationException("vault offline");
+      _vault.ResetCounters();
+
+      AccountConsistencyException ex = Assert.Throws<AccountConsistencyException>(
+          () => store.Save(account with { TokenSource = TokenSource.Default }, null));
+
+      Assert.Contains("vault offline", ex.Message);
+      Assert.Contains("lost its own token", ex.Message);
+      Assert.Null(_vault.TryRetrieve(account.Id));
+      Assert.Contains(_log.Errors, e => e.Message.Contains("could not be restored", StringComparison.Ordinal));
+   }
+
+
+
    private sealed class FaultableVault : ITokenVault
    {
       private readonly InMemoryVault _inner = new();

@@ -140,8 +140,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          TargetFolder = account.TargetRoot;
          CreateOrgSubfolder = account.CreateOrgSubfolder;
          MaxConcurrency = account.MaxConcurrency;
-         // The Token setter's existing org lookup fires naturally with the vault token.
-         Token = tokenVault?.TryRetrieve(account.Id) ?? "";
+         // The Token setter's existing org lookup fires naturally with the resolved
+         // token: the account's own entry, or the default token from Settings.
+         Token = tokenVault is null ? "" : new AccountTokenResolver(tokenVault).TryResolve(account) ?? "";
       }
       _constructed = true;
    }

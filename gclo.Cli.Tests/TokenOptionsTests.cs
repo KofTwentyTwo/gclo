@@ -27,6 +27,37 @@ public sealed class TokenOptionsTests
 
 
    [Fact]
+   public void UseDefaultToken_IsAnExplicitSource_ThatResolvesToNoValue()
+   {
+      TokenOptions options = Parse("--use-default-token");
+
+      Assert.True(options.HasExplicitSource);
+      Assert.True(options.UseDefault);
+      CliUsageException ex = Assert.Throws<CliUsageException>(() => options.Resolve());
+      Assert.Contains("--use-default-token", ex.Message);
+      Assert.Contains("accounts add", ex.Message);
+   }
+
+
+
+   [Fact]
+   public void UseDefaultToken_CombinedWithAnotherSource_IsAUsageError()
+   {
+      CliUsageException ex = Assert.Throws<CliUsageException>(() => Parse("--use-default-token", "--token-stdin").Resolve());
+
+      Assert.Contains("only one of", ex.Message);
+      Assert.Contains("--use-default-token", ex.Message);
+   }
+
+
+
+   [Fact]
+   public void UseDefaultToken_RejectsAValue()
+       => Assert.Throws<CliUsageException>(() => Parse("--use-default-token=yes"));
+
+
+
+   [Fact]
    public void TryConsume_NonTokenOption_ReturnsFalse()
    {
       var reader = new OptionReader(["--json"]);

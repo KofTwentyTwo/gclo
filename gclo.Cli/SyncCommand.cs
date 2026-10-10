@@ -468,14 +468,17 @@ internal static class SyncCommand
       }
 
       // vault is non-null whenever account is: both come from AccountsCommand.Open.
-      string? token = vault!.TryRetrieve(account.Id);
-      if(string.IsNullOrEmpty(token))
+      string? token = new AccountTokenResolver(vault!).TryResolve(account);
+      if(token is null)
       {
+         string fix = account.UsesDefaultToken
+             ? "Save a default token in the desktop app's Settings, switch the account to its own token with "
+               + "'gclo accounts edit --name <name> --token-stdin',"
+             : "Re-enter the token with 'gclo accounts edit --name <name> --token-stdin' or in the desktop app's "
+               + "account wizard, restore the credential entry manually,";
          throw new CliErrorException(
-             $"Account '{account.Name}' has no token in Windows Credential Manager "
-             + $"(entry 'gclo:account:{account.Id:N}'). Re-enter the token with "
-             + "'gclo accounts edit --name <name> --token-stdin' or in the desktop app's account wizard, "
-             + "restore the credential entry manually, or pass a token with --token-env, --token-file, or --token-stdin.");
+             $"Account '{account.Name}' {AccountTokenResolver.MissingDescription(account)}. {fix} "
+             + "or pass a token with --token-env, --token-file, or --token-stdin.");
       }
       return token;
    }
