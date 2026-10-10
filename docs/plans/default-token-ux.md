@@ -46,9 +46,12 @@
 | User cleared the box, or pressed Remove | empty | "The default token will be removed on Save. *N* account(s) use it and will stop syncing until a new one is saved." (plain "…will be removed on Save." when N = 0) | hidden |
 
 Save semantics: mask unchanged → keep; non-empty and not the mask → store; empty
-→ remove (only if one was saved). Removing while `Default` accounts exist shows a
-confirmation ("Remove the default token? These accounts use it: A, B.") before the
-dialog closes; Cancel returns to the dialog with the mask restored.
+→ remove (only if one was saved). Removing while `Default` accounts exist is
+confirmed **inline** rather than with a second dialog (a `ContentDialog` cannot
+open another one, and the dialog guard allows one at a time): the caption turns
+critical, names the accounts ("2 accounts use it and will stop syncing until a new
+one is saved: A, B."), and Save is the confirmation; typing a token or Cancel
+backs out.
 
 Accessibility: the box keeps its automation id `SettingsDefaultTokenBox`; the
 mask is announced as the field's value by the password pattern (dots), the
