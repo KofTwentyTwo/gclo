@@ -65,12 +65,20 @@ its first submission cannot be automated; see below.
 | Job | Runs for | Needs | Publishes |
 | --- | -------- | ----- | --------- |
 | `release` (shared workflow) | every tag | nothing beyond `GITHUB_TOKEN` | the GitHub Release: Setup, portable, full/delta packages, feed, CLI zip, SBOMs, `SHA256SUMS`, provenance and SBOM attestations |
-| `packages` | stable only | `DEPS_PAT` (fine-grained token: contents and pull requests, write, this repository, ≤ 90 days), `CHOCO_API_KEY` (chocolatey.org) | the Chocolatey package pushed to chocolatey.org, and a `build(packaging): …` pull request against `main` with `bucket/gclo.json` and `packaging/chocolatey` pointed at the release |
+| `packages` | stable only | `RELEASE_APP_PRIVATE_KEY` (private key of the release GitHub App, see below) plus the repository variable `RELEASE_APP_CLIENT_ID`, `CHOCO_API_KEY` (chocolatey.org) | the Chocolatey package pushed to chocolatey.org, and a `build(packaging): …` pull request against `main` with `bucket/gclo.json` and `packaging/chocolatey` pointed at the release |
 | `winget` | stable only, once the repository variable `WINGET_PACKAGE_ID` is set (`KofTwentyTwo.gclo`, after the one-time manual submission below) | `WINGET_TOKEN` (fine-grained token that can fork and open pull requests on public repositories, ≤ 90 days); missing → the job fails | a manifest update PR on [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) |
 | `nuget` | only when the repository variable `NUGET_PUBLISH` is `true` | `NUGET_API_KEY` (nuget.org, push rights for `gclo.Engine`) | `gclo.Engine` on nuget.org |
 
-Why `DEPS_PAT`: a pull request opened with the default `GITHUB_TOKEN` triggers no
-status checks, so the packaging PR could never satisfy `main`'s required checks.
+Why a GitHub App: `main` requires signed commits, a DCO sign-off, and the full set
+of status checks. A pull request opened with the default `GITHUB_TOKEN` triggers
+no checks, and the action that opens the PR cannot sign commits with a personal
+access token. With a short-lived token minted from the App, GitHub signs the
+commit, its author is the App's `[bot]` user (exempt from the DCO check), and the
+checks run. Create the App once (the same pattern the standards repository uses):
+GitHub App installed **only on this repository**, permissions Contents and Pull
+requests **write**, no ruleset bypass. Store its client id as the Actions variable
+`RELEASE_APP_CLIENT_ID` and its private key (`.pem`) as `RELEASE_APP_PRIVATE_KEY`
+in the `release` environment; never as a repository secret or a committed file.
 
 ## First winget submission (one-time, manual)
 

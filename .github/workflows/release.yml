@@ -24,14 +24,17 @@
 # published stable installer, so the job runs once the WINGET_PACKAGE_ID variable
 # is set (docs/RELEASING.md) and fails if the token is missing from then on. The
 # tokens live in the `release` environment, which only v* tags can use:
-#   DEPS_PAT        fine-grained token: contents + pull requests (write) on this
-#                   repository, so the packaging PR runs the required checks
+#   RELEASE_APP_PRIVATE_KEY  private key of the release GitHub App (contents +
+#                   pull requests write on this repository only); the job mints a
+#                   short-lived token from it, so the packaging PR's commit is
+#                   signed by GitHub and the PR runs the required checks
 #   CHOCO_API_KEY   chocolatey.org API key
 #   WINGET_TOKEN    fine-grained token that can fork and open pull requests on
 #                   public repositories (microsoft/winget-pkgs)
 #   NUGET_API_KEY   nuget.org key with push rights for gclo.Engine (NUGET_PUBLISH)
-# plus the repository variable WINGET_PACKAGE_ID (KofTwentyTwo.gclo, set after the
-# one-time manual `wingetcreate new`).
+# plus the repository variables RELEASE_APP_CLIENT_ID (the release App's client id)
+# and WINGET_PACKAGE_ID (KofTwentyTwo.gclo, set after the one-time manual
+# `wingetcreate new`).
 name: Release
 
 on:
@@ -136,13 +139,14 @@ jobs:
       - name: Require the publishing secrets
         shell: pwsh
         env:
-          DEPS_PAT: ${{ secrets.DEPS_PAT }}
+          RELEASE_APP_CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
         run: |
-          $missing = @('DEPS_PAT', 'CHOCO_API_KEY') | Where-Object { [string]::IsNullOrEmpty((Get-Item -Path "env:$_" -ErrorAction SilentlyContinue).Value) }
+          $missing = @('RELEASE_APP_CLIENT_ID', 'RELEASE_APP_PRIVATE_KEY', 'CHOCO_API_KEY') | Where-Object { [string]::IsNullOrEmpty((Get-Item -Path "env:$_" -ErrorAction SilentlyContinue).Value) }
           if ($missing)
           {
-             Write-Output "::error::Missing in the release environment: $($missing -join ', '). Add them (docs/RELEASING.md) and re-run this job."
+             Write-Output "::error::Missing in the release environment (or repository variables): $($missing -join ', '). Add them (docs/RELEASING.md) and re-run this job."
              exit 1
           }
 
@@ -173,19 +177,28 @@ jobs:
           CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
         run: choco push (Get-ChildItem artifacts/chocolatey/*.nupkg | Select-Object -First 1).FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
 
+      # protect-main requires signed commits and a DCO sign-off. The action only
+      # signs with a bot token (a PAT is explicitly unsupported), so the PR is
+      # opened with a short-lived token of the release GitHub App: GitHub signs
+      # the commit, its author is the App's [bot] user (exempt from the DCO
+      # check), and the PR still triggers the required checks (#81, #85).
+      - name: Mint a release App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Open a PR with the updated package manifests
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ secrets.DEPS_PAT }}
+          token: ${{ steps.app.outputs.token }}
+          sign-commits: true
           base: main
           branch: packaging/v${{ needs.release.outputs.version }}
           delete-branch: true
-          # The pr / dco gate wants a Signed-off-by whose email matches the commit
-          # author, so author and committer are the same identity (the actor who
-          # pushed the tag) and the action signs off as that committer (#81).
-          author: ${{ github.actor }} <${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com>
-          committer: ${{ github.actor }} <${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com>
-          signoff: true
           commit-message: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.release.outputs.version }}'
           title: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.release.outputs.version }}'
           body: |

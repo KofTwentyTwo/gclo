@@ -47,7 +47,9 @@ and hash; `PackagingManifestTests` keeps both manifests valid and in agreement.
 - Stable releases are consumable via `scoop bucket add gclo <repo>` with no external
   account; prereleases never touch package managers.
 - The generated manifest pull request targets `main` and goes through the normal
-  gates (with `DEPS_PAT` it also gets status checks).
+  gates: it is opened with a short-lived release GitHub App token, so its commit
+  is signed by GitHub, exempt from the DCO check as a bot, and runs the required
+  status checks (#85).
 - Security: a new distribution channel; both channels verify the asset hash
   (threat model T2), and the hash they pin is the one `SHA256SUMS` attests.
 - Follow-up: `CHOCO_API_KEY` and the first Chocolatey moderation (#7).
