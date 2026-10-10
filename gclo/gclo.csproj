@@ -66,11 +66,14 @@
     <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
   </PropertyGroup>
 
-  <!-- Publish Properties -->
-  <PropertyGroup>
-    <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
-    <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
-    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
-    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
+  <!--
+    Publish-only properties. A plain Release build must not depend on the ReadyToRun
+    (crossgen) and trimming packs: only a publish-time restore downloads them, and the
+    release workflow restores once without a configuration, then builds Release
+    (NETSDK1094 otherwise). `_IsPublishing` is set by `dotnet publish`.
+  -->
+  <PropertyGroup Condition="'$(_IsPublishing)' == 'true' And '$(Configuration)' != 'Debug'">
+    <PublishReadyToRun>True</PublishReadyToRun>
+    <PublishTrimmed>True</PublishTrimmed>
   </PropertyGroup>
 </Project>
