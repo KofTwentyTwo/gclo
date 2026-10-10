@@ -57,7 +57,7 @@ public sealed partial class AccountWizardDialog : ContentDialog
       // by hand. The stored token of an existing account is deliberately NOT
       // loaded into the box: an empty box means "keep it", and the secret never
       // sits in an editable control with a reveal button (#32).
-      TokenBox.PlaceholderText = ViewModel.IsEditing
+      TokenBox.PlaceholderText = ViewModel.IsEditing && !ViewModel.UseDefaultToken
           ? "Leave empty to keep the stored token"
           : "ghp_…";
 

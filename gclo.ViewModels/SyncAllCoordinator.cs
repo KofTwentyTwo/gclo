@@ -78,6 +78,16 @@ public sealed class SyncAllCoordinator(IActivityLog log)
             continue;
          }
 
+         if(workspace.UsesDefaultToken && string.IsNullOrEmpty(workspace.Token))
+         {
+            // The account resolves to the default token and none is saved: a
+            // generic auth failure would send the user to the wrong place.
+            skipped++;
+            Announce(workspace, SyncAllAccountState.Skipped);
+            _log.Info($"Sync all: skipped '{workspace.DisplayName}' — no default token is saved (Settings).");
+            continue;
+         }
+
          Announce(workspace, SyncAllAccountState.Running);
 
          if(!workspace.HasLoadedRepos)

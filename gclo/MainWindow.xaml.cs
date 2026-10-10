@@ -615,14 +615,40 @@ public sealed partial class MainWindow : Window
    {
       var item = new NavigationViewItem
       {
-         Content = account.Name,
+         Content = AccountItemContent(account),
          Tag = account.Id,
          Icon = new FontIcon { Glyph = "" },
          ContextFlyout = CreateAccountContextFlyout(account.Id),
       };
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, account.UsesDefaultToken ? $"{account.Name}, uses the default token" : account.Name);
       ToolTipService.SetToolTip(item, account.LastSyncSummary ?? "Never synced");
       _navItems[account.Id] = item;
       return item;
+   }
+
+
+
+   /// <summary>
+   /// The pane item's content: the name, plus a "Default token" tag for an account
+   /// that resolves to the default token from Settings, so the dependency on
+   /// Settings is visible where the account is used (#102).
+   /// </summary>
+   private static object AccountItemContent(Account account)
+   {
+      if(!account.UsesDefaultToken)
+      {
+         return account.Name;
+      }
+      var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+      panel.Children.Add(new TextBlock { Text = account.Name, VerticalAlignment = VerticalAlignment.Center });
+      panel.Children.Add(new TextBlock
+      {
+         Text = "Default token",
+         VerticalAlignment = VerticalAlignment.Center,
+         Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+         Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+      });
+      return panel;
    }
 
 
@@ -688,7 +714,8 @@ public sealed partial class MainWindow : Window
       // validation call; the wizard never displays or retains it.
       Func<string?>? storedToken = existing is null ? null : () => _tokenVault.TryRetrieve(existing.Id);
       var viewModel = new AccountWizardViewModel(
-          _accountsStore, new GitHubOrganizationLister(), _settings, existing, storedToken, _log);
+          _accountsStore, new GitHubOrganizationLister(), _settings, existing, storedToken, _log,
+          defaultToken: () => _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId));
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
       {
@@ -737,7 +764,9 @@ public sealed partial class MainWindow : Window
    /// </summary>
    private async Task ShowSeededAccountWizardAsync(AccountWizardSeed seed)
    {
-      var viewModel = new AccountWizardViewModel(_accountsStore, new GitHubOrganizationLister(), seed, _log);
+      var viewModel = new AccountWizardViewModel(
+          _accountsStore, new GitHubOrganizationLister(), seed, _log,
+          defaultToken: () => _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId));
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
       {
@@ -798,7 +827,8 @@ public sealed partial class MainWindow : Window
 
       if(_navItems.TryGetValue(id, out NavigationViewItem? item))
       {
-         item.Content = account.Name;
+         item.Content = AccountItemContent(account);
+         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, account.UsesDefaultToken ? $"{account.Name}, uses the default token" : account.Name);
          ToolTipService.SetToolTip(item, account.LastSyncSummary ?? "Never synced");
       }
 

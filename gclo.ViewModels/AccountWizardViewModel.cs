@@ -36,13 +36,22 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// </summary>
    private readonly Func<string?>? _storedToken;
 
+   /// <summary>
+   /// Fetches the default token from Settings on demand (null, or returning null,
+   /// when none is saved). Read when step 2 validates or the account is saved with
+   /// "Use the default token"; never copied into <see cref="Token"/> (#102).
+   /// </summary>
+   private readonly Func<string?>? _defaultToken;
+
 
 
    /// <summary>
    /// A wizard for a new account seeded from <paramref name="defaults"/>, or — when
    /// <paramref name="existing"/> is given — an edit wizard seeded from that account.
    /// <paramref name="storedToken"/> fetches the vault's current token on demand for
-   /// an edit (null, or returning null, when the vault has no entry).
+   /// an edit (null, or returning null, when the vault has no entry);
+   /// <paramref name="defaultToken"/> fetches the default token from Settings the
+   /// same way and, when it returns one, offers "Use the default token" on step 2.
    /// </summary>
    public AccountWizardViewModel(
        AccountsStore store,
@@ -50,8 +59,9 @@ public sealed partial class AccountWizardViewModel : ObservableObject
        AppSettings defaults,
        Account? existing = null,
        Func<string?>? storedToken = null,
-       IActivityLog? log = null)
-       : this(store, orgLister, existing, storedToken, log)
+       IActivityLog? log = null,
+       Func<string?>? defaultToken = null)
+       : this(store, orgLister, existing, storedToken, defaultToken, log)
    {
       ArgumentNullException.ThrowIfNull(defaults);
 
@@ -85,13 +95,19 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// always written to the vault on save.
    /// </summary>
    public AccountWizardViewModel(
-       AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed, IActivityLog? log = null)
-       : this(store, orgLister, existing: null, storedToken: null, log)
+       AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed, IActivityLog? log = null,
+       Func<string?>? defaultToken = null)
+       : this(store, orgLister, existing: null, storedToken: null, defaultToken, log)
    {
       ArgumentNullException.ThrowIfNull(seed);
       Name = "";
       Description = "";
       Token = seed.Token;
+      // A Quick Sync connection that runs on the default token becomes a
+      // default-token account; any other token is the account's own. Compared in
+      // memory only; neither value is logged.
+      UseDefaultToken = HasDefaultToken
+          && string.Equals(seed.Token.Trim(), _defaultToken?.Invoke()?.Trim(), StringComparison.Ordinal);
       Organization = seed.Organization;
       TargetRoot = seed.TargetRoot;
       CreateOrgSubfolder = seed.CreateOrgSubfolder;
@@ -101,7 +117,8 @@ public sealed partial class AccountWizardViewModel : ObservableObject
 
 
    private AccountWizardViewModel(
-       AccountsStore store, IOrganizationLister orgLister, Account? existing, Func<string?>? storedToken, IActivityLog? log)
+       AccountsStore store, IOrganizationLister orgLister, Account? existing, Func<string?>? storedToken,
+       Func<string?>? defaultToken, IActivityLog? log)
    {
       ArgumentNullException.ThrowIfNull(store);
       ArgumentNullException.ThrowIfNull(orgLister);
@@ -110,6 +127,11 @@ public sealed partial class AccountWizardViewModel : ObservableObject
       _log = log ?? new NullActivityLog();
       _existing = existing;
       _storedToken = existing is null ? null : storedToken;
+      _defaultToken = defaultToken;
+      // Decided once: the choice is offered only when a default token exists at
+      // open time, and the value itself is fetched again when a step needs it.
+      HasDefaultToken = !string.IsNullOrWhiteSpace(defaultToken?.Invoke());
+      UseDefaultToken = existing is null ? HasDefaultToken : existing.UsesDefaultToken;
 
       Step = 1;
       NameError = "";
@@ -166,6 +188,59 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// <summary>True while step 2 is validating the token against the organization lister.</summary>
    [ObservableProperty]
    public partial bool IsValidatingToken { get; set; }
+
+   /// <summary>
+   /// True when a default token was saved in Settings when the wizard opened, which
+   /// is when step 2 offers the choice between it and a token of the account's own.
+   /// </summary>
+   public bool HasDefaultToken { get; }
+
+   /// <summary>
+   /// Step 2's choice: true means the account resolves to the default token from
+   /// Settings (<see cref="TokenSource.Default"/>) and the token box is disabled;
+   /// false means a token of its own. Preselected for a new account when a default
+   /// token exists, and from the account's current source for an edit.
+   /// </summary>
+   [ObservableProperty]
+   [NotifyPropertyChangedFor(nameof(IsOwnTokenSelected))]
+   [NotifyPropertyChangedFor(nameof(TokenChoiceIndex))]
+   [NotifyPropertyChangedFor(nameof(DefaultTokenCaption))]
+   public partial bool UseDefaultToken { get; set; }
+
+   /// <summary>The token box is enabled only for a token of the account's own.</summary>
+   public bool IsOwnTokenSelected => !UseDefaultToken;
+
+   /// <summary>
+   /// <see cref="UseDefaultToken"/> as the selected index of a two-item radio group:
+   /// 0 = the default token, 1 = a token of this account's own.
+   /// </summary>
+   public int TokenChoiceIndex
+   {
+      get => UseDefaultToken ? 0 : 1;
+      set => UseDefaultToken = value == 0;
+   }
+
+   /// <summary>
+   /// What choosing the default token means for this account, with how many other
+   /// accounts share it; shown under the radio button.
+   /// </summary>
+   public string DefaultTokenCaption
+   {
+      get
+      {
+         int others = _store.CountUsingDefaultToken() - (_existing?.UsesDefaultToken == true ? 1 : 0);
+         string shared = others switch
+         {
+            0 => "Used by Quick Sync.",
+            1 => "Used by Quick Sync and 1 other account.",
+            _ => $"Used by Quick Sync and {others} other accounts.",
+         };
+         string switching = IsEditing && _existing?.UsesDefaultToken == false && UseDefaultToken
+             ? " This account's own token will be removed from Windows Credential Manager on save."
+             : "";
+         return shared + " Replacing it in Settings updates this account too." + switching;
+      }
+   }
 
    /// <summary>Step 1's validation message; empty when the name is acceptable.</summary>
    [ObservableProperty]
@@ -254,14 +329,32 @@ public sealed partial class AccountWizardViewModel : ObservableObject
                // token and returns the organizations the dropdown offers otherwise.
                // An edit with the box left empty validates the STORED token, fetched
                // here and used for this one call only.
-               string candidate = Token.Trim();
-               if(candidate.Length == 0 && IsEditing)
+               string candidate;
+               if(UseDefaultToken)
                {
-                  candidate = _storedToken?.Invoke()?.Trim() ?? "";
+                  // The default token is fetched for this one call only; the box
+                  // stays untouched (and disabled) so it is never shown or retained.
+                  candidate = _defaultToken?.Invoke()?.Trim() ?? "";
                   if(candidate.Length == 0)
                   {
-                     TokenError = "This account has no stored token. Enter one to continue.";
+                     TokenError = "The default token is no longer saved. Save one in Settings, "
+                         + "or use a different token for this account.";
                      return false;
+                  }
+               }
+               else
+               {
+                  candidate = Token.Trim();
+                  if(candidate.Length == 0 && IsEditing)
+                  {
+                     candidate = _storedToken?.Invoke()?.Trim() ?? "";
+                     if(candidate.Length == 0)
+                     {
+                        TokenError = _existing?.UsesDefaultToken == true
+                            ? "Enter the token this account should use instead of the default one."
+                            : "This account has no stored token. Enter one to continue.";
+                        return false;
+                     }
                   }
                }
 
@@ -333,7 +426,10 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// </summary>
    public Task SaveAsync()
    {
-      _store.Save(BuildAccount(), TokenChanged ? Token.Trim() : null);
+      // A default-token account stores no token of its own (the store removes any
+      // leftover entry when an account switches); otherwise new accounts always
+      // persist their token and edits only when one was typed.
+      _store.Save(BuildAccount(), !UseDefaultToken && TokenChanged ? Token.Trim() : null);
       return Task.CompletedTask;
    }
 
@@ -353,6 +449,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
       TargetRoot = TargetRoot.Trim(),
       CreateOrgSubfolder = CreateOrgSubfolder,
       MaxConcurrency = Math.Clamp(MaxConcurrency, AppSettings.MinConcurrency, AppSettings.MaxConcurrency),
+      TokenSource = UseDefaultToken ? TokenSource.Default : TokenSource.Own,
       LastSyncUtc = _existing?.LastSyncUtc,
       LastSyncSummary = _existing?.LastSyncSummary,
    };

@@ -132,6 +132,69 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
 
 
+   // ---------------------------------------------------------------- default token (#102)
+
+   /// <summary>A default-token account workspace; the default token is seeded only when asked.</summary>
+   private WorkspaceViewModel CreateDefaultTokenWorkspace(string name, bool withDefaultToken)
+   {
+      var account = new Account
+      {
+         Id = Guid.NewGuid(),
+         Name = name,
+         Organization = "org-" + name,
+         TargetRoot = Path.Combine(_root, name),
+         TokenSource = TokenSource.Default,
+      };
+      if(withDefaultToken)
+      {
+         _vault.Store(AppSettings.DefaultTokenVaultId, "tok-default");
+      }
+      var workspace = new WorkspaceViewModel(
+          _lister,
+          new FakeGitClient(),
+          _orgs,
+          handler => new SyncProgress(handler),
+          TimeSpan.FromMilliseconds(1),
+          new NullActivityLog(),
+          account,
+          _vault);
+      _workspaces.Add(workspace);
+      return workspace;
+   }
+
+
+
+   [Fact]
+   public async Task RunAsync_DefaultTokenAccount_WithoutADefaultToken_IsSkipped_NotRun()
+   {
+      WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: false);
+      Assert.True(shared.UsesDefaultToken);
+      Assert.Equal("", shared.Token);
+      var states = new List<SyncAllAccountState>();
+      _coordinator.AccountStateChanged = (_, state) => states.Add(state);
+
+      SyncAllResult result = await _coordinator.RunAsync([shared], CancellationToken.None);
+
+      Assert.Equal(0, result.Ran);
+      Assert.Equal(1, result.Skipped);
+      Assert.Equal([SyncAllAccountState.Queued, SyncAllAccountState.Skipped], states);
+      Assert.Empty(_lister.Organizations); // never asked GitHub: skipped before loading
+   }
+
+
+
+   [Fact]
+   public async Task RunAsync_DefaultTokenAccount_WithADefaultToken_Runs()
+   {
+      WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: true);
+      Assert.Equal("tok-default", shared.Token);
+
+      SyncAllResult result = await _coordinator.RunAsync([shared], CancellationToken.None);
+
+      Assert.Equal(1, result.Ran);
+      Assert.Equal(0, result.Skipped);
+   }
+
    // ---------------------------------------------------------------- ordering
 
    [Fact]
