@@ -37,22 +37,30 @@
             PlaceholderText="ghp_…"
             ToolTipService.ToolTip="Pre-fills Quick Sync and serves every account set to use it. Stored in Windows Credential Manager, never in a file."
             PasswordChanged="DefaultTokenBox_PasswordChanged" />
-        <StackPanel Orientation="Horizontal" Spacing="8">
+        <!-- Caption takes the width, the Remove link keeps its own: a horizontal
+             StackPanel clipped the link once the caption grew (#101). -->
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
             <TextBlock
                 x:Name="TokenStateText"
+                Grid.Column="0"
                 VerticalAlignment="Center"
-                MaxWidth="420"
                 TextWrapping="Wrap"
                 AutomationProperties.LiveSetting="Polite"
                 Style="{ThemeResource CaptionTextBlockStyle}"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             <HyperlinkButton
                 x:Name="RemoveTokenButton"
+                Grid.Column="1"
                 Padding="0"
+                VerticalAlignment="Center"
                 Content="Remove saved token"
-                ToolTipService.ToolTip="Deletes the saved default token from Windows Credential Manager when you press Save"
+                ToolTipService.ToolTip="Clears the box; the saved default token is deleted from Windows Credential Manager when you press Save"
                 Click="RemoveTokenButton_Click" />
-        </StackPanel>
+        </Grid>
         <NumberBox
             x:Name="ConcurrencyBox"
             Header="Default parallelism"
