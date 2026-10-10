@@ -25,14 +25,16 @@ public sealed class FileActivityLog : IActivityLog
 
    /// <summary>Creates a log that writes under <paramref name="directory"/>.</summary>
    /// <param name="directory">
-   /// Folder for the log files; defaults to %LOCALAPPDATA%\gclo\logs when null or blank.
+   /// Folder for the log files; defaults to %LOCALAPPDATA%\KofTwentyTwo\gclo\logs
+   /// when null or blank (the same data root as the app; never the Velopack
+   /// install root %LOCALAPPDATA%\gclo, which Setup.exe deletes, #91).
    /// </param>
    public FileActivityLog(string? directory = null)
    {
       LogDirectory = string.IsNullOrWhiteSpace(directory)
           ? Path.Combine(
               Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-              "gclo", "logs")
+              "KofTwentyTwo", "gclo", "logs")
           : directory;
    }
 

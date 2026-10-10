@@ -128,14 +128,27 @@ public sealed class ActivityLogTests : IDisposable
 
 
    [Fact]
-   public void DefaultDirectory_IsLocalAppDataGcloLogs()
+   public void DefaultDirectory_IsLocalAppDataKofTwentyTwoGcloLogs()
    {
       var log = new FileActivityLog();
 
       string expected = Path.Combine(
           Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-          "gclo", "logs");
+          "KofTwentyTwo", "gclo", "logs");
       Assert.Equal(expected, log.LogDirectory);
+   }
+
+
+
+   [Fact]
+   public void DefaultDirectory_IsNotInsideTheVelopackInstallRoot()
+   {
+      // Setup.exe deletes %LOCALAPPDATA%\gclo (the install root) on reinstall (#91).
+      string installRoot = Path.Combine(
+          Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "gclo");
+
+      Assert.False(
+          new FileActivityLog().LogDirectory.StartsWith(installRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
    }
 
 

@@ -11,7 +11,7 @@ namespace gclo.ViewModels;
 
 /// <summary>
 /// User preferences persisted as JSON at settings.json under
-/// <see cref="GcloPaths.DataRoot"/> (default %LOCALAPPDATA%\gclo, overridable via
+/// <see cref="GcloPaths.DataRoot"/> (default %LOCALAPPDATA%\KofTwentyTwo\gclo, overridable via
 /// GCLO_DATA_DIR). Uses Environment.GetFolderPath (not Windows.Storage.ApplicationData)
 /// so the same path works whether the app runs packaged or unpackaged.
 /// </summary>
