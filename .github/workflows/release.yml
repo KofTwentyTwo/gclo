@@ -184,6 +184,9 @@ jobs:
     needs: release
     runs-on: windows-latest
     timeout-minutes: 15
+    # TRUSTED_SIGNING_SUBJECT is a `release`-environment variable, so the job must
+    # run in that environment to read it (v1.0.2-beta.3 failed here with it unset).
+    environment: release
     permissions:
       contents: read
     env:
