@@ -1071,9 +1071,28 @@ public sealed partial class MainWindow : Window
 
 
    private async void GitHubMenuItem_Click(object sender, RoutedEventArgs e)
+       => await OpenRepositoryPageAsync("");
+
+
+
+   /// <summary>Help > Submit an issue: GitHub's new-issue chooser (bug report / feature request templates).</summary>
+   private async void SubmitIssueMenuItem_Click(object sender, RoutedEventArgs e)
+       => await OpenRepositoryPageAsync("/issues/new/choose");
+
+
+
+   /// <summary>Help > Community support: the repository's GitHub Discussions.</summary>
+   private async void CommunitySupportMenuItem_Click(object sender, RoutedEventArgs e)
+       => await OpenRepositoryPageAsync("/discussions");
+
+
+
+   /// <summary>Opens a page of the repository in the default browser; the log names the page, never a token.</summary>
+   private async Task OpenRepositoryPageAsync(string path)
    {
-      _log.Info($"Opening {RepoUrl} in the browser.");
-      await Windows.System.Launcher.LaunchUriAsync(new Uri(RepoUrl));
+      string url = RepoUrl + path;
+      _log.Info($"Opening {url} in the browser.");
+      await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
    }
 
 
