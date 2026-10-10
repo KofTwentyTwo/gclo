@@ -43,6 +43,11 @@ public sealed partial class MainWindow : Window
 
    private const int MinWindowHeight = 520;
 
+   /// <summary>Largest default window (logical pixels); the user can still resize beyond it.</summary>
+   private const int MaxDefaultWindowWidth = 1600;
+
+   private const int MaxDefaultWindowHeight = 1100;
+
    /// <summary>Set once the root's theme-change subscription exists.</summary>
    private bool _themeHooked;
 
@@ -137,10 +142,20 @@ public sealed partial class MainWindow : Window
       WorkspaceNav.SelectedItem = QuickSyncNavItem;
 
       // AppWindow.Resize takes physical pixels; scale by the monitor DPI so the
-      // window is the same visual size at 150%/200% display scaling.
+      // window is the same visual size at 150%/200% display scaling. The default
+      // size follows the monitor: about 70% of the work area in each direction,
+      // never smaller than the minimum layout and never larger than a sensible
+      // desktop-app maximum, centred on that monitor (a fixed 1000x750 looked
+      // small on large displays and did not fit small ones).
       nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
       double scale = GetDpiForWindow(hwnd) / 96.0;
-      AppWindow.Resize(new Windows.Graphics.SizeInt32((int)(1000 * scale), (int)(750 * scale)));
+      Windows.Graphics.RectInt32 work = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest).WorkArea;
+      int width = (int)Math.Clamp(work.Width * 0.7, MinWindowWidth * scale, MaxDefaultWindowWidth * scale);
+      int height = (int)Math.Clamp(work.Height * 0.7, MinWindowHeight * scale, MaxDefaultWindowHeight * scale);
+      width = Math.Min(width, work.Width);
+      height = Math.Min(height, work.Height);
+      AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(
+          work.X + (work.Width - width) / 2, work.Y + (work.Height - height) / 2, width, height));
 
       // The brand icon in the title bar (and alt-tab / taskbar for unpackaged runs).
       AppWindow.SetIcon(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "Brand", "gclo.ico"));
@@ -395,8 +410,15 @@ public sealed partial class MainWindow : Window
       {
          workspace.Page ??= CreatePage(workspace.ViewModel);
          WorkspaceNav.Content = workspace.Page;
+         AutoLoadAccountRepositories(workspace.ViewModel);
       }
    }
+
+
+
+   /// <summary>The view model decides whether showing this workspace loads it (saved accounts do).</summary>
+   private static void AutoLoadAccountRepositories(WorkspaceViewModel viewModel)
+       => viewModel.LoadRepositoriesIfSaved();
 
 
 
@@ -639,15 +661,24 @@ public sealed partial class MainWindow : Window
       {
          return account.Name;
       }
+      // The pane is narrow: a short tag with the full meaning in the tooltip (and
+      // in the item's automation name), and the name trims before the tag does.
       var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-      panel.Children.Add(new TextBlock { Text = account.Name, VerticalAlignment = VerticalAlignment.Center });
       panel.Children.Add(new TextBlock
       {
-         Text = "Default token",
+         Text = account.Name,
+         VerticalAlignment = VerticalAlignment.Center,
+         TextTrimming = TextTrimming.CharacterEllipsis,
+      });
+      var tag = new TextBlock
+      {
+         Text = "Default",
          VerticalAlignment = VerticalAlignment.Center,
          Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
          Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
-      });
+      };
+      ToolTipService.SetToolTip(tag, "Uses the default token from Settings");
+      panel.Children.Add(tag);
       return panel;
    }
 
@@ -1057,7 +1088,7 @@ public sealed partial class MainWindow : Window
    private async void SettingsMenuItem_Click(object sender, RoutedEventArgs e)
    {
       var dialog = new SettingsDialog(
-          _settings, _tokenVault, () => WinRT.Interop.WindowNative.GetWindowHandle(this), _log)
+          _settings, _tokenVault, _accountsStore, () => WinRT.Interop.WindowNative.GetWindowHandle(this), _log)
       {
          XamlRoot = Content.XamlRoot,
       };

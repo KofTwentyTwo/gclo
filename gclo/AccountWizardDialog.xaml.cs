@@ -63,6 +63,27 @@ public sealed partial class AccountWizardDialog : ContentDialog
 
       // NumberBox.Value is a double; the int is mirrored by hand (see ValueChanged).
       ConcurrencyBox.Value = ViewModel.MaxConcurrency;
+
+      // Step 3's panel is collapsed while step 2's validation replaces the
+      // organization list, so the editable ComboBox shows up blank even though the
+      // view model still holds Organization (an edit seeds it): put the text back
+      // after the panel has laid out, every time the wizard arrives on step 3.
+      ViewModel.PropertyChanged += (_, e) =>
+      {
+         if(string.Equals(e.PropertyName, nameof(AccountWizardViewModel.Step), StringComparison.Ordinal) && ViewModel.Step == 3)
+         {
+            // The panel was collapsed, so the ComboBox has no template (and no inner
+            // TextBox) until it is measured: reapply on its first size change, and
+            // once more after the dispatcher drains, whichever comes first.
+            void OnSized(object sender, SizeChangedEventArgs args)
+            {
+               OrgBox.SizeChanged -= OnSized;
+               EditableComboBox.ReapplyText(OrgBox, ViewModel.Organization);
+            }
+            OrgBox.SizeChanged += OnSized;
+            DispatcherQueue.TryEnqueue(() => EditableComboBox.ReapplyText(OrgBox, ViewModel.Organization));
+         }
+      };
    }
 
 
@@ -182,7 +203,23 @@ public sealed partial class AccountWizardDialog : ContentDialog
    // when editing an account, step 3 would show blank despite the seeded
    // organization — see EditableComboBox.
    private void OrgBox_Loaded(object sender, RoutedEventArgs e)
-       => EditableComboBox.ReapplyText((ComboBox)sender, ViewModel.Organization);
+   {
+      var combo = (ComboBox)sender;
+      EditableComboBox.ReapplyText(combo, ViewModel.Organization);
+      // Step 2's validation replaces the organization list, which resets the
+      // editable ComboBox's text; the view model keeps Organization, so put it
+      // back whenever the list changes (an edit otherwise shows step 3 blank).
+      if(!_organizationsHooked)
+      {
+         _organizationsHooked = true;
+         ViewModel.Organizations.CollectionChanged += (_, _) => EditableComboBox.ReapplyText(combo, ViewModel.Organization);
+      }
+   }
+
+
+
+   /// <summary>Whether <see cref="OrgBox_Loaded"/> already follows the organization list.</summary>
+   private bool _organizationsHooked;
 
 
 

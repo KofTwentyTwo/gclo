@@ -79,28 +79,35 @@ public sealed partial class ConnectionFormControl : UserControl
 
 
    // Runs on every host load (the card once, the flyout on each open). A token the
-   // view model already holds (an account's vault token, or the saved default
-   // token) is deliberately NOT mirrored into the box: the placeholder says what
-   // is in effect, and an untouched box keeps it. Only typing replaces (#32).
+   // view model already holds (an account's token, or the saved default token) is
+   // deliberately NOT mirrored into the box: the box shows the same fixed mask as
+   // Settings, so it reads as "a token is in effect" (an empty box read as "no
+   // token", #101), and an untouched mask keeps it. Only typing replaces (#32).
    private void OnLoaded(object sender, RoutedEventArgs e)
    {
-      TokenBox.Password = "";
-      TokenBox.PlaceholderText = ViewModel is null || ViewModel.Token.Length == 0
-          ? "ghp_…"
-          : ViewModel.AccountId is null
-              ? "Using the saved default token — type here to replace it"
-              : "Using the account's stored token — type here to replace it";
+      bool hasToken = ViewModel is not null && ViewModel.Token.Length > 0;
+      TokenBox.Password = hasToken ? SettingsTokenState.Mask : "";
+      TokenBox.PlaceholderText = "ghp_…";
+      // The organization placeholder must not ask for a token the box already has.
+      OrgBox.PlaceholderText = hasToken ? "Choose an organization, or type one" : "Paste a token first, or type an org";
+      ToolTipService.SetToolTip(TokenBox, !hasToken
+          ? "Fine-grained or classic PAT with repository read access; used for the GitHub API and git over HTTPS. Never written to disk or logs."
+          : ViewModel!.AccountId is null
+              ? "Using the saved default token from Settings. Type here to use a different one for this session."
+              : "Using this account's token. Type here to use a different one for this session.");
    }
 
 
 
    // PasswordBox does not support reliable two-way x:Bind on Password; mirror it
-   // into the view model by hand.
+   // into the view model by hand. The mask is not a token: while the box shows it,
+   // the view model keeps the token it already holds.
    private void TokenBox_PasswordChanged(object sender, RoutedEventArgs e)
    {
-      if(ViewModel is not null)
+      string typed = ((PasswordBox)sender).Password;
+      if(ViewModel is not null && !string.Equals(typed, SettingsTokenState.Mask, StringComparison.Ordinal))
       {
-         ViewModel.Token = ((PasswordBox)sender).Password;
+         ViewModel.Token = typed;
       }
    }
 
@@ -114,8 +121,23 @@ public sealed partial class ConnectionFormControl : UserControl
       if(ViewModel is not null)
       {
          EditableComboBox.ReapplyText((ComboBox)sender, ViewModel.Organization);
+         // The organization lookup replaces the list about a second after an
+         // account workspace opens, and an editable ComboBox drops its text when
+         // its ItemsSource changes; the view model restores Organization, so put
+         // it back into the box each time the list changes.
+         if(!ReferenceEquals(_organizationsHooked, ViewModel))
+         {
+            _organizationsHooked = ViewModel;
+            ViewModel.Organizations.CollectionChanged += (_, _) =>
+                EditableComboBox.ReapplyText((ComboBox)sender, ViewModel.Organization);
+         }
       }
    }
+
+
+
+   /// <summary>The view model whose organization list this control already follows.</summary>
+   private WorkspaceViewModel? _organizationsHooked;
 
 
 

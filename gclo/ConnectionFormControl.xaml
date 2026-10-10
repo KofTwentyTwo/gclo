@@ -37,6 +37,7 @@
                 AutomationProperties.AutomationId="{x:Bind Id('OrgBox')}"
                 HorizontalAlignment="Stretch"
                 Header="Organization or account"
+                x:Name="OrgBox"
                 ToolTipService.ToolTip="The GitHub organization or user account whose repositories are synced. Populated from the token; typing a name also works."
                 IsEditable="True"
                 ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
