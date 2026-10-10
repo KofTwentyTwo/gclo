@@ -153,7 +153,10 @@ jobs:
     with:
       solution: gclo.slnx
       app-project: gclo/gclo.csproj
-      app-id: gclo
+      # Prereleases pack as their own Velopack app (gclo-dev): separate install
+      # folder, Start menu entry, update feed and data root, so a dev build can be
+      # installed beside the stable one (#114). Asset names follow the app id.
+      app-id: ${{ contains(github.ref_name, '-') && 'gclo-dev' || 'gclo' }}
       main-exe: gclo.exe
       icon: gclo/Assets/Brand/gclo.ico
       platform: x64
@@ -193,6 +196,7 @@ jobs:
       TAG: ${{ github.ref_name }}
       K22_VERSION: ${{ needs.release.outputs.version }}
       K22_CHANNEL: ${{ needs.release.outputs.prerelease == 'true' && 'dev' || 'stable' }}
+      K22_APP_ID: ${{ needs.release.outputs.prerelease == 'true' && 'gclo-dev' || 'gclo' }}
       EXPECTED_SUBJECT: ${{ vars.TRUSTED_SIGNING_SUBJECT }}
     steps:
       - name: Download the published assets
@@ -202,9 +206,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           New-Item -ItemType Directory -Force assets | Out-Null
-          gh release download $env:TAG --dir assets --pattern "gclo-$env:K22_CHANNEL-Setup.exe" --pattern "gclo-$env:K22_CHANNEL-Portable.zip" --pattern "gclo-cli-win-x64-$env:K22_VERSION.zip"
+          gh release download $env:TAG --dir assets --pattern "$env:K22_APP_ID-$env:K22_CHANNEL-Setup.exe" --pattern "$env:K22_APP_ID-$env:K22_CHANNEL-Portable.zip" --pattern "gclo-cli-win-x64-$env:K22_VERSION.zip"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Expand-Archive assets/gclo-$env:K22_CHANNEL-Portable.zip -DestinationPath assets/portable
+          Expand-Archive assets/$env:K22_APP_ID-$env:K22_CHANNEL-Portable.zip -DestinationPath assets/portable
           Expand-Archive assets/gclo-cli-win-x64-$env:K22_VERSION.zip -DestinationPath assets/cli
 
       - name: signtool verify /pa /all on every shipped executable
@@ -217,7 +221,7 @@ jobs:
           }
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
              Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
-          $files = @(Get-Item assets/gclo-$env:K22_CHANNEL-Setup.exe) + @(Get-ChildItem assets/portable, assets/cli -Recurse -Include *.exe, *.dll |
+          $files = @(Get-Item assets/$env:K22_APP_ID-$env:K22_CHANNEL-Setup.exe) + @(Get-ChildItem assets/portable, assets/cli -Recurse -Include *.exe, *.dll |
              Where-Object { $_.Name -like 'gclo*' -or $_.Name -in 'Update.exe' })
           $failed = 0
           foreach ($f in $files)

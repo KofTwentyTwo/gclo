@@ -30,6 +30,21 @@ public sealed class GcloPathsTests
 
 
 
+   /// <summary>The dev edition keeps its own data root beside the stable one (#114).</summary>
+   [Fact]
+   public void DataFolderNameFor_DevEdition_UsesItsOwnFolder()
+   {
+      // Edition itself is process-wide state set once by the app's entry point; the
+      // tests exercise the pure mapping so they cannot race the vault's scoping.
+      Assert.Equal("gclo", GcloPaths.DataFolderNameFor(""));
+      Assert.Equal("gclo-dev", GcloPaths.DataFolderNameFor("dev"));
+      Assert.Throws<ArgumentNullException>(() => GcloPaths.DataFolderNameFor(null!));
+      Assert.Equal("", GcloPaths.Edition);
+      Assert.Equal("gclo", GcloPaths.DataFolderName);
+   }
+
+
+
    /// <summary>The default root is never the install root nor anything under it.</summary>
    [Fact]
    public void DefaultDataRoot_IsNotTheVelopackInstallRoot()
