@@ -110,7 +110,7 @@ On launch, gclo shows a brief branded splash, then the **Quick Sync** connect ca
 
 **Settings** (File > Settings…) let you set a default GitHub token (stored in the Windows Credential Manager), the default target folder (with a folder picker), the default parallelism, and the theme (System, Light, or Dark); an Advanced section toggles the startup splash and its duration.
 
-**Activity log:** View > Activity log… shows the tail of today's log and links to the logs folder. Logs live under `%LOCALAPPDATA%\gclo\logs`, one file per day; they record run parameters and per-repo failures and never contain your token (see [SECURITY.md](SECURITY.md)).
+**Activity log:** View > Activity log… shows the tail of today's log and links to the logs folder. Logs live under `%LOCALAPPDATA%\KofTwentyTwo\gclo\logs`, one file per day; they record run parameters and per-repo failures and never contain your token (see [SECURITY.md](SECURITY.md)).
 
 **Updates:** Help > Check for updates… downloads and applies the latest release for your channel. Self-update is only available in installed builds (not the portable zip or a local debug build).
 

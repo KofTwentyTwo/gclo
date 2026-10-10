@@ -12,7 +12,7 @@ namespace gclo.ViewModels;
 
 /// <summary>
 /// Persists account profiles as JSON at accounts.json under
-/// <see cref="GcloPaths.DataRoot"/> (default %LOCALAPPDATA%\gclo) and their
+/// <see cref="GcloPaths.DataRoot"/> (default %LOCALAPPDATA%\KofTwentyTwo\gclo) and their
 /// tokens in an <see cref="ITokenVault"/>; the file holds metadata only and never a
 /// token. Unlike <see cref="AppSettings"/>, accounts are primary user data, so write
 /// failures in <see cref="Save"/>, <see cref="Delete"/>, and

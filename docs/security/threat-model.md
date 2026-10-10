@@ -26,7 +26,7 @@ GitHub.
 | GitHub REST API | Lists organizations and repositories | Untrusted input (responses are parsed), authenticated by the PAT |
 | Git remotes (`github.com`) | Clone and fetch over HTTPS via libgit2 | Untrusted input (repository content, including file paths) |
 | Windows Credential Manager | Stores saved-account and default tokens | Trusted store; boundary is the Windows user account |
-| Local data directory | `%LOCALAPPDATA%\gclo` (or `GCLO_DATA_DIR`): settings, accounts, logs | Trusted; same user |
+| Local data directory | `%LOCALAPPDATA%\KofTwentyTwo\gclo` (or `GCLO_DATA_DIR`): settings, accounts, logs. Deliberately outside the Velopack install root `%LOCALAPPDATA%\gclo`, which Setup.exe deletes on reinstall (#91) | Trusted; same user |
 | Target folder | Where repositories are written; may already contain repositories | Partly untrusted (pre-existing content, `.git` config) |
 | WSL default distribution | Runs `git clone` for the "Clone in WSL" recovery | Semi-trusted (user-installed Linux environment) |
 | Update feed | GitHub Releases of this repository, `releases.<channel>.json` | Untrusted until verified (HTTPS, package hashes, attestations) |
@@ -112,3 +112,4 @@ flowchart LR
 | 2026-10-09 | v1.0.1 | James Maes (@KofTwentyTwo) | Initial model, covering the path-recovery, WSL clone, vault scoping, package-manager, and SBOM changes of 1.0.1 |
 | 2026-10-09 | v1.0.1 | James Maes (@KofTwentyTwo) | T11 updated: releases build in the shared standards workflow; publishing tokens moved to the `release` environment (#76) |
 | 2026-10-10 | v1.0.2 | James Maes (@KofTwentyTwo) | T11: the packaging PR is opened with a short-lived release GitHub App token (contents + pull requests on this repository, no bypass) instead of a long-lived PAT; the commit is GitHub-signed (#85) |
+| 2026-10-10 | v1.0.2 | James Maes (@KofTwentyTwo) | Local data directory moved to `%LOCALAPPDATA%\KofTwentyTwo\gclo`: the Velopack install root is deleted by Setup.exe, which destroyed accounts.json and settings.json (#91) |
