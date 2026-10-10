@@ -25,14 +25,25 @@ internal sealed class TokenOptions
 
    private bool _useStdin;
 
+   private bool _useDefault;
+
 
 
    /// <summary>
-   /// True when any token option (--token-env, --token-file, --token-stdin) was
-   /// given. 'gclo sync --account' uses this to let an explicit token source
-   /// override the account's vault-stored token.
+   /// True when any token option (--token-env, --token-file, --token-stdin,
+   /// --use-default-token) was given. 'gclo sync --account' uses this to let an
+   /// explicit token source override the account's stored token.
    /// </summary>
-   public bool HasExplicitSource => _envVariable is not null || _filePath is not null || _useStdin;
+   public bool HasExplicitSource => _envVariable is not null || _filePath is not null || _useStdin || _useDefault;
+
+
+
+   /// <summary>
+   /// --use-default-token: the account resolves to the default token saved in the
+   /// desktop app's Settings instead of holding a token of its own (accounts add
+   /// and edit only). <see cref="Resolve"/> rejects it, as it names no token value.
+   /// </summary>
+   public bool UseDefault => _useDefault;
 
 
 
@@ -51,8 +62,24 @@ internal sealed class TokenOptions
             reader.RejectValue();
             _useStdin = true;
             return true;
+         case "--use-default-token":
+            reader.RejectValue();
+            _useDefault = true;
+            return true;
          default:
             return false;
+      }
+   }
+
+
+
+   /// <summary>Usage error when more than one token option was given; a no-op otherwise.</summary>
+   public void EnsureAtMostOneSource()
+   {
+      int sources = (_envVariable is null ? 0 : 1) + (_filePath is null ? 0 : 1) + (_useStdin ? 1 : 0) + (_useDefault ? 1 : 0);
+      if(sources > 1)
+      {
+         throw new CliUsageException("Use only one of --token-env, --token-file, --token-stdin, --use-default-token.");
       }
    }
 
@@ -65,10 +92,11 @@ internal sealed class TokenOptions
    /// </summary>
    public string Resolve()
    {
-      int sources = (_envVariable is null ? 0 : 1) + (_filePath is null ? 0 : 1) + (_useStdin ? 1 : 0);
-      if(sources > 1)
+      EnsureAtMostOneSource();
+      if(_useDefault)
       {
-         throw new CliUsageException("Use only one of --token-env, --token-file, --token-stdin.");
+         throw new CliUsageException(
+             "--use-default-token names no token value; it is for 'gclo accounts add' and 'gclo accounts edit' only.");
       }
 
       if(_useStdin)

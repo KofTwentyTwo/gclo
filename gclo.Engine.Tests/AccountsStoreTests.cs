@@ -42,6 +42,111 @@ public sealed class AccountsStoreTests : IDisposable
 
 
 
+   // ---------------------------------------------------------------- default token (#102)
+
+   [Fact]
+   public void Save_DefaultTokenAccount_WritesNoOwnEntry_AndRoundTripsTheSource()
+   {
+      Account account = MakeAccount("Shared") with { TokenSource = TokenSource.Default };
+
+      NewStore().Save(account, token: null);
+
+      Assert.Null(_vault.TryRetrieve(account.Id));
+      Account reloaded = Assert.Single(NewStore().GetAll());
+      Assert.Equal(TokenSource.Default, reloaded.TokenSource);
+      Assert.True(reloaded.UsesDefaultToken);
+      Assert.Contains("\"TokenSource\": \"Default\"", File.ReadAllText(Path.Combine(_root, "accounts.json")));
+   }
+
+
+
+   [Fact]
+   public void Save_OwnTokenAccount_OmitsTheSourceFromTheFile_SoOldFilesStayIdentical()
+   {
+      NewStore().Save(MakeAccount("Work"), "ghp_own");
+
+      string json = File.ReadAllText(Path.Combine(_root, "accounts.json"));
+      Assert.DoesNotContain("TokenSource", json);
+      Assert.Equal(TokenSource.Own, Assert.Single(NewStore().GetAll()).TokenSource);
+   }
+
+
+
+   [Fact]
+   public void Load_FileWithoutTheSourceField_ReadsAsOwn()
+   {
+      Directory.CreateDirectory(_root);
+      var id = Guid.NewGuid();
+      File.WriteAllText(
+          Path.Combine(_root, "accounts.json"),
+          $$"""[{"Id":"{{id}}","Name":"Old","Organization":"acme","TargetRoot":"C:\\repos"}]""");
+
+      Account loaded = Assert.Single(NewStore().GetAll());
+
+      Assert.Equal(TokenSource.Own, loaded.TokenSource);
+      Assert.False(loaded.UsesDefaultToken);
+   }
+
+
+
+   [Fact]
+   public void Save_DefaultTokenAccount_WithAToken_IsRejected()
+   {
+      Account account = MakeAccount("Shared") with { TokenSource = TokenSource.Default };
+
+      ArgumentException ex = Assert.Throws<ArgumentException>(() => NewStore().Save(account, "ghp_stray"));
+
+      Assert.Contains("default token", ex.Message);
+      Assert.Empty(NewStore().GetAll());
+      Assert.Null(_vault.TryRetrieve(account.Id));
+   }
+
+
+
+   [Fact]
+   public void Save_SwitchingToTheDefaultToken_RemovesTheOwnEntry()
+   {
+      AccountsStore store = NewStore();
+      Account account = MakeAccount("Work");
+      store.Save(account, "ghp_own");
+      Assert.Equal("ghp_own", _vault.TryRetrieve(account.Id));
+
+      store.Save(account with { TokenSource = TokenSource.Default }, token: null);
+
+      Assert.Null(_vault.TryRetrieve(account.Id));
+      Assert.True(Assert.Single(store.GetAll()).UsesDefaultToken);
+   }
+
+
+
+   [Fact]
+   public void Save_SwitchingBackToAnOwnToken_StoresIt()
+   {
+      AccountsStore store = NewStore();
+      Account account = MakeAccount("Work") with { TokenSource = TokenSource.Default };
+      store.Save(account, token: null);
+
+      store.Save(account with { TokenSource = TokenSource.Own }, "ghp_mine");
+
+      Assert.Equal("ghp_mine", _vault.TryRetrieve(account.Id));
+      Assert.False(Assert.Single(store.GetAll()).UsesDefaultToken);
+   }
+
+
+
+   [Fact]
+   public void CountUsingDefaultToken_CountsOnlyDefaultTokenAccounts()
+   {
+      AccountsStore store = NewStore();
+      Assert.Equal(0, store.CountUsingDefaultToken());
+      store.Save(MakeAccount("A") with { TokenSource = TokenSource.Default }, null);
+      store.Save(MakeAccount("B") with { TokenSource = TokenSource.Default }, null);
+      store.Save(MakeAccount("C"), "ghp_c");
+
+      Assert.Equal(2, store.CountUsingDefaultToken());
+      Assert.Equal(2, NewStore().CountUsingDefaultToken());
+   }
+
    // ---------------------------------------------------------------- persistence
 
    [Fact]

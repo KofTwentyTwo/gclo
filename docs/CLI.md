@@ -244,23 +244,26 @@ the app's account wizard, and use them from either.
 ### `gclo accounts` / `gclo accounts list`
 
 Lists the saved accounts, one per line, in aligned columns: name, organization,
-target root, and last sync time (local time, `never` when the account has not
-completed a sync yet):
+target root, token source (`own` or `default`), and last sync time (local time,
+`never` when the account has not completed a sync yet):
 
 ```
-work      contoso   C:\src\contoso   2026-07-04 09:12
-personal  octocat   D:\mirror        never
+work      contoso   C:\src\contoso   own      2026-07-04 09:12
+personal  octocat   D:\mirror        default  never
 ```
 
 With `--json` it prints a single-line JSON array with everything a script needs
 to reason about a run; `lastSync` is the UTC timestamp of the last completed
-sync and `lastSyncSummary` its summary line, both `null` until the first sync:
+sync and `lastSyncSummary` its summary line, both `null` until the first sync;
+`tokenSource` is `own` or `default`:
 
 ```json
-[{"id":"d0f0e0c09c404a5e8f3a5b1e6f7a2c11","name":"work","description":"","organization":"contoso","targetRoot":"C:\\src\\contoso","createOrgSubfolder":true,"maxConcurrency":8,"lastSync":"2026-07-04T14:12:03+00:00","lastSyncSummary":"Finished: 3 cloned, 41 updated, 0 failed, 0 canceled of 44."}]
+[{"id":"d0f0e0c09c404a5e8f3a5b1e6f7a2c11","name":"work","description":"","organization":"contoso","targetRoot":"C:\\src\\contoso","createOrgSubfolder":true,"maxConcurrency":8,"lastSync":"2026-07-04T14:12:03+00:00","lastSyncSummary":"Finished: 3 cloned, 41 updated, 0 failed, 0 canceled of 44.","tokenSource":"own"}]
 ```
 
-`id` is the key of the account's Credential Manager entry (`gclo:account:<id>`).
+`id` is the key of the account's Credential Manager entry (`gclo:account:<id>`)
+for an `own` account; a `default` account has no entry of its own and resolves
+to the default token saved in the desktop app's Settings whenever it syncs.
 When no accounts exist yet, stdout stays empty (`--json` prints `[]`) and a
 hint goes to stderr; the exit code is still 0.
 
@@ -277,6 +280,16 @@ variable) and is written to Windows Credential Manager — never put it on the
 command line. A name that another account already uses (case-insensitive)
 exits with code 2.
 
+With `--use-default-token` instead of a token option, the account holds no
+token of its own: it resolves to the default token saved in the desktop app's
+Settings every time it syncs, so replacing that token in Settings updates every
+such account at once. The command fails (exit 2) when no default token is saved,
+because the account could never sync; the CLI cannot set the default token.
+
+```powershell
+gclo accounts add --name personal --org octocat --target D:\mirror --use-default-token
+```
+
 ### `gclo accounts edit`
 
 ```powershell
@@ -286,8 +299,11 @@ gclo accounts edit --name work --rename "work (contoso)"
 ```
 
 `--name` picks the account; every other option replaces just that setting.
-Without a token option the stored token is left untouched. Editing with
-nothing to change is a usage error.
+Without a token option the token (and its source) is left untouched. A
+`--token-*` option gives the account a token of its own (also switching a
+`default` account to `own`); `--use-default-token` switches it to the default
+token and removes its own entry from Credential Manager. Editing with nothing
+to change is a usage error.
 
 ### `gclo accounts remove`
 

@@ -91,12 +91,16 @@ internal sealed class FakeRepoLister : IRepositoryLister
 
    public Exception? Throw { get; set; }
 
+   /// <summary>The token of the most recent call, so a test can check which source was used.</summary>
+   public string? LastToken { get; private set; }
+
 
 
    public Task<IReadOnlyList<RepoDescriptor>> ListOrganizationRepositoriesAsync(
        string organization, string token, CancellationToken cancellationToken = default)
    {
       cancellationToken.ThrowIfCancellationRequested();
+      LastToken = token;
       return Throw is not null
           ? Task.FromException<IReadOnlyList<RepoDescriptor>>(Throw)
           : Task.FromResult(Result);

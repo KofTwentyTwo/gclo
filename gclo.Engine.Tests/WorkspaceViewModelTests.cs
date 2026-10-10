@@ -1794,6 +1794,54 @@ public sealed class WorkspaceViewModelTests : IDisposable
 
 
    [Fact]
+   public async Task AccountConstruction_DefaultTokenAccount_UsesTheDefaultToken()
+   {
+      var account = new Account
+      {
+         Id = Guid.NewGuid(),
+         Name = "Shared",
+         Organization = "acme",
+         TargetRoot = @"C:\repos\shared",
+         TokenSource = TokenSource.Default,
+      };
+      var vault = new InMemoryVault();
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-1234567890");
+      string? lookedUpToken = null;
+      _orgs.Handler = (token, _) =>
+      {
+         lookedUpToken = token;
+         return Task.FromResult<IReadOnlyList<string>>(["acme"]);
+      };
+
+      WorkspaceViewModel vm = CreateViewModel(account: account, vault: vault);
+
+      Assert.Equal("default-token-1234567890", vm.Token);
+      await WaitUntilAsync(() => lookedUpToken is not null, "org lookup to fire");
+      Assert.Equal("default-token-1234567890", lookedUpToken);
+   }
+
+
+
+   [Fact]
+   public void AccountConstruction_DefaultTokenAccount_WithoutADefaultToken_StartsEmpty()
+   {
+      var account = new Account
+      {
+         Id = Guid.NewGuid(),
+         Name = "Shared",
+         Organization = "acme",
+         TargetRoot = @"C:\repos\shared",
+         TokenSource = TokenSource.Default,
+      };
+
+      WorkspaceViewModel vm = CreateViewModel(account: account, vault: new InMemoryVault());
+
+      Assert.Equal("", vm.Token);
+   }
+
+
+
+   [Fact]
    public async Task AccountConstruction_SeedsWorkspace_AndLooksUpOrgsWithVaultToken()
    {
       var account = new Account
