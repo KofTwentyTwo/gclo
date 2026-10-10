@@ -34,11 +34,16 @@
             x:Name="DefaultTokenBox"
             Header="Default GitHub token"
             AutomationProperties.AutomationId="SettingsDefaultTokenBox"
-            ToolTipService.ToolTip="Pre-fills Quick Sync so you do not paste the token every launch. Stored in Windows Credential Manager, never in a file." />
+            PlaceholderText="ghp_…"
+            ToolTipService.ToolTip="Pre-fills Quick Sync and serves every account set to use it. Stored in Windows Credential Manager, never in a file."
+            PasswordChanged="DefaultTokenBox_PasswordChanged" />
         <StackPanel Orientation="Horizontal" Spacing="8">
             <TextBlock
                 x:Name="TokenStateText"
                 VerticalAlignment="Center"
+                MaxWidth="420"
+                TextWrapping="Wrap"
+                AutomationProperties.LiveSetting="Polite"
                 Style="{ThemeResource CaptionTextBlockStyle}"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             <HyperlinkButton

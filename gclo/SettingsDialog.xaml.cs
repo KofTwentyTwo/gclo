@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using gclo.Engine;
 using gclo.ViewModels;
 using Microsoft.UI.Xaml;
@@ -42,8 +43,12 @@ public sealed partial class SettingsDialog : ContentDialog
    // A ContentDialog has no HWND of its own; the host window supplies one for pickers.
    private readonly Func<nint> _windowHandleProvider;
 
-   /// <summary>Set by the Remove link; the deletion happens on Save.</summary>
-   private bool _removeSavedToken;
+   /// <summary>
+   /// What the default-token box shows and what Save does with it: a saved token
+   /// shows as a fixed mask (never the token), typing replaces it, clearing removes
+   /// it, and the caption names the accounts a removal would break (#101).
+   /// </summary>
+   private readonly SettingsTokenState _tokenState;
 
 
 
@@ -52,10 +57,15 @@ public sealed partial class SettingsDialog : ContentDialog
    /// <paramref name="log"/> records what a save changed (field names and values,
    /// never the token).
    /// </summary>
-   public SettingsDialog(AppSettings settings, ITokenVault vault, Func<nint> windowHandleProvider, IActivityLog? log = null)
+   public SettingsDialog(
+       AppSettings settings, ITokenVault vault, AccountsStore accounts, Func<nint> windowHandleProvider, IActivityLog? log = null)
    {
       ArgumentNullException.ThrowIfNull(settings);
       ArgumentNullException.ThrowIfNull(vault);
+      ArgumentNullException.ThrowIfNull(accounts);
+      _tokenState = new SettingsTokenState(
+          hasSavedToken: !string.IsNullOrEmpty(vault.TryRetrieve(AppSettings.DefaultTokenVaultId)),
+          dependentAccounts: accounts.GetAll().Where(a => a.UsesDefaultToken).Select(a => a.Name).ToList());
       ArgumentNullException.ThrowIfNull(windowHandleProvider);
       _settings = settings;
       _vault = vault;
@@ -74,9 +84,11 @@ public sealed partial class SettingsDialog : ContentDialog
       SplashToggle.IsOn = settings.ShowSplashScreen;
       SplashDurationBox.Value = settings.SplashMilliseconds;
 
-      // The saved token is never re-materialized into the box — the box stays
-      // empty and means "unchanged"; only typing a new value replaces it.
-      RefreshTokenState(hasSaved: _vault.TryRetrieve(AppSettings.DefaultTokenVaultId) is not null);
+      // The saved token is never re-materialized into the box: a saved token shows
+      // as the fixed mask, which means "unchanged"; typing replaces it, clearing
+      // removes it. The caption follows every edit (PasswordChanged).
+      DefaultTokenBox.Password = _tokenState.InitialBoxValue;
+      UpdateTokenCaption();
    }
 
 
@@ -145,15 +157,20 @@ public sealed partial class SettingsDialog : ContentDialog
       _settings.Save();
 
       string typed = DefaultTokenBox.Password;
-      if(typed.Length > 0)
+      switch(_tokenState.Plan(typed))
       {
-         _vault.Store(AppSettings.DefaultTokenVaultId, typed);
-         changes.Add("default token stored");
-      }
-      else if(_removeSavedToken)
-      {
-         _vault.Delete(AppSettings.DefaultTokenVaultId);
-         changes.Add("default token removed");
+         case SettingsTokenAction.Store:
+            _vault.Store(AppSettings.DefaultTokenVaultId, typed);
+            changes.Add(_tokenState.HasSavedToken ? "default token replaced" : "default token stored");
+            break;
+         case SettingsTokenAction.Remove:
+            _vault.Delete(AppSettings.DefaultTokenVaultId);
+            changes.Add(_tokenState.DependentCount == 0
+                ? "default token removed"
+                : $"default token removed ({_tokenState.DependentCount} account(s) depend on it)");
+            break;
+         default:
+            break;
       }
 
       _log.Info(changes.Count == 0
@@ -163,22 +180,30 @@ public sealed partial class SettingsDialog : ContentDialog
 
 
 
+   // Clearing the box is the removal; the caption (via PasswordChanged) says what
+   // Save will do and which accounts it affects.
    private void RemoveTokenButton_Click(object sender, RoutedEventArgs e)
+       => DefaultTokenBox.Password = "";
+
+
+
+   private void DefaultTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
+       => UpdateTokenCaption();
+
+
+
+   /// <summary>
+   /// The caption and the Remove link follow the box: the state object words the
+   /// consequence of Save (keep, replace, remove), and a removal that breaks accounts
+   /// is shown in the critical colour so it reads as the warning it is.
+   /// </summary>
+   private void UpdateTokenCaption()
    {
-      _removeSavedToken = true;
-      DefaultTokenBox.Password = "";
-      TokenStateText.Text = "Saved token will be removed on Save.";
-      RemoveTokenButton.Visibility = Visibility.Collapsed;
-   }
-
-
-
-   private void RefreshTokenState(bool hasSaved)
-   {
-      TokenStateText.Text = hasSaved
-          ? "A default token is saved. Leave the box empty to keep it."
-          : "No default token saved.";
-      RemoveTokenButton.Visibility = hasSaved ? Visibility.Visible : Visibility.Collapsed;
+      string box = DefaultTokenBox.Password;
+      TokenStateText.Text = _tokenState.Caption(box);
+      TokenStateText.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+          _tokenState.RemovalBreaksAccounts(box) ? "SystemFillColorCriticalBrush" : "TextFillColorSecondaryBrush"];
+      RemoveTokenButton.Visibility = _tokenState.CanOfferRemoval(box) ? Visibility.Visible : Visibility.Collapsed;
    }
 
 

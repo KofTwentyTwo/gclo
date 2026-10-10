@@ -1057,7 +1057,7 @@ public sealed partial class MainWindow : Window
    private async void SettingsMenuItem_Click(object sender, RoutedEventArgs e)
    {
       var dialog = new SettingsDialog(
-          _settings, _tokenVault, () => WinRT.Interop.WindowNative.GetWindowHandle(this), _log)
+          _settings, _tokenVault, _accountsStore, () => WinRT.Interop.WindowNative.GetWindowHandle(this), _log)
       {
          XamlRoot = Content.XamlRoot,
       };
