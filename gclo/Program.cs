@@ -4,6 +4,7 @@
  */
 
 using System;
+using gclo.ViewModels;
 using Velopack;
 
 
@@ -24,6 +25,14 @@ public static class Program
    {
       // Must be first: handles Velopack install/update/uninstall hooks and may exit.
       VelopackApp.Build().Run();
+
+      // The dev channel is packed as its own app (id gclo-dev) so it installs beside
+      // the stable one; it keeps its own data root and says so in the title (#114).
+      // Local and CLI runs have no Velopack app id and stay on the stable paths.
+      if(string.Equals(Velopack.Locators.VelopackLocator.Current?.AppId, "gclo-dev", StringComparison.Ordinal))
+      {
+         GcloPaths.Edition = "dev";
+      }
 
       // The remainder mirrors the XAML-generated Main (obj\...\App.g.i.cs) verbatim.
       global::WinRT.ComWrappersSupport.InitializeComWrappers();

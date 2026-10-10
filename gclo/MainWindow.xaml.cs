@@ -121,7 +121,10 @@ public sealed partial class MainWindow : Window
       InitializeComponent();
       ApplyBackdrop();
 
-      Title = "gclo — Git Clone Large Organizations";
+      // The dev edition installs beside the stable app, so the title says which one this is.
+      Title = GcloPaths.Edition.Length == 0
+          ? "gclo — Git Clone Large Organizations"
+          : $"gclo ({GcloPaths.Edition}) — Git Clone Large Organizations";
 
       // Quick Sync is declared in XAML; its Guid tag and the account items are
       // runtime data, so they are filled in here.

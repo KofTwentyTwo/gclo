@@ -23,6 +23,21 @@ Any prerelease identifier works (`-alpha`, `-beta.2`, `-rc.1`, ...) — the rule
 is simply: **a `-` in the version means prerelease, which means the `dev`
 channel**.
 
+### The dev edition is a separate app
+
+A prerelease is packed as its own Velopack app, id **`gclo-dev`**, while stable
+releases use **`gclo`**. The two install side by side: separate install folder
+(`%LOCALAPPDATA%\gclo-dev` vs `%LOCALAPPDATA%\gclo`), Start menu entry, update
+feed and data root (`%LOCALAPPDATA%\KofTwentyTwo\gclo-dev` vs `…\gclo`), and
+the dev edition's window title reads "gclo (dev)". A machine can therefore keep
+the stable app for real work and a dev build for trying the next release; each
+only ever updates within its own channel. The dev edition's assets follow its
+app id: `gclo-dev-dev-Setup.exe`, `gclo-dev-dev-Portable.zip`,
+`gclo-dev-1.2.3-beta.1-dev-full.nupkg`, `releases.dev.json`. The CLI zip is the
+same for both (`gclo-cli-win-x64-<version>.zip`). Dev installs made before this
+split (app id `gclo` on the dev channel, up to 1.0.2-beta.3) cannot update into
+`gclo-dev`: uninstall them, or install the stable app over them.
+
 ### How self-update channels map
 
 The desktop app updates itself with [Velopack](https://velopack.io). Each

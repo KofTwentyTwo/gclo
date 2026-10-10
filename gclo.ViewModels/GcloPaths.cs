@@ -34,11 +34,36 @@ public static class GcloPaths
 
 
    /// <summary>
-   /// %LOCALAPPDATA%\KofTwentyTwo\gclo: the root used when GCLO_DATA_DIR is not
-   /// set. Outside the Velopack install root on purpose (see the type remarks).
+   /// The installed edition: "" for the stable app (Velopack app id <c>gclo</c>) and
+   /// "dev" for the dev-channel app (<c>gclo-dev</c>), which installs beside the
+   /// stable one and keeps its own data root so both can run on one machine (#114).
+   /// Set once by the app's entry point before anything reads <see cref="DataRoot"/>;
+   /// local and CLI runs leave it empty.
+   /// </summary>
+   public static string Edition { get; set; } = "";
+
+
+
+   /// <summary>The folder name under %LOCALAPPDATA%\KofTwentyTwo: "gclo", or "gclo-dev" for the dev edition.</summary>
+   public static string DataFolderName => DataFolderNameFor(Edition);
+
+
+
+   /// <summary>"gclo" for the stable edition (empty <paramref name="edition"/>), "gclo-&lt;edition&gt;" otherwise.</summary>
+   public static string DataFolderNameFor(string edition)
+   {
+      ArgumentNullException.ThrowIfNull(edition);
+      return edition.Length == 0 ? "gclo" : $"gclo-{edition}";
+   }
+
+
+
+   /// <summary>
+   /// %LOCALAPPDATA%\KofTwentyTwo\gclo (or gclo-dev): the root used when GCLO_DATA_DIR
+   /// is not set. Outside the Velopack install root on purpose (see the type remarks).
    /// </summary>
    public static string DefaultDataRoot =>
        Path.Combine(
            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-           "KofTwentyTwo", "gclo");
+           "KofTwentyTwo", DataFolderName);
 }
