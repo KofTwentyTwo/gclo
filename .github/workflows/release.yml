@@ -180,6 +180,12 @@ jobs:
           base: main
           branch: packaging/v${{ needs.release.outputs.version }}
           delete-branch: true
+          # The pr / dco gate wants a Signed-off-by whose email matches the commit
+          # author, so author and committer are the same identity (the actor who
+          # pushed the tag) and the action signs off as that committer (#81).
+          author: ${{ github.actor }} <${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com>
+          committer: ${{ github.actor }} <${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com>
+          signoff: true
           commit-message: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.release.outputs.version }}'
           title: 'build(packaging): point the Scoop and Chocolatey manifests at v${{ needs.release.outputs.version }}'
           body: |
