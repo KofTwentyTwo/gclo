@@ -6,7 +6,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>gclo</id>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <title>gclo (Git Clone Large Organizations)</title>
     <authors>James Maes</authors>
     <owners>KofTwentyTwo</owners>
@@ -35,7 +35,7 @@ A GitHub personal access token is required: set `GITHUB_TOKEN`, or use `--token-
 
 The desktop app (WinUI 3) is a separate download from the GitHub Releases page.
 ]]></description>
-    <releaseNotes>https://github.com/KofTwentyTwo/gclo/releases/tag/v1.0.0</releaseNotes>
+    <releaseNotes>https://github.com/KofTwentyTwo/gclo/releases/tag/v1.0.1</releaseNotes>
   </metadata>
   <files>
     <file src="tools\**" target="tools" />
