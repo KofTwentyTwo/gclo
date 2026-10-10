@@ -64,7 +64,8 @@ its first submission cannot be automated; see below.
 
 | Job | Runs for | Needs | Publishes |
 | --- | -------- | ----- | --------- |
-| `release` (shared workflow) | every tag | nothing beyond `GITHUB_TOKEN` | the GitHub Release: Setup, portable, full/delta packages, feed, CLI zip, SBOMs, `SHA256SUMS`, provenance and SBOM attestations |
+| `release` (shared workflow) | every tag | the signing identity, as `release`-environment **variables** (no secret exists): `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`, `TRUSTED_SIGNING_ENDPOINT`, `TRUSTED_SIGNING_ACCOUNT`, `TRUSTED_SIGNING_PROFILE` (see "Code signing") | the GitHub Release: Setup, portable, full/delta packages, feed, CLI zip, SBOMs, `SHA256SUMS`, provenance and SBOM attestations; every exe/dll and Setup.exe Authenticode-signed |
+| `verify-signatures` | every tag | `TRUSTED_SIGNING_SUBJECT` (`release`-environment variable: the publisher name on the certificate, as validated by Azure) | nothing; fails the run when a shipped executable is unsigned, untimestamped or signed by another publisher |
 | `packages` | stable only | `RELEASE_APP_PRIVATE_KEY` (private key of the release GitHub App, see below) plus the repository variable `RELEASE_APP_CLIENT_ID`, `CHOCO_API_KEY` (chocolatey.org) | the Chocolatey package pushed to chocolatey.org, and a `build(packaging): …` pull request against `main` with `bucket/gclo.json` and `packaging/chocolatey` pointed at the release |
 | `winget` | stable only, once the repository variable `WINGET_PACKAGE_ID` is set (`KofTwentyTwo.gclo`, after the one-time manual submission below) | `WINGET_TOKEN` (fine-grained token that can fork and open pull requests on public repositories, ≤ 90 days); missing → the job fails | a manifest update PR on [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) |
 | `nuget` | only when the repository variable `NUGET_PUBLISH` is `true` | `NUGET_API_KEY` (nuget.org, push rights for `gclo.Engine`) | `gclo.Engine` on nuget.org |
@@ -79,6 +80,64 @@ GitHub App installed **only on this repository**, permissions Contents and Pull
 requests **write**, no ruleset bypass. Store its client id as the Actions variable
 `RELEASE_APP_CLIENT_ID` and its private key (`.pem`) as `RELEASE_APP_PRIVATE_KEY`
 in the `release` environment; never as a repository secret or a committed file.
+
+## Code signing
+
+Every release is Authenticode-signed with **Azure Artifact Signing** (formerly Trusted
+Signing): the shared workflow signs every published `.exe`/`.dll` (app and CLI) before
+packing, and `vpk pack` signs `Setup.exe` and the update stub with the same identity
+(`--azureTrustedSignFile`). Always SHA-256 with an RFC 3161 timestamp from
+`http://timestamp.acs.microsoft.com`. `SHA256SUMS`, the Velopack feed and the
+attestations are produced after signing, so they describe the signed files. The
+`verify-signatures` job then downloads what was published and runs
+`signtool verify /pa /all` on Setup.exe and every gclo executable (ADR
+[0008](adr/0008-azure-artifact-signing.md)).
+
+There is **no signing secret**: the release job logs in to Azure over GitHub OIDC
+(`azure/login`) as an Entra application whose federated credential trusts only this
+repository's `release` environment, and that application holds only the
+*Artifact Signing Certificate Profile Signer* role on the certificate profile.
+The identity is configuration, not a secret, so it lives in `release`-environment
+variables:
+
+| Variable | Value |
+| --- | --- |
+| `AZURE_TENANT_ID` | the Entra tenant GUID (not the directory domain) |
+| `AZURE_CLIENT_ID` | the application (client) id of `gclo-release-signing` |
+| `AZURE_SUBSCRIPTION_ID` | the subscription that holds the signing account |
+| `TRUSTED_SIGNING_ENDPOINT` | the account's regional endpoint, e.g. `https://eus.codesigning.azure.net` |
+| `TRUSTED_SIGNING_ACCOUNT` | the signing account name (`kof22signing`) |
+| `TRUSTED_SIGNING_PROFILE` | the certificate profile name (`releases`) |
+| `TRUSTED_SIGNING_SUBJECT` | the validated publisher name on the certificate, checked by `verify-signatures` |
+
+A missing variable fails the Azure login, and the run with it; nothing unsigned is
+published. The Azure side (application, federated credential, role assignment) is
+administered interactively by the owner; `.github/scripts/Set-ReleaseSigning.ps1`
+records the exact steps and is idempotent.
+
+### Signing locally
+
+Only for a one-off (for example re-signing a hotfix build by hand); releases are
+signed in CI. You need SignTool (Windows SDK), the .NET 8 runtime, the
+[Microsoft.ArtifactSigning.Client](https://www.nuget.org/packages/Microsoft.ArtifactSigning.Client)
+package (the `dlib`), and an identity holding the *Certificate Profile Signer* role:
+
+```powershell
+# One-time: the dlib, and a metadata file with the same values as the variables above
+nuget install Microsoft.ArtifactSigning.Client -x -OutputDirectory $env:LOCALAPPDATA\ArtifactSigning
+@{ Endpoint = 'https://eus.codesigning.azure.net'; CodeSigningAccountName = 'kof22signing'; CertificateProfileName = 'releases' } |
+   ConvertTo-Json | Set-Content $env:LOCALAPPDATA\ArtifactSigning\metadata.json
+
+# Sign in as an authorized identity (the dlib uses the Azure CLI / Azure PowerShell credential)
+az login --tenant <tenant GUID>
+
+# Sign and verify
+$signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object FullName -match '\\x64\\' | Sort-Object FullName -Descending | Select-Object -First 1
+& $signtool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 `
+   /dlib "$env:LOCALAPPDATA\ArtifactSigning\Microsoft.ArtifactSigning.Client\bin\x64\Azure.CodeSigning.Dlib.dll" `
+   /dmdf "$env:LOCALAPPDATA\ArtifactSigning\metadata.json" .\gclo.exe
+& $signtool verify /pa /all /v .\gclo.exe
+```
 
 ## First winget submission (one-time, manual)
 
@@ -166,6 +225,10 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
      `SHA256SUMS`, provenance, a **draft** GitHub Release with every asset and
      generated notes, then **publish** — releases are immutable, so everything
      lands while the release is still a draft.
+   - **Verify signatures on the published assets** — `signtool verify /pa /all`
+     on Setup.exe and every gclo executable inside the portable and CLI zips,
+     checking the publisher name and the timestamp. A failure here means a
+     published release is unsigned: handle it as "A broken release".
    - **Scoop and Chocolatey**, **winget**, **NuGet** — the publishers described
      above; each fails loudly when it cannot publish.
 

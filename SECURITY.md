@@ -110,8 +110,10 @@ is a vulnerability: please report it through the channel above.
   [README](README.md#verifying-a-release).
 - Self-update downloads only from this repository's GitHub Releases and verifies each
   package against the release's `releases.<channel>.json` feed.
-- The binaries are **not yet Authenticode-signed**: KofTwentyTwo standards exception
-  [EX-0002](https://github.com/KofTwentyTwo/standards/blob/main/exceptions/register.md#ex-0002)
-  (tracked here as [#57](https://github.com/KofTwentyTwo/gclo/issues/57)). Until they
-  are, expect a SmartScreen prompt on first install, and prefer the checksum and
-  attestation checks over trusting a download by its name.
+- Setup.exe, the update stub and every gclo executable and library are
+  **Authenticode-signed** with Azure Artifact Signing (SHA-256, RFC 3161 timestamp) in
+  the release workflow, over OIDC with an identity that only this repository's release
+  tags can use; no signing key or secret exists outside Azure. The workflow verifies
+  the published assets with `signtool verify /pa /all` and fails if any shipped
+  executable is unsigned or signed by another publisher. Check the publisher yourself
+  with `Get-AuthenticodeSignature` (README, "Verifying a release").

@@ -62,9 +62,15 @@ gh attestation verify .\gclo-stable-Setup.exe --repo KofTwentyTwo/gclo --signer-
 
 # 3. Dependencies: the SBOM is attested too
 gh attestation verify .\gclo-cli-win-x64-<version>.zip --repo KofTwentyTwo/gclo --signer-repo KofTwentyTwo/standards --predicate-type https://cyclonedx.org/bom
+
+# 4. Publisher: Setup.exe and every gclo executable are Authenticode-signed (Azure
+#    Artifact Signing, SHA-256, RFC 3161 timestamp) by KofTwentyTwo
+signtool verify /pa /all /v .\gclo-stable-Setup.exe
+Get-AuthenticodeSignature .\gclo-stable-Setup.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
 ```
 
-The binaries are not yet Authenticode-signed (standards exception [EX-0002](https://github.com/KofTwentyTwo/standards/blob/main/exceptions/register.md#ex-0002), [#57](https://github.com/KofTwentyTwo/gclo/issues/57)), so step 2 is the origin check until `Get-AuthenticodeSignature` can be.
+Windows checks step 4 for you: a signed installer carries the publisher name in the
+SmartScreen and UAC prompts instead of "Unknown publisher".
 
 ## Getting a token
 
