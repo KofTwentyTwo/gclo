@@ -166,6 +166,26 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
 
 
+   /// <summary>
+   /// Called by the shell when the workspace is shown. A saved account knows its
+   /// organization, folder and token, so it loads its repositories straight away
+   /// instead of landing on the connect card; Quick Sync, a workspace that already
+   /// loaded, or an account whose token is missing (the card shows why) do nothing.
+   /// Returns true when a load was started.
+   /// </summary>
+   public bool LoadRepositoriesIfSaved()
+   {
+      if(_account is null || HasLoadedRepos || !LoadReposCommand.CanExecute(null))
+      {
+         return false;
+      }
+      _log.Info($"Opening account '{DisplayName}': loading its repositories.");
+      _ = LoadReposCommand.ExecuteAsync(null);
+      return true;
+   }
+
+
+
    public ObservableCollection<RepoItemViewModel> Repos { get; } = new();
 
    /// <summary>

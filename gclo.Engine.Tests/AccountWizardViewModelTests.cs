@@ -567,6 +567,24 @@ public sealed class AccountWizardViewModelTests : IDisposable
 
 
    [Fact]
+   public async Task EditWizard_OrganizationSurvivesTheStepTwoListRefresh()
+   {
+      // The editable ComboBox on step 3 writes "" into Organization when its
+      // ItemsSource is replaced; the view model must restore the seeded value.
+      Account existing = MakeAccount("Work") with { Organization = "KofTwentyTwo" };
+      _store.Save(existing, "ghp_own");
+      AccountWizardViewModel wizard = NewWizard(existing, "ghp_own");
+      wizard.Organizations.CollectionChanged += (_, _) => wizard.Organization = "";
+      _orgs.Handler = (_, _) => Task.FromResult<IReadOnlyList<string>>(["KofTwentyTwo", "other"]);
+
+      await AdvanceToStepAsync(wizard, 3);
+
+      Assert.Equal("KofTwentyTwo", wizard.Organization);
+   }
+
+
+
+   [Fact]
    public void DefaultTokenCaption_CountsOtherAccounts()
    {
       _store.Save(MakeAccount("A") with { TokenSource = TokenSource.Default }, null);

@@ -19,12 +19,18 @@
             <Setter Property="Padding" Value="4" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
+        <!-- The row-details presenter is shown for every row (RowDetailsVisibilityMode
+             Visible, so error/note/Resolve lines can appear without a toggle) and
+             the TableView theme pads it 8px on every side even when the details
+             content is collapsed, which left an empty band under each row. The
+             RowDetailsTemplate pads its own content, so the theme padding is 0 here. -->
+        <Thickness x:Key="TableViewDetailsPadding">0</Thickness>
         <!-- Column widths of the repository table, declared once. -->
         <GridLength x:Key="SelectColumnWidth">40</GridLength>
         <GridLength x:Key="NameColumnWidth">2*</GridLength>
         <GridLength x:Key="StatusColumnWidth">160</GridLength>
         <GridLength x:Key="BranchColumnWidth">120</GridLength>
-        <GridLength x:Key="ArchivedColumnWidth">96</GridLength>
+        <GridLength x:Key="ArchivedColumnWidth">112</GridLength>
         <!-- Header automation names are set from code (sort state is composed in), but
              every header needs a sensible name before the first sort; one style per
              column since Style setters cannot bind. -->
@@ -543,6 +549,7 @@
                                 <CheckBox
                                     MinWidth="0"
                                     Padding="0"
+                                    HorizontalAlignment="Center"
                                     VerticalAlignment="Center"
                                     ToolTipService.ToolTip="Select or clear every visible row (hidden rows keep their selection)"
                                     AutomationProperties.Name="Select all visible repositories"
@@ -553,6 +560,7 @@
                                     <CheckBox
                                         MinWidth="0"
                                         Padding="0"
+                                        HorizontalAlignment="Center"
                                         VerticalAlignment="Center"
                                         AutomationProperties.Name="{x:Bind Name, Mode=OneTime}"
                                         IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />

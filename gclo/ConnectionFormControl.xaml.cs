@@ -121,8 +121,23 @@ public sealed partial class ConnectionFormControl : UserControl
       if(ViewModel is not null)
       {
          EditableComboBox.ReapplyText((ComboBox)sender, ViewModel.Organization);
+         // The organization lookup replaces the list about a second after an
+         // account workspace opens, and an editable ComboBox drops its text when
+         // its ItemsSource changes; the view model restores Organization, so put
+         // it back into the box each time the list changes.
+         if(!ReferenceEquals(_organizationsHooked, ViewModel))
+         {
+            _organizationsHooked = ViewModel;
+            ViewModel.Organizations.CollectionChanged += (_, _) =>
+                EditableComboBox.ReapplyText((ComboBox)sender, ViewModel.Organization);
+         }
       }
    }
+
+
+
+   /// <summary>The view model whose organization list this control already follows.</summary>
+   private WorkspaceViewModel? _organizationsHooked;
 
 
 

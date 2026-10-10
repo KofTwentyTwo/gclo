@@ -1823,6 +1823,66 @@ public sealed class WorkspaceViewModelTests : IDisposable
 
 
 
+   // ---------------------------------------------------------------- shown: saved accounts load themselves
+
+   [Fact]
+   public async Task LoadRepositoriesIfSaved_Account_LoadsOnce_WithTheResolvedToken()
+   {
+      var account = new Account
+      {
+         Id = Guid.NewGuid(),
+         Name = "Work",
+         Organization = "acme",
+         TargetRoot = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N")),
+      };
+      var vault = new InMemoryVault();
+      vault.Store(account.Id, "vault-token-1234567890");
+      _lister.Repositories = [new RepoDescriptor("alpha", "https://example.test/acme/alpha.git", "main", false)];
+      WorkspaceViewModel vm = CreateViewModel(account: account, vault: vault);
+
+      Assert.True(vm.LoadRepositoriesIfSaved());
+      await WaitUntilAsync(() => vm.HasLoadedRepos, "repositories to load");
+
+      Assert.Contains(_lister.Calls, c =>
+          string.Equals(c.Organization, "acme", StringComparison.Ordinal)
+          && string.Equals(c.Token, "vault-token-1234567890", StringComparison.Ordinal));
+      Assert.False(vm.LoadRepositoriesIfSaved()); // already loaded: showing it again is a no-op
+   }
+
+
+
+   [Fact]
+   public void LoadRepositoriesIfSaved_QuickSync_DoesNothing()
+   {
+      WorkspaceViewModel vm = CreateViewModel();
+      vm.Token = "typed-token-1234567890";
+      vm.Organization = "acme";
+
+      Assert.False(vm.LoadRepositoriesIfSaved());
+      Assert.Empty(_lister.Calls);
+   }
+
+
+
+   [Fact]
+   public void LoadRepositoriesIfSaved_AccountWithoutAToken_LeavesTheCardUp()
+   {
+      var account = new Account
+      {
+         Id = Guid.NewGuid(),
+         Name = "Shared",
+         Organization = "acme",
+         TargetRoot = @"C:\repos\shared",
+         TokenSource = TokenSource.Default,
+      };
+      WorkspaceViewModel vm = CreateViewModel(account: account, vault: new InMemoryVault());
+
+      Assert.False(vm.LoadRepositoriesIfSaved());
+      Assert.Empty(_lister.Calls);
+   }
+
+
+
    [Fact]
    public void AccountConstruction_DefaultTokenAccount_WithoutADefaultToken_StartsEmpty()
    {

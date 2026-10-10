@@ -27,23 +27,61 @@ internal static class EditableComboBox
    /// </summary>
    public static void ReapplyText(ComboBox combo, string text)
    {
+      // When the value is one of the items, selecting it is the clean path: the
+      // combo renders it like a user's pick, with no placeholder or dropdown side
+      // effects (writing text into a focused editable combo opens its list, and
+      // closing that list throws the text away). Free text still goes to the box.
+      if(SelectItem(combo, text))
+      {
+         return;
+      }
       if(FindInnerTextBox(combo) is TextBox inner)
       {
-         inner.Text = text;
-         inner.SelectionStart = text.Length;
+         Apply(inner, text);
       }
       else
       {
          // Template not applied yet: try once more after this layout pass.
          combo.DispatcherQueue.TryEnqueue(() =>
          {
-            if(FindInnerTextBox(combo) is TextBox late)
+            if(!SelectItem(combo, text) && FindInnerTextBox(combo) is TextBox late)
             {
-               late.Text = text;
-               late.SelectionStart = text.Length;
+               Apply(late, text);
             }
          });
       }
+   }
+
+
+
+   private static bool SelectItem(ComboBox combo, string text)
+   {
+      foreach(object item in combo.Items)
+      {
+         if(item is string candidate && string.Equals(candidate, text, System.StringComparison.Ordinal))
+         {
+            combo.SelectedItem = item;
+            return true;
+         }
+      }
+      return false;
+   }
+
+
+
+   /// <summary>
+   /// Writes the text and re-evaluates the placeholder: a TextBox whose Text is set
+   /// from code while it was collapsed keeps painting its placeholder over the text
+   /// (the wizard's step 3 box showed "Choose from the list" over a filled value);
+   /// touching PlaceholderText makes the control recompute that visual state.
+   /// </summary>
+   private static void Apply(TextBox box, string text)
+   {
+      box.Text = text;
+      box.SelectionStart = text.Length;
+      string placeholder = box.PlaceholderText;
+      box.PlaceholderText = "";
+      box.PlaceholderText = placeholder;
    }
 
 
