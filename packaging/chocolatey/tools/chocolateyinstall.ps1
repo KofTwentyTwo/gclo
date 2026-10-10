@@ -11,8 +11,8 @@ $toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $packageArgs = @{}
 $packageArgs.packageName = 'gclo'
 $packageArgs.unzipLocation = $toolsDir
-$packageArgs.url64bit = 'https://github.com/KofTwentyTwo/gclo/releases/download/v1.0.0/gclo-cli-win-x64.zip'
-$packageArgs.checksum64 = '42805ca95a4f4d306df04f47a2b9aba54eee3df11cda8e3f201fe5a58311feee'
+$packageArgs.url64bit = 'https://github.com/KofTwentyTwo/gclo/releases/download/v1.0.1/gclo-cli-win-x64-1.0.1.zip'
+$packageArgs.checksum64 = '641ae4100022fba3fe489f8abe6ccc43186c070087d3edbf3a7891d5dc7428f7'
 $packageArgs.checksumType64 = 'sha256'
 
 Install-ChocolateyZipPackage @packageArgs
