@@ -12,6 +12,13 @@
     <UseWinUI>true</UseWinUI>
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
+    <!-- gclo ships only unpackaged and self-contained (Velopack). Fixing both here keeps
+         every build and publish on one configuration: the resource index (gclo.pri)
+         is generated incrementally in obj, and a framework-dependent build followed by
+         a self-contained publish left a stale index without the WinUI theme resources,
+         which crashed 1.0.1 at startup (0xc000027b). -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <!-- Velopack must run before any XAML starts, so the app supplies its own Main (Program.cs). -->
