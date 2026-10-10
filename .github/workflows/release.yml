@@ -106,12 +106,12 @@ jobs:
         with:
           persist-credentials: false
 
+      # No NuGet cache: a release workflow must not consume runtime-generated
+      # caches (zizmor cache-poisoning); the locked restore is deterministic.
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
 
       - name: Restore (locked)
         run: dotnet restore gclo.slnx -p:Platform=x64 --locked-mode
