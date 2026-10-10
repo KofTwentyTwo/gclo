@@ -30,7 +30,10 @@
                 <MenuFlyoutItem Text="Activity log…" AccessKey="A" AutomationProperties.AutomationId="MenuActivityLog" Click="ActivityLogMenuItem_Click" />
             </MenuBarItem>
             <MenuBarItem Title="Help" AccessKey="H">
-                <MenuFlyoutItem Text="View on GitHub" AccessKey="G" Click="GitHubMenuItem_Click" />
+                <MenuFlyoutItem Text="View on GitHub" AccessKey="G" AutomationProperties.AutomationId="MenuGitHub" Click="GitHubMenuItem_Click" />
+                <MenuFlyoutItem Text="Submit an issue…" AccessKey="I" AutomationProperties.AutomationId="MenuSubmitIssue" ToolTipService.ToolTip="Report a bug or request a feature on GitHub" Click="SubmitIssueMenuItem_Click" />
+                <MenuFlyoutItem Text="Community support…" AccessKey="S" AutomationProperties.AutomationId="MenuCommunitySupport" ToolTipService.ToolTip="Ask a question or share tips in GitHub Discussions" Click="CommunitySupportMenuItem_Click" />
+                <MenuFlyoutSeparator />
                 <MenuFlyoutItem x:Name="CheckUpdatesMenuItem" Text="Check for updates…" AccessKey="C" AutomationProperties.AutomationId="MenuCheckUpdates" Click="CheckForUpdatesMenuItem_Click" />
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem Text="About gclo…" AccessKey="A" AutomationProperties.AutomationId="MenuAbout" Click="AboutMenuItem_Click">
