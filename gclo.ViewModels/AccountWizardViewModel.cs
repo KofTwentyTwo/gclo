@@ -363,11 +363,18 @@ public sealed partial class AccountWizardViewModel : ObservableObject
                try
                {
                   IReadOnlyList<string> organizations = await _orgLister.ListOrganizationsAsync(candidate);
+                  // An editable ComboBox resets its text when its ItemsSource is
+                  // mutated, and the TwoWay binding writes that empty text back here,
+                  // wiping the organization an edit (or a seed) started with. Capture,
+                  // restore, and re-raise so step 3 shows what the account has.
+                  string organizationBeforeRefresh = Organization;
                   Organizations.Clear();
                   foreach(string organization in organizations)
                   {
                      Organizations.Add(organization);
                   }
+                  Organization = organizationBeforeRefresh;
+                  OnPropertyChanged(nameof(Organization));
                   TokenError = "";
                   _log.Info($"Account wizard: token accepted; {organizations.Count} organizations and accounts visible.");
                }

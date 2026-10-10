@@ -121,6 +121,7 @@
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Text="Step 3 of 4: Organization" />
             <ComboBox
+                x:Name="OrgBox"
                 AutomationProperties.AutomationId="WizardOrgBox"
                 HorizontalAlignment="Stretch"
                 Header="Organization or account"
