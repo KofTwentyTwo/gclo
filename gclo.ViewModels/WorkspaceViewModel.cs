@@ -157,6 +157,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// <summary>Name shown for this workspace in navigation: the account's name, or "Quick Sync".</summary>
    public string DisplayName => _account?.Name ?? "Quick Sync";
 
+   /// <summary>
+   /// True for an account workspace whose token is the default token from Settings
+   /// (<see cref="TokenSource.Default"/>): the pane tags it, and Sync All names
+   /// Settings when that token is missing.
+   /// </summary>
+   public bool UsesDefaultToken => _account?.UsesDefaultToken == true;
+
 
 
    public ObservableCollection<RepoItemViewModel> Repos { get; } = new();

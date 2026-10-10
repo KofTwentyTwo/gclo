@@ -57,12 +57,31 @@
                 Style="{ThemeResource CaptionTextBlockStyle}"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Text="Step 2 of 4: Access token" />
+            <!-- Offered only when a default token is saved in Settings (#102). The
+                 account then references that token instead of holding a copy, so
+                 replacing it in Settings updates every such account. -->
+            <RadioButtons
+                x:Name="TokenChoice"
+                AutomationProperties.AutomationId="WizardTokenChoice"
+                Header="Which token should this account use?"
+                SelectedIndex="{x:Bind ViewModel.TokenChoiceIndex, Mode=TwoWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.HasDefaultToken), Mode=OneWay}">
+                <RadioButton AutomationProperties.AutomationId="WizardUseDefaultToken" Content="Use the default token from Settings" />
+                <RadioButton AutomationProperties.AutomationId="WizardUseOwnToken" Content="Use a different token for this account" />
+            </RadioButtons>
+            <TextBlock
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                TextWrapping="Wrap"
+                Text="{x:Bind ViewModel.DefaultTokenCaption, Mode=OneWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.UseDefaultToken), Mode=OneWay}" />
             <PasswordBox
                 x:Name="TokenBox"
                 AutomationProperties.AutomationId="WizardTokenBox"
                 Header="Personal access token"
                 ToolTipService.ToolTip="Stored in Windows Credential Manager, never in a file; needs repository read access"
                 PlaceholderText="ghp_…"
+                IsEnabled="{x:Bind ViewModel.IsOwnTokenSelected, Mode=OneWay}"
                 PasswordChanged="TokenBox_PasswordChanged" />
             <HyperlinkButton
                 Padding="0"
