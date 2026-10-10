@@ -87,9 +87,64 @@ jobs:
     permissions:
       contents: read
 
+  # The gates test what `dotnet build` produces; this job tests what ships. It
+  # publishes the app exactly as the shared workflow does (same restore, build
+  # and publish commands, so the same incremental obj state) and runs the FlaUI
+  # suite against that published gclo.exe. v1.0.1 passed every gate and crashed
+  # at startup because its published resource index was stale (#87); nothing is
+  # published until this passes.
+  smoke:
+    name: Smoke test the published app
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No NuGet cache: a release workflow must not consume runtime-generated
+      # caches (zizmor cache-poisoning); the locked restore is deterministic.
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore (locked)
+        run: dotnet restore gclo.slnx -p:Platform=x64 --locked-mode
+
+      - name: Build Release (as the shared workflow does before publishing)
+        run: dotnet build gclo.slnx -c Release -p:Platform=x64 -warnaserror --no-restore
+
+      - name: Publish app (the shared workflow's exact command)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: >-
+          $version = $env:TAG.Substring(1);
+          dotnet publish gclo/gclo.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained
+          "-p:Version=$version" -p:RestoreLockedMode=true -p:WindowsPackageType=None
+          -p:WindowsAppSDKSelfContained=true -p:PublishTrimmed=false -o publish/app
+
+      - name: Run the UI suite against the published exe
+        env:
+          GCLO_UITEST_EXE: ${{ github.workspace }}\publish\app\gclo.exe
+          GCLO_UITEST_ARTIFACTS: ${{ github.workspace }}\TestResults\smoke
+        run: dotnet test gclo.UiTests/gclo.UiTests.csproj --logger "trx;LogFileName=smoke.trx" --results-directory TestResults
+
+      - name: Upload smoke test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-test-diagnostics
+          path: TestResults
+          if-no-files-found: warn
+
   release:
     name: Release
-    needs: [verify, gates]
+    needs: [verify, gates, smoke]
     uses: KofTwentyTwo/standards/.github/workflows/release-velopack.yml@e8ab30f8c60df437440ffd786c87678207246f5c # main 2026-10-09 (pre-1.0 draft, standards#5)
     permissions:
       contents: write      # create and publish the GitHub release

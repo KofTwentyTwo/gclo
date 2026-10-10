@@ -156,6 +156,11 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
    - **Gates** — the full `ci` workflow, exactly as a pull request runs it,
      including the FlaUI end-to-end suite. If a gate fails, fix the cause on
      `main` and cut a new patch version; never reuse the tag.
+   - **Smoke test the published app** — publishes the app with the shared
+     workflow's exact commands and runs the FlaUI suite against that published
+     `gclo.exe`. The gates test what `dotnet build` produces; this tests what
+     ships (1.0.1 passed every gate and crashed at startup, #87). Nothing is
+     published until it passes.
    - **Release** (shared workflow): locked restore, Release build with warnings
      as errors, tests with the 100% coverage gate, publish, Velopack pack, SBOMs,
      `SHA256SUMS`, provenance, a **draft** GitHub Release with every asset and
