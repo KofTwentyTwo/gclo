@@ -136,6 +136,17 @@ public sealed class AccountsStore
          }
 
          string verb = index >= 0 ? "updated" : "added";
+         if(account.UsesDefaultToken)
+         {
+            if(token is not null)
+            {
+               throw new ArgumentException(
+                   "An account that uses the default token has no token of its own to store.", nameof(token));
+            }
+            SaveUsingDefaultToken(updated, account, verb);
+            return;
+         }
+
          if(token is null)
          {
             Persist(updated); // IO failures propagate; _accounts stays unchanged then.
@@ -186,6 +197,62 @@ public sealed class AccountsStore
 
          _accounts = updated;
          _log.Info($"Account '{account.Name}' {verb} with a new token.");
+      }
+   }
+
+
+
+   /// <summary>
+   /// Saves an account that resolves to the default token: its metadata is written
+   /// and any token of its own is removed from the vault, vault first, with the same
+   /// put-it-back compensation as a delete. Called under the gate.
+   /// </summary>
+   private void SaveUsingDefaultToken(List<Account> updated, Account account, string verb)
+   {
+      string? ownToken = _vault.TryRetrieve(account.Id);
+      if(ownToken is not null)
+      {
+         _vault.Delete(account.Id);
+      }
+      try
+      {
+         Persist(updated);
+      }
+      catch(Exception persistFailure)
+      {
+         if(ownToken is null)
+         {
+            throw;
+         }
+         try
+         {
+            _vault.Store(account.Id, ownToken);
+         }
+         catch(Exception compensationFailure)
+         {
+            string leftover = $"account {account.Id:N} ('{account.Name}') lost its own token from the vault while accounts.json "
+                + "still says it has one; edit it and enter the token again, or switch it to the default token";
+            _log.Error($"Account save failed and the vault could not be restored: {leftover}.", compensationFailure);
+            throw new AccountConsistencyException(
+                $"Saving account '{account.Name}' failed ({persistFailure.Message}), and restoring its token "
+                + $"failed too ({compensationFailure.Message}). Current state: {leftover}.",
+                persistFailure, compensationFailure);
+         }
+         throw;
+      }
+      _accounts = updated;
+      _log.Info($"Account '{account.Name}' {verb}; it uses the default token"
+          + (ownToken is null ? "." : " (its own token was removed from the vault)."));
+   }
+
+
+
+   /// <summary>How many accounts resolve to the default token (Settings shows what a removal breaks).</summary>
+   public int CountUsingDefaultToken()
+   {
+      lock(_gate)
+      {
+         return _accounts.Count(a => a.UsesDefaultToken);
       }
    }
 

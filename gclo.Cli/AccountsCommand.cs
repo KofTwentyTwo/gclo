@@ -32,12 +32,14 @@ internal static class AccountsCommand
 
         list (default)
           Prints the accounts, one per line, in aligned columns: name,
-          organization, target root, and last sync time (local time, 'never'
-          when the account has not completed a sync yet).
+          organization, target root, token source ('own' or 'default'), and last
+          sync time (local time, 'never' when the account has not completed a
+          sync yet).
           --json    Print a single-line JSON array instead:
                     [{"id":"...","name":"...","description":"...","organization":"...",
                       "targetRoot":"...","createOrgSubfolder":bool,"maxConcurrency":N,
-                      "lastSync":"2026-07-04T15:30:00+00:00"|null,"lastSyncSummary":"..."|null}]
+                      "lastSync":"2026-07-04T15:30:00+00:00"|null,"lastSyncSummary":"..."|null,
+                      "tokenSource":"own"|"default"}]
 
         add
           --name <name>          Display name; must be unique (case-insensitive).
@@ -49,6 +51,10 @@ internal static class AccountsCommand
           --token-env <VAR> | --token-file <path> | --token-stdin
                                  The token to store (default: the GITHUB_TOKEN
                                  environment variable). Never pass it as an argument.
+          --use-default-token    Instead of a token of its own, the account uses
+                                 the default token saved in the desktop app's
+                                 Settings, read whenever it syncs, so replacing
+                                 the default token there updates this account too.
 
         edit
           --name <name>          The account to change (required).
@@ -58,8 +64,11 @@ internal static class AccountsCommand
           --org-subfolder | --no-org-subfolder
                                  Turn the organization subfolder on or off.
           --token-env | --token-file | --token-stdin
-                                 Replace the stored token; without a token option
-                                 the stored token is left untouched.
+                                 Replace the stored token (and switch an account
+                                 on the default token to a token of its own);
+                                 without a token option the token is left untouched.
+          --use-default-token    Switch the account to the default token; its own
+                                 token is removed from Windows Credential Manager.
 
         remove
           --name <name>          Deletes the account's settings and its stored
@@ -137,7 +146,7 @@ internal static class AccountsCommand
             IReadOnlyList<AccountSummary> summaries = accounts
                 .Select(a => new AccountSummary(
                     a.Id.ToString("N"), a.Name, a.Description, a.Organization, a.TargetRoot,
-                    a.CreateOrgSubfolder, a.MaxConcurrency, a.LastSyncUtc, a.LastSyncSummary))
+                    a.CreateOrgSubfolder, a.MaxConcurrency, a.LastSyncUtc, a.LastSyncSummary, TokenSourceLabel(a)))
                 .ToList();
             Console.Out.WriteLine(JsonSerializer.Serialize(
                 summaries, CliJsonContext.Default.IReadOnlyListAccountSummary));
@@ -158,7 +167,7 @@ internal static class AccountsCommand
          {
             Console.Out.WriteLine(
                 $"{account.Name.PadRight(nameWidth)}  {account.Organization.PadRight(orgWidth)}  "
-                + $"{account.TargetRoot.PadRight(targetWidth)}  {FormatLastSync(account.LastSyncUtc)}");
+                + $"{account.TargetRoot.PadRight(targetWidth)}  {TokenSourceLabel(account).PadRight(7)}  {FormatLastSync(account.LastSyncUtc)}");
          }
          return ExitCodes.Success;
       }
@@ -234,11 +243,14 @@ internal static class AccountsCommand
          throw new CliUsageException("--target is required.");
       }
 
-      log.Info($"accounts add started: name='{name.Trim()}', org='{org.Trim()}'");
+      log.Info($"accounts add started: name='{name.Trim()}', org='{org.Trim()}', token={(tokenOptions.UseDefault ? "default" : "own")}");
       try
       {
-         string token = tokenOptions.Resolve();
-         (AccountsStore store, _) = open(log);
+         // The token (if the account gets one of its own) is read before the store
+         // opens, so a bad token option fails without touching accounts.json.
+         string? token = tokenOptions.UseDefault ? null : tokenOptions.Resolve();
+         (AccountsStore store, ITokenVault vault) = open(log);
+         RequireDefaultTokenIfUsed(tokenOptions, vault);
          var account = new Account
          {
             Id = Guid.NewGuid(),
@@ -248,9 +260,10 @@ internal static class AccountsCommand
             TargetRoot = target.Trim(),
             CreateOrgSubfolder = orgSubfolder,
             MaxConcurrency = parallel,
+            TokenSource = tokenOptions.UseDefault ? TokenSource.Default : TokenSource.Own,
          };
          SaveOrFail(store, account, token);
-         Console.Out.WriteLine($"Account '{account.Name}' added.");
+         Console.Out.WriteLine($"Account '{account.Name}' added" + (tokenOptions.UseDefault ? " (uses the default token)." : "."));
          return ExitCodes.Success;
       }
       catch(Exception ex)
@@ -332,10 +345,17 @@ internal static class AccountsCommand
       log.Info($"accounts edit started: name='{name.Trim()}'");
       try
       {
-         (AccountsStore store, _) = open(log);
+         (AccountsStore store, ITokenVault vault) = open(log);
          Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
-         string? token = tokenOptions.HasExplicitSource ? tokenOptions.Resolve() : null;
+         RequireDefaultTokenIfUsed(tokenOptions, vault);
+         string? token = tokenOptions.HasExplicitSource && !tokenOptions.UseDefault ? tokenOptions.Resolve() : null;
 
+         // A token option decides the source: --use-default-token switches to the
+         // default token (and drops the own entry); --token-* gives the account a
+         // token of its own; neither leaves the source and the token untouched.
+         TokenSource source = tokenOptions.UseDefault
+             ? TokenSource.Default
+             : token is null ? existing.TokenSource : TokenSource.Own;
          Account updated = existing with
          {
             Name = rename?.Trim() ?? existing.Name,
@@ -344,9 +364,13 @@ internal static class AccountsCommand
             Description = description?.Trim() ?? existing.Description,
             MaxConcurrency = parallel ?? existing.MaxConcurrency,
             CreateOrgSubfolder = orgSubfolder ?? existing.CreateOrgSubfolder,
+            TokenSource = source,
          };
          SaveOrFail(store, updated, token);
-         Console.Out.WriteLine($"Account '{updated.Name}' updated" + (token is null ? "." : " (token replaced)."));
+         string tokenNote = tokenOptions.UseDefault
+             ? " (now uses the default token)."
+             : token is null ? "." : " (token replaced).";
+         Console.Out.WriteLine($"Account '{updated.Name}' updated" + tokenNote);
          return ExitCodes.Success;
       }
       catch(Exception ex)
@@ -404,6 +428,30 @@ internal static class AccountsCommand
 
 
    // ---------------------------------------------------------------- shared
+
+   /// <summary>'own' or 'default': the token source as the list column and the JSON field show it.</summary>
+   private static string TokenSourceLabel(Account account) => account.UsesDefaultToken ? "default" : "own";
+
+
+
+   /// <summary>
+   /// --use-default-token is only useful when a default token exists: without one
+   /// the account could never sync, so the command fails up front and says where
+   /// the default token is set (the CLI has no way to set it).
+   /// </summary>
+   private static void RequireDefaultTokenIfUsed(TokenOptions tokenOptions, ITokenVault vault)
+   {
+      tokenOptions.EnsureAtMostOneSource();
+      if(tokenOptions.UseDefault && !new AccountTokenResolver(vault).HasDefaultToken)
+      {
+         throw new CliErrorException(
+             "No default token is saved, so the account could not sync. Save one in the desktop app "
+             + "(Settings > Default GitHub token), or give the account a token of its own with --token-env, "
+             + "--token-file, or --token-stdin.");
+      }
+   }
+
+
 
    /// <summary>A duplicate name is the one validation the store itself enforces; everything else is fatal as is.</summary>
    private static void SaveOrFail(AccountsStore store, Account account, string? token)

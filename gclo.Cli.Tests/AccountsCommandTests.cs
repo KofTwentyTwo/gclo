@@ -234,6 +234,144 @@ public sealed class AccountsCommandTests : IDisposable
 
 
 
+   // ---------------------------------------------------------------- default token (#102)
+
+   [Fact]
+   public void Add_UseDefaultToken_CreatesAnAccountWithoutAnOwnEntry()
+   {
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      using var console = new ConsoleCapture();
+
+      int code = AccountsCommand.Run(
+          ["add", "--name", "shared", "--org", "acme", "--target", @"C:\src", "--use-default-token"], Open, new NullLog());
+
+      Assert.Equal(0, code);
+      Account saved = Store.FindByName("shared")!;
+      Assert.True(saved.UsesDefaultToken);
+      Assert.Null(_vault.TryRetrieve(saved.Id));
+      Assert.Contains("uses the default token", console.Out);
+   }
+
+
+
+   [Fact]
+   public void Add_UseDefaultToken_WithoutASavedDefault_IsAFatalError()
+   {
+      CliErrorException ex = Assert.Throws<CliErrorException>(() => AccountsCommand.Run(
+          ["add", "--name", "shared", "--org", "acme", "--target", @"C:\src", "--use-default-token"], Open, new NullLog()));
+
+      Assert.Contains("No default token is saved", ex.Message);
+      Assert.Contains("Settings", ex.Message);
+      Assert.Empty(Store.GetAll());
+   }
+
+
+
+   [Fact]
+   public void Add_UseDefaultToken_WithAnotherTokenOption_IsAUsageError()
+   {
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      using IDisposable _ = TokenEnv("ghp_x");
+
+      Assert.Throws<CliUsageException>(() => AccountsCommand.Run(
+          ["add", "--name", "shared", "--org", "acme", "--target", @"C:\src", "--use-default-token", "--token-env", EnvVar],
+          Open, new NullLog()));
+      Assert.Empty(Store.GetAll());
+   }
+
+
+
+   [Fact]
+   public void Edit_UseDefaultToken_SwitchesTheAccount_AndRemovesItsOwnToken()
+   {
+      Seed("work", "acme", @"C:\a");
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      Guid id = Store.FindByName("work")!.Id;
+      Assert.Equal("tok-work", _vault.TryRetrieve(id));
+      using var console = new ConsoleCapture();
+
+      int code = AccountsCommand.Run(["edit", "--name", "work", "--use-default-token"], Open, new NullLog());
+
+      Assert.Equal(0, code);
+      Assert.True(Store.FindByName("work")!.UsesDefaultToken);
+      Assert.Null(_vault.TryRetrieve(id));
+      Assert.Contains("now uses the default token", console.Out);
+   }
+
+
+
+   [Fact]
+   public void Edit_UseDefaultToken_WithoutASavedDefault_IsAFatalError_AndKeepsTheOwnToken()
+   {
+      Seed("work", "acme", @"C:\a");
+      Guid id = Store.FindByName("work")!.Id;
+
+      Assert.Throws<CliErrorException>(() => AccountsCommand.Run(["edit", "--name", "work", "--use-default-token"], Open, new NullLog()));
+
+      Assert.False(Store.FindByName("work")!.UsesDefaultToken);
+      Assert.Equal("tok-work", _vault.TryRetrieve(id));
+   }
+
+
+
+   [Fact]
+   public void Edit_TokenOption_SwitchesADefaultTokenAccountToItsOwnToken()
+   {
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      AccountsCommand.Run(["add", "--name", "shared", "--org", "acme", "--target", @"C:\src", "--use-default-token"], Open, new NullLog());
+      using IDisposable _ = TokenEnv("ghp_mine");
+
+      int code = AccountsCommand.Run(["edit", "--name", "shared", "--token-env", EnvVar], Open, new NullLog());
+
+      Assert.Equal(0, code);
+      Account updated = Store.FindByName("shared")!;
+      Assert.False(updated.UsesDefaultToken);
+      Assert.Equal("ghp_mine", _vault.TryRetrieve(updated.Id));
+   }
+
+
+
+   [Fact]
+   public void Edit_OtherSettings_LeaveTheTokenSourceAlone()
+   {
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      AccountsCommand.Run(["add", "--name", "shared", "--org", "acme", "--target", @"C:\src", "--use-default-token"], Open, new NullLog());
+
+      AccountsCommand.Run(["edit", "--name", "shared", "--parallel", "3"], Open, new NullLog());
+
+      Account updated = Store.FindByName("shared")!;
+      Assert.True(updated.UsesDefaultToken);
+      Assert.Equal(3, updated.MaxConcurrency);
+   }
+
+
+
+   [Fact]
+   public void List_ShowsTheTokenSource_InColumnsAndJson()
+   {
+      Seed("work", "acme", @"C:\a");
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      AccountsCommand.Run(["add", "--name", "shared", "--org", "acme", "--target", @"C:\b", "--use-default-token"], Open, new NullLog());
+
+      using(var console = new ConsoleCapture())
+      {
+         Assert.Equal(0, AccountsCommand.Run([], Open, new NullLog()));
+         string[] lines = console.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+         Assert.Contains(lines, l => l.StartsWith("shared", StringComparison.Ordinal) && l.Contains("  default  ", StringComparison.Ordinal));
+         Assert.Contains(lines, l => l.StartsWith("work", StringComparison.Ordinal) && l.Contains("  own  ", StringComparison.Ordinal));
+      }
+
+      using(var console = new ConsoleCapture())
+      {
+         Assert.Equal(0, AccountsCommand.Run(["--json"], Open, new NullLog()));
+         Assert.Contains("\"name\":\"shared\"", console.Out);
+         Assert.Contains("\"tokenSource\":\"default\"", console.Out);
+         Assert.Contains("\"tokenSource\":\"own\"", console.Out);
+      }
+   }
+
+
+
    [Fact]
    public void Add_UnknownOption_Throws()
        => Assert.Throws<CliUsageException>(() => AccountsCommand.Run(["add", "--nope"], Open, new NullLog()));

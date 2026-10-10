@@ -580,6 +580,40 @@ public sealed class SyncCommandTests : IDisposable
 
 
    [Fact]
+   public async Task Account_UsingTheDefaultToken_SyncsWithIt()
+   {
+      Account account = Seed("shared", "acme");
+      _vault.Delete(account.Id);
+      Store.Save(account with { TokenSource = TokenSource.Default }, null);
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      var lister = new FakeRepoLister { Result = [Repo("a")] };
+
+      int code = await Run(lister, new FakeGit(), "--account", "shared");
+
+      Assert.Equal(0, code);
+      Assert.Equal("ghp_default", lister.LastToken);
+   }
+
+
+
+   [Fact]
+   public async Task Account_UsingTheDefaultToken_WithoutOne_NamesSettingsInTheError()
+   {
+      Account account = Seed("shared", "acme");
+      _vault.Delete(account.Id);
+      Store.Save(account with { TokenSource = TokenSource.Default }, null);
+
+      CliErrorException ex = await Assert.ThrowsAsync<CliErrorException>(
+          () => Run(new FakeRepoLister(), new FakeGit(), "--account", "shared"));
+
+      Assert.Contains("no default token is saved", ex.Message);
+      Assert.Contains("Settings", ex.Message);
+      Assert.DoesNotContain("gclo:account:", ex.Message);
+   }
+
+
+
+   [Fact]
    public async Task Account_ExplicitTokenOption_OverridesVault()
    {
       Account account = Seed("work", "acme");

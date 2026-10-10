@@ -21,4 +21,5 @@ internal sealed record AccountSummary(
     bool CreateOrgSubfolder,
     int MaxConcurrency,
     DateTimeOffset? LastSync,
-    string? LastSyncSummary);
+    string? LastSyncSummary,
+    string TokenSource);
