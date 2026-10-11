@@ -10,12 +10,13 @@
     <title>gclo (Git Clone Large Organizations)</title>
     <authors>James Maes</authors>
     <owners>KofTwentyTwo</owners>
-    <projectUrl>https://github.com/KofTwentyTwo/gclo</projectUrl>
+    <!-- Moderation guideline: projectUrl is the product page, projectSourceUrl the source. -->
+    <projectUrl>https://github.com/KofTwentyTwo/gclo#readme</projectUrl>
     <projectSourceUrl>https://github.com/KofTwentyTwo/gclo</projectSourceUrl>
     <packageSourceUrl>https://github.com/KofTwentyTwo/gclo/tree/main/packaging/chocolatey</packageSourceUrl>
     <docsUrl>https://github.com/KofTwentyTwo/gclo/blob/main/docs/CLI.md</docsUrl>
     <bugTrackerUrl>https://github.com/KofTwentyTwo/gclo/issues</bugTrackerUrl>
-    <licenseUrl>https://github.com/KofTwentyTwo/gclo/blob/main/LICENSE</licenseUrl>
+    <licenseUrl>https://raw.githubusercontent.com/KofTwentyTwo/gclo/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <iconUrl>https://raw.githubusercontent.com/KofTwentyTwo/gclo/main/gclo/Assets/Brand/gclo-icon.svg</iconUrl>
     <tags>git github clone mirror organization cli</tags>
@@ -31,9 +32,9 @@ This package installs the self-contained command-line edition (`gclo.exe`, no .N
 - `gclo accounts` — saved profiles with tokens in Windows Credential Manager
 - `--json` / `--json-lines` for scripts; exit codes distinguish auth, transient, and usage errors
 
-A GitHub personal access token is required: set `GITHUB_TOKEN`, or use `--token-env`, `--token-file`, or `--token-stdin` (there is deliberately no `--token <value>` option). Full reference: https://github.com/KofTwentyTwo/gclo/blob/main/docs/CLI.md
+A GitHub personal access token is required: set `GITHUB_TOKEN`, or use `--token-env`, `--token-file`, or `--token-stdin` (there is deliberately no option that takes the token on the command line). The full command reference is the package's documentation link (docs/CLI.md in the repository).
 
-The desktop app (WinUI 3) is a separate download from the GitHub Releases page.
+The desktop app (WinUI 3) is a separate, Authenticode-signed download from the GitHub Releases page.
 ]]></description>
     <releaseNotes>https://github.com/KofTwentyTwo/gclo/releases/tag/v1.1.0</releaseNotes>
   </metadata>
