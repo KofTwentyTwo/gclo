@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Git Clone Large Organizations: clone or update every repository of a GitHub organization or user account, in parallel (command-line edition)",
   "homepage": "https://github.com/KofTwentyTwo/gclo",
   "license": "MIT",
@@ -9,8 +9,8 @@
   ],
   "architecture": {
     "64bit": {
-      "url": "https://github.com/KofTwentyTwo/gclo/releases/download/v1.0.1/gclo-cli-win-x64-1.0.1.zip",
-      "hash": "641ae4100022fba3fe489f8abe6ccc43186c070087d3edbf3a7891d5dc7428f7"
+      "url": "https://github.com/KofTwentyTwo/gclo/releases/download/v1.1.0/gclo-cli-win-x64-1.1.0.zip",
+      "hash": "46f02d89c9d8a459e5b02598f9791fa7aab5c16b09c254bc997f8f235a6a49e2"
     }
   },
   "bin": "gclo.exe",
