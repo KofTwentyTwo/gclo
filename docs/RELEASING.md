@@ -192,7 +192,11 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
 - **Chocolatey** needs a one-time account on chocolatey.org and its API key as
   `CHOCO_API_KEY`. The first version goes through Chocolatey's moderation queue
   (expect a few days); later versions are usually auto-approved. Users then run
-  `choco install gclo`.
+  `choco install gclo`. The community repository holds **one version of a package
+  in moderation at a time**: pushing another while one is queued fails with HTTP
+  403 (v1.1.0 hit this while 1.0.1 was queued). The `packages` job opens the
+  manifests PR *before* the push so Scoop is never held up; re-run the failed job
+  once the queued version is approved or rejected.
 - To re-point the manifests by hand (for example after a missed release):
   `./.github/scripts/Update-PackageManifests.ps1 -Version 1.2.3 -CliZipPath <zip>`.
 

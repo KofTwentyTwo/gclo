@@ -296,19 +296,9 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/Update-PackageManifests.ps1 -Version $env:K22_VERSION -CliZipPath "artifacts/gclo-cli-win-x64-$env:K22_VERSION.zip"
 
-      - name: Pack the Chocolatey package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts/chocolatey | Out-Null
-          choco pack packaging/chocolatey/gclo.nuspec --outputdirectory artifacts/chocolatey
-          Get-ChildItem artifacts/chocolatey
-
-      - name: Push the Chocolatey package
-        shell: pwsh
-        env:
-          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
-        run: choco push (Get-ChildItem artifacts/chocolatey/*.nupkg | Select-Object -First 1).FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
-
+      # The manifests PR opens BEFORE the Chocolatey push: chocolatey.org holds one
+      # version in moderation at a time and rejects a second push (HTTP 403, v1.1.0),
+      # which must not stop Scoop from being pointed at the release (#129).
       # protect-main requires signed commits and a DCO sign-off. The action only
       # signs with a bot token (a PAT is explicitly unsupported), so the PR is
       # opened with a short-lived token of the release GitHub App: GitHub signs
@@ -340,8 +330,8 @@ jobs:
               `gclo-cli-win-x64-${{ needs.release.outputs.version }}.zip`
               (SHA-256 `${{ steps.manifests.outputs.sha256 }}`).
             - `scoop update gclo` picks this up as soon as this PR is merged (Scoop
-              reads the manifest from `main`); the Chocolatey package was pushed to
-              chocolatey.org.
+              reads the manifest from `main`); the Chocolatey package is pushed to
+              chocolatey.org by the same job after this PR opens (a failed push re-runs alone).
 
             Relates to #9.
           labels: |
@@ -350,6 +340,19 @@ jobs:
             bucket/gclo.json
             packaging/chocolatey/gclo.nuspec
             packaging/chocolatey/tools/chocolateyinstall.ps1
+
+      - name: Pack the Chocolatey package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/chocolatey | Out-Null
+          choco pack packaging/chocolatey/gclo.nuspec --outputdirectory artifacts/chocolatey
+          Get-ChildItem artifacts/chocolatey
+
+      - name: Push the Chocolatey package
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: choco push (Get-ChildItem artifacts/chocolatey/*.nupkg | Select-Object -First 1).FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
 
   # winget, stable releases only, once the package exists. `wingetcreate update`
   # can only update a package that already exists in microsoft/winget-pkgs; the
