@@ -33,10 +33,13 @@ the dev edition's window title reads "gclo (dev)". A machine can therefore keep
 the stable app for real work and a dev build for trying the next release; each
 only ever updates within its own channel. The dev edition's assets follow its
 app id: `gclo-dev-dev-Setup.exe`, `gclo-dev-dev-Portable.zip`,
-`gclo-dev-1.2.3-beta.1-dev-full.nupkg`, `releases.dev.json`. The CLI zip is the
-same for both (`gclo-cli-win-x64-<version>.zip`). Dev installs made before this
-split (app id `gclo` on the dev channel, up to 1.0.2-beta.3) cannot update into
-`gclo-dev`: uninstall them, or install the stable app over them.
+`gclo-dev-1.2.3-beta.1-dev-full.nupkg`, `gclo-dev-cli-win-x64-<version>.zip`,
+`releases.dev.json`. Both editions read the same Windows Credential Manager
+entries (the default token saved in one is available in the other; account
+tokens are keyed by account id, and each edition has its own accounts), so a
+dev build needs no token re-entry. Dev installs made before this split (app id
+`gclo` on the dev channel, up to 1.0.2-beta.3) cannot update into `gclo-dev`:
+uninstall them, or install the stable app over them.
 
 ### How self-update channels map
 
