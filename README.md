@@ -42,11 +42,11 @@ Plain version tags (`v1.2.3`) are **stable** releases; pre-release tags (`v1.2.3
 scoop bucket add gclo https://github.com/KofTwentyTwo/gclo
 scoop install gclo
 
-# Chocolatey (once the package has cleared moderation; see #7)
-choco install gclo
 ```
 
-`winget` support for the desktop app is tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7). Every official channel (GitHub Releases, the in-app updater, Scoop, Chocolatey, winget) is served over HTTPS.
+**Chocolatey is not available yet.** The only version submitted, 1.0.1, is still in community moderation with the status "Waiting for Maintainer to take corrective action", so `choco install gclo` does not find it. 1.1.0 has not been submitted. `winget` support for the desktop app is not available either. Both are tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7), and this section will be updated when a package is approved.
+
+The channels available today (GitHub Releases, the in-app updater and Scoop) are all served over HTTPS.
 
 ## Verifying a release
 
