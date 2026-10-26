@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   codeql:
-    uses: KofTwentyTwo/standards/.github/workflows/codeql.yml@ae174f54959ba4297f2ae174356c4481918fdf44 # main 2026-10-09 (pre-1.0 draft, standards#4)
+    uses: KofTwentyTwo/standards/.github/workflows/codeql.yml@70b555bd5658273090769991bfc4c9b6681dde18 # main 2026-10-09 (pre-1.0 draft, standards#4)
     permissions:
       contents: read
       security-events: write
