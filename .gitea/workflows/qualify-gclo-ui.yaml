@@ -14,18 +14,8 @@ jobs:
       uses: builtin:checkout
       with:
         persist-credentials: false
-    - name: Resolve the SDK using the original global.json policy
-      shell: pwsh
-      run: '$ErrorActionPreference=''Stop''
-
-        $version=(& dotnet --version)
-
-        if($LASTEXITCODE -ne 0){throw ''Declared source SDK unavailable on qualified
-        Windows runtime''}
-
-        Write-Output (''Resolved source SDK ''+$version)
-
-        '
+    - name: Set up original declared SDK401
+      uses: self:KofTwentyTwo/platform-ci/kof-release-sdk@0ab685c7317b3deb6cd057530b658f06fe8e5408
     - name: Build app (unpackaged, self-contained Windows App SDK)
       run: dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None
         -p:WindowsAppSDKSelfContained=true -p:RestoreLockedMode=true
