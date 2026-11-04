@@ -1,0 +1,43 @@
+name: Original gclo UI qualification
+'on':
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  ui-tests:
+    name: ui-tests
+    runs-on: kof-windows-vm6218
+    timeout-minutes: 30
+    steps:
+    - name: Checkout
+      uses: builtin:checkout
+      with:
+        persist-credentials: false
+    - name: Resolve the SDK using the original global.json policy
+      shell: pwsh
+      run: '$ErrorActionPreference=''Stop''
+
+        $version=(& dotnet --version)
+
+        if($LASTEXITCODE -ne 0){throw ''Declared source SDK unavailable on qualified
+        Windows runtime''}
+
+        Write-Output (''Resolved source SDK ''+$version)
+
+        '
+    - name: Build app (unpackaged, self-contained Windows App SDK)
+      run: dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None
+        -p:WindowsAppSDKSelfContained=true -p:RestoreLockedMode=true
+    - name: Run UI tests
+      env:
+        GCLO_UITEST_ARTIFACTS: ${{ github.workspace }}\TestResults\ui
+      run: dotnet test gclo.UiTests/gclo.UiTests.csproj --logger "trx;LogFileName=uitests.trx"
+        --results-directory TestResults
+    - name: Upload UI test diagnostics
+      if: failure()
+      uses: self:KofTwentyTwo/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ui-test-diagnostics
+        path: TestResults
+        if-no-files-found: warn
