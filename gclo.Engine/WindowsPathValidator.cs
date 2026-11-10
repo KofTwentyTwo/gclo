@@ -225,7 +225,7 @@ public static class WindowsPathValidator
             {
                if(ValidateSegment(segments[i]) is { } problem)
                {
-                  invalid.Add(new InvalidPathInfo(prefix, problem.Reason, problem.Suggestion));
+                  invalid.Add(new InvalidPathInfo(prefix, problem.Reason, Settle(problem.Suggestion)));
                }
                if(seenCi.TryGetValue(prefix, out string? original))
                {
@@ -244,7 +244,28 @@ public static class WindowsPathValidator
 
 
 
-   private static (string Reason, string? Suggestion)? ValidateSegment(string segment)
+   /// <summary>
+   /// A suggested name that is itself valid. One rule's fix can break another rule
+   /// ("x?." loses its dot and still holds a '?'), so the suggestion is put through
+   /// the rules again until it passes; proposing a name that would be rejected helps
+   /// nobody (#149). Every rule's fix settles within a few rounds; the bound is there
+   /// so that a future rule which does not cannot loop.
+   /// </summary>
+   private static string Settle(string suggestion)
+   {
+      const int MaxRounds = 8;
+
+      for(int round = 0; round < MaxRounds && ValidateSegment(suggestion) is { } problem; round++)
+      {
+         suggestion = problem.Suggestion;
+      }
+
+      return suggestion;
+   }
+
+
+
+   private static (string Reason, string Suggestion)? ValidateSegment(string segment)
    {
       if(segment.Length == 0)
       {
@@ -252,7 +273,11 @@ public static class WindowsPathValidator
       }
       if(segment.Length > MaxSegmentLength)
       {
-         return ($"segment longer than {MaxSegmentLength} characters", segment[..MaxSegmentLength]);
+         // Cut between characters: a pair of code units for one character is kept
+         // whole or dropped whole, never split (the half would be written to disk and
+         // then stored as something else).
+         int keep = char.IsHighSurrogate(segment[MaxSegmentLength - 1]) ? MaxSegmentLength - 1 : MaxSegmentLength;
+         return ($"segment longer than {MaxSegmentLength} characters", segment[..keep]);
       }
       if(WorkingTree.IsGitDirectoryName(segment))
       {
@@ -278,7 +303,9 @@ public static class WindowsPathValidator
       string baseName = segment.Split('.')[0];
       if(s_reservedNames.Contains(baseName))
       {
-         return ($"'{baseName}' is a reserved Windows device name", segment + "_");
+         // The device name is the part before the first dot, whatever follows it
+         // ("COM3.txt" is as reserved as "COM3"), so that part is what changes.
+         return ($"'{baseName}' is a reserved Windows device name", baseName + "_" + segment[baseName.Length..]);
       }
 
       return null;

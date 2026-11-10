@@ -540,20 +540,31 @@ internal static class SyncCommand
       try
       {
          cancellationToken.ThrowIfCancellationRequested();
-         PathRecovery recovery = BuildRecovery(pending.Paths);
+         PathRecovery recovery = PathRecoveryPlanner.FromSuggestions(pending.Paths);
          await git.ApplyRecoveryAsync(path, recovery, cancellationToken).ConfigureAwait(false);
 
-         string detail = DescribeRecovery(recovery);
+         // Where each renamed path really lands (a rename inside a renamed folder
+         // lands under the folder's new name); a rename under a skipped folder is
+         // never applied, and is neither listed nor counted.
+         List<(string Original, string Destination)> applied = recovery.SegmentRenames.Keys
+             .Select(original => (Original: original, Destination: recovery.EffectivePathOf(original)))
+             .Where(r => r.Destination is not null)
+             .Select(r => (r.Original, r.Destination!))
+             .OrderBy(r => r.Original, StringComparer.Ordinal)
+             .ToList();
+         string detail = string.Join("; ", applied
+             .Select(r => $"'{r.Original}' -> '{r.Destination}'")
+             .Concat(recovery.SkippedPaths.Order(StringComparer.Ordinal).Select(s => $"skipped '{s}'")));
          if(announce)
          {
             Terminal.Error(
-                $"{pending.Repo}  Sanitized  {recovery.SegmentRenames.Count} renamed, "
+                $"{pending.Repo}  Sanitized  {applied.Count} renamed, "
                 + $"{recovery.SkippedPaths.Count} skipped: {detail}");
          }
          log.Info($"{pending.Repo}: cloned with sanitized paths: {detail}");
          printer.RecordSanitized(new SyncSanitized(
              pending.Repo,
-             recovery.SegmentRenames.Count,
+             applied.Count,
              recovery.SkippedPaths.Count,
              recovery.SkippedPaths.Order(StringComparer.Ordinal).ToList()));
          progress.Report(new RepoProgress(pending.Repo, SyncStatus.Done));
@@ -574,42 +585,6 @@ internal static class SyncCommand
          return false;
       }
    }
-
-
-
-   /// <summary>
-   /// Builds the automatic recovery: each offending path is renamed to its suggested
-   /// name; paths without one (e.g. case-only collisions, which a rename to the same
-   /// suggestion could not resolve) are skipped entirely.
-   /// </summary>
-   private static PathRecovery BuildRecovery(IReadOnlyList<InvalidPathInfo> paths)
-   {
-      // Skip wins: a path that also has a suggestion-less problem is not materialized.
-      var skipped = new HashSet<string>(
-          paths.Where(p => string.IsNullOrEmpty(p.SuggestedName)).Select(p => p.RepoPath),
-          StringComparer.Ordinal);
-
-      var renames = new Dictionary<string, string>(StringComparer.Ordinal);
-      foreach(InvalidPathInfo info in paths)
-      {
-         if(info.SuggestedName is not { Length: > 0 } suggestion || skipped.Contains(info.RepoPath))
-         {
-            continue;
-         }
-         // The suggestion replaces the last segment — the validator reports each
-         // offending segment as a repo path ending in that segment.
-         int slash = info.RepoPath.LastIndexOf('/');
-         renames[info.RepoPath] = slash < 0 ? suggestion : info.RepoPath[..(slash + 1)] + suggestion;
-      }
-      return new PathRecovery(renames, skipped);
-   }
-
-
-
-   private static string DescribeRecovery(PathRecovery recovery)
-       => string.Join("; ", recovery.SegmentRenames
-           .Select(r => $"'{r.Key}' -> '{r.Value}'")
-           .Concat(recovery.SkippedPaths.Select(s => $"skipped '{s}'")));
 
 
 

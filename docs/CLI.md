@@ -131,9 +131,14 @@ performs a plain checkout and `--sanitize-paths` has nothing to do.
 With `--sanitize-paths`, gclo checks such a repository out anyway:
 
 - Each offending path is renamed on disk to a safe suggested name
-  (`aux` → `aux_`, `spec?.md` → `spec_.md`).
-- Paths with no safe automatic rename (case-only collisions) are **skipped**:
-  they are not materialized on disk.
+  (`aux` → `aux_`, `com3.txt` → `com3_.txt`, `spec?.md` → `spec_.md`).
+- Paths with no safe automatic rename are **skipped**: they are not
+  materialized on disk. That covers case-only collisions, and paths whose
+  suggested names would collide with each other (`a:b` and `a?b` would both
+  become `a_b`; two folders in that position are both skipped, not merged).
+  A suggested name that collides with a path the repository already has
+  (`a:b` beside an existing `a_b`) is not detected up front: that repository
+  fails with the colliding path named, and nothing is checked out.
 - A note listing the renames goes to stderr (text modes) and to the activity
   log, and the repository counts as **cloned** — the exit code stays `0`. The
   human summary calls the count out:

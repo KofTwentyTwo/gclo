@@ -23,4 +23,37 @@ namespace gclo.Engine;
 /// </param>
 public sealed record PathRecovery(
     IReadOnlyDictionary<string, string> SegmentRenames,
-    IReadOnlySet<string> SkippedPaths);
+    IReadOnlySet<string> SkippedPaths)
+{
+   /// <summary>
+   /// Where <paramref name="repoPath"/> ends up in the working tree once this
+   /// recovery is applied: each part of the path takes the last segment of its own
+   /// rename, if it has one, under the place its parent folder ended up. Null when the
+   /// path, or a folder above it, is skipped. This is the one definition of how
+   /// renames compose; anything that needs to know a destination before the tree is
+   /// written (a pre-flight check, an automatic plan) asks here.
+   /// </summary>
+   public string? EffectivePathOf(string repoPath)
+   {
+      ArgumentException.ThrowIfNullOrEmpty(repoPath);
+
+      string[] segments = repoPath.Split('/');
+      string original = "";
+      string effective = "";
+      for(int i = 0; i < segments.Length; i++)
+      {
+         original = i == 0 ? segments[i] : $"{original}/{segments[i]}";
+         if(SkippedPaths.Contains(original))
+         {
+            return null;
+         }
+
+         string name = SegmentRenames.TryGetValue(original, out string? mapped)
+             ? mapped[(mapped.LastIndexOf('/') + 1)..]
+             : segments[i];
+         effective = i == 0 ? name : $"{effective}/{name}";
+      }
+
+      return effective;
+   }
+}

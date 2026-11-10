@@ -659,6 +659,37 @@ public sealed class SyncCommandTests : IDisposable
 
 
    [Fact]
+   public async Task SanitizePaths_SaysWhereEachPathLands_AndCountsOnlyWhatIsApplied()
+   {
+      using var console = new ConsoleCapture();
+      var lister = new FakeRepoLister { Result = [Repo("a")] };
+      var git = new FakeGit
+      {
+         OnClone = (_, _, _, _, _) => Task.FromException(new InvalidRepositoryPathsException(
+         [
+             new InvalidPathInfo("logs/12:00", "invalid", "12_00"),
+               new InvalidPathInfo("logs/12:00/run:1.log", "invalid", "run_1.log"),
+               new InvalidPathInfo("Dir", "differs only by case from 'dir'", null), // skipped, with what is in it
+               new InvalidPathInfo("Dir/x:1", "invalid", "x_1"),
+           ])),
+         OnApplyRecovery = (_, _, _) => Task.CompletedTask,
+      };
+
+      int code = await Run(lister, git, "--org", "acme", "--target", Target, "--token-env", EnvVar, "--sanitize-paths");
+
+      Assert.Equal(0, code);
+      // The entry inside the renamed folder lands under the folder's new name, and
+      // the rename under the skipped folder is never applied: not listed, not counted.
+      Assert.Contains("a  Sanitized  2 renamed, 1 skipped: ", console.Error);
+      Assert.Contains("'logs/12:00' -> 'logs/12_00'", console.Error);
+      Assert.Contains("'logs/12:00/run:1.log' -> 'logs/12_00/run_1.log'", console.Error);
+      Assert.Contains("skipped 'Dir'", console.Error);
+      Assert.DoesNotContain("x_1", console.Error);
+   }
+
+
+
+   [Fact]
    public async Task SanitizePaths_RecoveryFails_LeavesRepoFailed()
    {
       using var console = new ConsoleCapture();

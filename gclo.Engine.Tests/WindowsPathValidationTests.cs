@@ -46,7 +46,12 @@ public sealed class WindowsPathValidationTests : IDisposable
    [InlineData("trailing-dot.", "trailing space or dot", "trailing-dot")]
    [InlineData("bad:colon.txt", "invalid on Windows", "bad_colon.txt")]
    [InlineData("CON", "reserved Windows device name", "CON_")]
-   [InlineData("COM3.txt", "reserved Windows device name", "COM3.txt_")]
+   [InlineData("COM3.txt", "reserved Windows device name", "COM3_.txt")]
+   [InlineData("aux.tar.gz", "reserved Windows device name", "aux_.tar.gz")]
+   [InlineData("x?.", "trailing space or dot", "x_")]
+   [InlineData("report?. .", "trailing space or dot", "report_")]
+   [InlineData("CON .", "trailing space or dot", "CON_")]
+   [InlineData("...", "trailing space or dot", "_")]
    public void Validate_FlagsInvalidSegment_WithReasonAndSuggestion(
        string entryName, string expectedReasonFragment, string expectedSuggestion)
    {
@@ -97,6 +102,59 @@ public sealed class WindowsPathValidationTests : IDisposable
               ".github/workflows/ci.yml", ".gitignore", ".gitattributes", ".gitmodules", "git/readme.md",
               "git~2/readme.md", "GIT~10/readme.md", "git~x/readme.md", "docs/.git-notes.md",
           ]));
+   }
+
+
+
+   [Theory]
+   [InlineData("x?.")]
+   [InlineData(" . ")]
+   [InlineData("CON")]
+   [InlineData("con.txt")]
+   [InlineData("COM1?.log ")]
+   [InlineData("a:b*c|d")]
+   [InlineData("nul.")]
+   [InlineData("LPT9. .")]
+   [InlineData("CON.t?t.")] // three rules, one after the other
+   public void ValidatePaths_EverySuggestedName_IsItselfValid(string segment)
+   {
+      // One rule's fix can trip another; a suggestion that would be rejected is worse
+      // than none (#149).
+      InvalidPathInfo info = Assert.Single(WindowsPathValidator.ValidatePaths([segment]));
+
+      Assert.NotNull(info.SuggestedName);
+      Assert.Empty(WindowsPathValidator.ValidatePaths([info.SuggestedName!]));
+   }
+
+
+
+   [Fact]
+   public void ValidatePaths_AnOverlongReservedName_StillGetsASuggestionThatIsValid()
+   {
+      // The reserved-name fix adds a character and the length fix takes one away:
+      // the two must settle rather than undo each other.
+      string segment = "CON." + new string('x', 251);
+      Assert.Equal(255, segment.Length);
+
+      InvalidPathInfo info = Assert.Single(WindowsPathValidator.ValidatePaths([segment]));
+
+      Assert.Empty(WindowsPathValidator.ValidatePaths([info.SuggestedName!]));
+      Assert.StartsWith("CON_.", info.SuggestedName, StringComparison.Ordinal);
+   }
+
+
+
+   [Fact]
+   public void ValidatePaths_AnOverlongName_IsCutBetweenCharacters_NeverThroughOne()
+   {
+      // An emoji is two code units; the limit falls between them.
+      string emoji = char.ConvertFromUtf32(0x1F600);
+      string segment = new string('x', 254) + emoji + "tail";
+
+      InvalidPathInfo info = Assert.Single(WindowsPathValidator.ValidatePaths([segment]));
+
+      Assert.Equal(new string('x', 254), info.SuggestedName);
+      Assert.Empty(WindowsPathValidator.ValidatePaths([info.SuggestedName!]));
    }
 
 
