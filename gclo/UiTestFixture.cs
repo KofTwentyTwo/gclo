@@ -20,7 +20,9 @@ namespace gclo;
 /// network - a fixed organization with three repositories, and a git client that
 /// succeeds without touching disk. Any other token (even with the variable set) goes
 /// to the real services, so the existing offline-input tests keep their meaning
-/// (a dummy token still gets GitHub's 401). Production never sets the variable.
+/// (a dummy token still gets GitHub's 401). Production never sets the variable, and an
+/// installed build ignores it: the seam exists for a build run from its output folder
+/// by the test suite, not for the app people install (#145).
 /// </summary>
 internal static class UiTestFixture
 {
@@ -30,8 +32,13 @@ internal static class UiTestFixture
    /// <summary>The organization the fixture lists.</summary>
    public const string Organization = "fixture-org";
 
-   /// <summary>True when the process was started for the UI suite with the fixture enabled.</summary>
-   public static bool IsEnabled { get; } = string.Equals(Environment.GetEnvironmentVariable("GCLO_UITEST_FIXTURE"), "1", StringComparison.Ordinal);
+   /// <summary>
+   /// True when the process was started for the UI suite with the fixture enabled, and
+   /// is not an installed build.
+   /// </summary>
+   public static bool IsEnabled { get; } =
+       string.Equals(Environment.GetEnvironmentVariable("GCLO_UITEST_FIXTURE"), "1", StringComparison.Ordinal)
+       && !IsInstalledBuild();
 
    private static readonly IReadOnlyList<RepoDescriptor> s_repositories =
    [
@@ -39,6 +46,25 @@ internal static class UiTestFixture
          new("bravo", "https://github.com/fixture-org/bravo.git", "develop", IsArchived: true),
          new("charlie", "https://github.com/fixture-org/charlie.git", "main", IsArchived: false),
      ];
+
+
+
+   /// <summary>
+   /// True when the app was installed by Velopack (it then has an app id). A build run
+   /// from its output folder, which is what the UI suite launches, has none.
+   /// </summary>
+   private static bool IsInstalledBuild()
+   {
+      try
+      {
+         return !string.IsNullOrEmpty(Velopack.Locators.VelopackLocator.Current?.AppId);
+      }
+      catch(Exception)
+      {
+         // No locator for this platform or layout: not an installed build.
+         return false;
+      }
+   }
 
 
 
@@ -81,7 +107,10 @@ internal static class UiTestFixture
    /// <summary>Succeeds without writing anything; the real client handles every other token.</summary>
    private sealed class GitClient(IGitClient real) : IGitClient
    {
-      public bool IsValidRepository(string path) => false;
+      // No token is passed here, so the real client answers for everyone. The
+      // fixture's own clones write nothing, so its folders are never repositories
+      // and the fixture token always takes the clone path (#145).
+      public bool IsValidRepository(string path) => real.IsValidRepository(path);
 
 
 

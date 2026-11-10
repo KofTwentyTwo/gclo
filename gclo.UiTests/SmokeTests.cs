@@ -37,6 +37,14 @@ public sealed partial class SmokeTests : UiTestBase
 
 
 
+   // (1b) The offline fixture this suite runs against announces itself in the app's
+   //      log: a session with it enabled is never mistaken for an ordinary one (#145).
+   [Fact]
+   public void ActivityLog_AfterLaunch_SaysTheUiTestFixtureIsEnabled()
+       => Assert.True(Session.LogContains("UI test fixture enabled"), "the app logs one line when the fixture is honoured");
+
+
+
    // (2) The navigation pane carries the pinned Quick Sync plus both footer commands.
    [Fact]
    public void NavigationPane_AfterLaunch_ShowsQuickSyncAddAccountAndSyncAll()

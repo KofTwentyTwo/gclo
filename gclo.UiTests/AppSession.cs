@@ -94,7 +94,8 @@ public sealed class AppSession : IDisposable
 
 
 
-   private bool LogContains(string fragment)
+   /// <summary>True when any of the app's activity-log files holds <paramref name="fragment"/>.</summary>
+   public bool LogContains(string fragment)
    {
       string logs = Path.Combine(DataDirectory, "logs");
       if(!Directory.Exists(logs))

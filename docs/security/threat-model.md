@@ -65,7 +65,7 @@ flowchart LR
 | Activity logs | out | Actions and errors; token *lengths* only | File ACL | `IActivityLog` callers never pass tokens |
 | `.git/gclo-recovery.json`, `gclo.checkoutpending` config key | out/in | Path-recovery plan; checkout-pending marker | File ACL | Written atomically; read only for the repository it belongs to |
 | Command line (CLI) | in | Options, org, target, filters | n/a | `OptionReader` / `RepoFilterSpec`; parallelism bounded 1..64; token options refused on argv |
-| `GCLO_DATA_DIR`, `GCLO_UITEST_FIXTURE` env | in | Data root override; offline test seam | n/a | Fixture only answers for the exact fixture token; never set in production |
+| `GCLO_DATA_DIR`, `GCLO_UITEST_FIXTURE` env | in | Data root override; offline test seam | n/a | Fixture only answers for the exact fixture token (every other token, and the question whether a folder is a repository, go to the real services); ignored by an installed build; logged when enabled; never set in production (#145) |
 | `wsl.exe -e sh -s` | out/in | POSIX script on stdin, org/repo/url as positional args, `GCLO_GIT_TOKEN` via `WSLENV` | PAT via env | Nothing is re-parsed by wsl.exe's command line; token never on argv or disk; UTF-16 wsl.exe messages decoded |
 | Update feed (Velopack) | in | `releases.<channel>.json`, packages | HTTPS; package hashes | Velopack verifies package hashes against the feed; channel never crosses |
 | Release assets (users) | in | Setup, portable, CLI zip, nupkg, SBOMs | HTTPS | `SHA256SUMS`, build-provenance and SBOM attestations (`gh attestation verify`) |

@@ -114,6 +114,12 @@ public sealed partial class MainWindow : Window
       _log = new FileActivityLog(System.IO.Path.Combine(GcloPaths.DataRoot, "logs"));
       App.CrashLog = _log; // the unhandled-exception net now reaches the activity log
       _log.Info($"gclo {BuildVersion.Describe(typeof(MainWindow).Assembly)} starting.");
+      if(UiTestFixture.IsEnabled)
+      {
+         // Worth a line in every log it applies to: with it on, one fixed token is
+         // answered from a built-in organization instead of GitHub (#145).
+         _log.Info("UI test fixture enabled (GCLO_UITEST_FIXTURE=1): the fixture token is answered offline.");
+      }
       _updateService = new UpdateService(_log);
       _tokenVault = new CredentialManagerVault();
       _accountsStore = new AccountsStore(_tokenVault, log: _log);
