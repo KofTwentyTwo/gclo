@@ -51,6 +51,22 @@ internal static class GitTestHelpers
 
 
 
+   /// <summary>
+   /// Pulls <paramref name="workdir"/> the way a sync does for a folder that is a clone
+   /// of the listed repository: with the URL of its own origin.
+   /// </summary>
+   public static Task PullAsync(this LibGit2GitClient client, string workdir, string token, CancellationToken cancellationToken)
+   {
+      string url;
+      using(var repo = new Repository(workdir))
+      {
+         url = repo.Network.Remotes["origin"].Url;
+      }
+      return client.FetchAndPullAsync(url, workdir, token, cancellationToken);
+   }
+
+
+
    /// <summary>SHA of the commit at HEAD's tip.</summary>
    public static string HeadSha(string workdir)
    {

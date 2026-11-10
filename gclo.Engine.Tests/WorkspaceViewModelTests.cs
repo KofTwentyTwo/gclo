@@ -890,6 +890,27 @@ public sealed class WorkspaceViewModelTests : IDisposable
 
 
    [Fact]
+   public async Task ResolvePaths_CloneInWsl_UsesTheOrganizationTheTableWasLoadedFor_NotAnEditedBox()
+   {
+      MakeAlphaFailWithInvalidPaths();
+      _wsl.Availability = new WslAvailability(true, "git version 2.53.0");
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+      await vm.SyncCommand.ExecuteAsync(null);
+      RepoItemViewModel row = vm.Repos[0];
+      string loaded = vm.Organization;
+      vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.CloneInWsl());
+
+      // Typed after the run: the row still belongs to the organization it was listed in.
+      vm.Organization = "../somewhere-else";
+      await vm.ResolvePathsCommand.ExecuteAsync(row);
+
+      WslCloneCall call = Assert.Single(_wsl.CloneCalls);
+      Assert.Equal(loaded, call.Organization);
+   }
+
+
+
+   [Fact]
    public async Task ResolvePaths_CloneInWsl_ShowsAnIndeterminateBar_AndLocksTheWorkspace_WhileInFlight()
    {
       MakeAlphaFailWithInvalidPaths();

@@ -165,14 +165,14 @@ public sealed class LibGit2GitClientTests : IDisposable
       _client.AfterFetchForTesting = cts.Cancel;
 
       await Assert.ThrowsAnyAsync<OperationCanceledException>(
-          () => _client.FetchAndPullAsync(target, Token, cts.Token));
+          () => _client.PullAsync(target, Token, cts.Token));
 
       Assert.Equal(tipBefore, HeadSha(target));
       Assert.False(File.Exists(Path.Combine(target, "update.txt")));
 
       // The fetch itself landed: a later uncanceled pull is a plain fast-forward.
       _client.AfterFetchForTesting = null;
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
       Assert.True(File.Exists(Path.Combine(target, "update.txt")));
    }
 
@@ -249,7 +249,7 @@ public sealed class LibGit2GitClientTests : IDisposable
 
       string newSha = CommitFile(source, "update.txt", "new content", "second commit");
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       Assert.Equal(newSha, HeadSha(target));
       Assert.Equal("new content", File.ReadAllText(Path.Combine(target, "update.txt")));
@@ -265,7 +265,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
       string tipBefore = HeadSha(target);
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       Assert.Equal(tipBefore, HeadSha(target));
    }
@@ -287,7 +287,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       SetCheckoutPending(target, true);
       Assert.True(_client.IsValidRepository(target));
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       Assert.Equal("hello from source", File.ReadAllText(Path.Combine(target, "readme.txt")));
       Assert.Equal(tipBefore, HeadSha(target));
@@ -306,7 +306,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       SetCheckoutPending(target, true);
       string newSha = CommitFile(source, "update.txt", "new content", "second commit");
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       Assert.Equal(newSha, HeadSha(target));
       Assert.Equal("hello from source", File.ReadAllText(Path.Combine(target, "readme.txt")));
@@ -335,7 +335,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       }
 
       InvalidRepositoryPathsException ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
 
       Assert.Equal("bad:name.txt", Assert.Single(ex.Paths).RepoPath);
       Assert.True(IsCheckoutPending(target), "still incomplete; the marker must survive the failure");
@@ -356,7 +356,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       CommitFile(target, "from-local.txt", "local change", "local commit");
 
       InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
 
       // Actionable, not libgit2's "cannot fast-forward": names the branch, says what
       // gclo refuses to do, and gives the three ways out (#30).
@@ -382,7 +382,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       }
 
       InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
 
       Assert.Contains("detached", ex.Message, StringComparison.OrdinalIgnoreCase);
       Assert.Contains("Check out a branch", ex.Message);
@@ -408,7 +408,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       }
       string newSha = CommitFile(source, "after-rename.txt", "after", "commit on the renamed branch");
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       using var after = new Repository(target);
       Assert.Equal("renamed-main", after.Head.FriendlyName);
@@ -419,7 +419,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       Assert.Null(after.Branches["origin/" + oldName]); // and so is its pruned tracking ref
 
       // The next pull is an ordinary up-to-date pull on the new branch.
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
       Assert.Equal(newSha, HeadSha(target));
    }
 
@@ -439,7 +439,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       }
 
       InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
 
       Assert.Contains("local commits", ex.Message);
       Assert.Contains("never discards local work", ex.Message);
@@ -467,7 +467,7 @@ public sealed class LibGit2GitClientTests : IDisposable
 
       string remoteSha = CommitFile(source, "later.txt", "later content", "remote commit");
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       using var after = new Repository(target);
       Assert.Equal("local-only", after.Head.FriendlyName);
@@ -501,7 +501,7 @@ public sealed class LibGit2GitClientTests : IDisposable
          repo.Network.Push(repo.Network.Remotes["origin"], repo.Head.CanonicalName, new PushOptions());
       }
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       using var after = new Repository(target);
       Assert.False(after.Info.IsHeadUnborn);
@@ -522,7 +522,7 @@ public sealed class LibGit2GitClientTests : IDisposable
       await _client.CloneAsync(origin, target, Token, null, CancellationToken.None);
 
       // Nothing to pull yet: there is no branch to materialize, and that is not an error.
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       using var after = new Repository(target);
       Assert.True(after.Info.IsHeadUnborn);

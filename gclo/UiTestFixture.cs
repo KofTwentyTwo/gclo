@@ -90,8 +90,8 @@ internal static class UiTestFixture
 
 
 
-      public Task FetchAndPullAsync(string path, string token, CancellationToken cancellationToken)
-          => string.Equals(token, Token, StringComparison.Ordinal) ? Task.CompletedTask : real.FetchAndPullAsync(path, token, cancellationToken);
+      public Task FetchAndPullAsync(string url, string path, string token, CancellationToken cancellationToken)
+          => string.Equals(token, Token, StringComparison.Ordinal) ? Task.CompletedTask : real.FetchAndPullAsync(url, path, token, cancellationToken);
 
 
 

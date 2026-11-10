@@ -20,21 +20,29 @@ public sealed class WslCloner : IWslCloner
    public const string TokenVariable = "GCLO_GIT_TOKEN";
 
    /// <summary>
-   /// The clone script. $1 organization, $2 repository, $3 clone URL. Prints the
-   /// distribution name and the destination as its last two lines on success. A folder
-   /// that already is a repository is fast-forwarded instead of failing, so the verb is
-   /// safe to use twice.
+   /// The clone script. $1 organization, $2 repository, $3 clone URL, $4 the URL's
+   /// host (with a non-default port). Prints the distribution name and the destination
+   /// as its last two lines on success. A folder that already is a clone of the same
+   /// URL is fast-forwarded instead of failing, so the verb is safe to use twice; a
+   /// folder that is a clone of anything else is refused. The credential helper is
+   /// scoped to $4, so git (and anything it starts, such as an LFS filter pointed at
+   /// another server by the repository's own configuration) gets the token for that
+   /// host only (#139).
    /// </summary>
    internal const string CloneScript =
        "set -e\n"
-       + "org=\"$1\"; repo=\"$2\"; url=\"$3\"\n"
+       + "org=\"$1\"; repo=\"$2\"; url=\"$3\"; host=\"$4\"\n"
        + "dest=\"$HOME/gclo/$org/$repo\"\n"
        + "helper='!f() { echo username=x-access-token; echo \"password=$" + TokenVariable + "\"; }; f'\n"
        + "if [ -d \"$dest/.git\" ]; then\n"
-       + "  git -C \"$dest\" -c credential.helper= -c \"credential.helper=$helper\" pull --ff-only --quiet\n"
+       + "  if [ \"$(git -C \"$dest\" config --get remote.origin.url)\" != \"$url\" ]; then\n"
+       + "    echo \"$dest exists but is not a clone of this repository; move or delete it, then try again\" >&2\n"
+       + "    exit 1\n"
+       + "  fi\n"
+       + "  git -C \"$dest\" -c credential.helper= -c \"credential.https://$host.helper=$helper\" pull --ff-only --quiet\n"
        + "else\n"
        + "  mkdir -p \"$HOME/gclo/$org\"\n"
-       + "  git -c credential.helper= -c \"credential.helper=$helper\" clone --quiet \"$url\" \"$dest\"\n"
+       + "  git -c credential.helper= -c \"credential.https://$host.helper=$helper\" clone --quiet -- \"$url\" \"$dest\"\n"
        + "fi\n"
        + "printf '%s\\n%s\\n' \"$WSL_DISTRO_NAME\" \"$dest\"\n";
 
@@ -102,6 +110,23 @@ public sealed class WslCloner : IWslCloner
       ArgumentException.ThrowIfNullOrWhiteSpace(repositoryName);
       ArgumentNullException.ThrowIfNull(token);
 
+      /////////////////////////////////////////////////////////////////////////////
+      // The organization and repository become path segments under ~/gclo, and    //
+      // the URL's host is what the token is scoped to. None of the three is taken //
+      // on trust: a name with a separator or ".." would leave ~/gclo, and a URL   //
+      // that is not HTTPS has no host the token could safely be tied to (#139).   //
+      /////////////////////////////////////////////////////////////////////////////
+      foreach(string name in new[] { organization, repositoryName })
+      {
+         if(!RepositoryPathResolver.TryValidateName(name, out string? reason))
+         {
+            throw new WslCloneException($"Clone in WSL refused: '{name}' cannot be used as a folder name ({reason}).");
+         }
+      }
+
+      string host = RemoteUrl.HttpsAuthority(url)
+          ?? throw new WslCloneException("Clone in WSL refused: the clone URL is not an HTTPS URL.");
+
       var environment = new Dictionary<string, string>(StringComparer.Ordinal)
       {
          [TokenVariable] = token,
@@ -115,7 +140,7 @@ public sealed class WslCloner : IWslCloner
       {
          result = await _runner.RunAsync(
              _wslExe,
-             ["-e", "sh", "-s", organization, repositoryName, url],
+             ["-e", "sh", "-s", organization, repositoryName, url, host],
              environment,
              CloneScript,
              cancellationToken).ConfigureAwait(false);

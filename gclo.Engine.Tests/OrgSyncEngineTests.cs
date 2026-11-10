@@ -62,7 +62,11 @@ public sealed class OrgSyncEngineTests : IDisposable
       }
       foreach(PullCall call in _git.PullCalls)
       {
-         Assert.Equal(Path.Combine(_targetRoot, Path.GetFileName(call.LocalPath)!), call.LocalPath);
+         string name = Path.GetFileName(call.LocalPath)!;
+         Assert.Equal(Path.Combine(_targetRoot, name), call.LocalPath);
+         // The listed clone URL travels with the pull, so the git client can refuse a
+         // folder that is a clone of something else (#139).
+         Assert.Equal($"https://example.test/acme/{name}.git", call.Url);
          Assert.Equal("test-token", call.Token);
       }
 

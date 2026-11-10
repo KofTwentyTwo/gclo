@@ -24,8 +24,19 @@ public interface IGitClient
 
 
 
-   /// <summary>Fetches from origin and fast-forwards the current branch to its upstream.</summary>
-   Task FetchAndPullAsync(string path, string token, CancellationToken cancellationToken);
+   /// <summary>
+   /// Fetches <paramref name="url"/> into the repository at <paramref name="path"/> and
+   /// fast-forwards the current branch to its upstream. The folder's <c>origin</c> must
+   /// name the same repository as <paramref name="url"/> (scheme, credentials and a
+   /// trailing <c>.git</c> aside); a folder that is a clone of something else fails
+   /// without being fetched, so a sync never reports a different repository as updated.
+   /// The token is offered only over HTTPS to the host of <paramref name="url"/>.
+   /// </summary>
+   /// <param name="url">The clone URL the repository was listed with.</param>
+   /// <param name="path">Local directory of the existing clone.</param>
+   /// <param name="token">Access token used for git transport.</param>
+   /// <param name="cancellationToken">Cancels the pull.</param>
+   Task FetchAndPullAsync(string url, string path, string token, CancellationToken cancellationToken);
 
 
 

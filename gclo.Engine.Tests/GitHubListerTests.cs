@@ -206,6 +206,28 @@ public sealed class GitHubListerTests
 
 
 
+   [Theory]
+   [InlineData("../..")]
+   [InlineData("..")]
+   [InlineData("acme/other")]
+   [InlineData(@"acme\other")]
+   [InlineData("C:acme")]
+   public async Task Repos_NameThatIsNotOnePlainName_IsRefusedBeforeAnyRequest(string organization)
+   {
+      bool asked = false;
+      _gateway.OrgPages = (_, _) => { asked = true; return Task.FromResult<IReadOnlyList<GitHubRepo>>([]); };
+      _gateway.AccountKind = _ => { asked = true; return Task.FromResult(GitHubAccountKind.User); };
+
+      GitHubAccessException ex = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => RepoLister().ListOrganizationRepositoriesAsync(organization, "tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.NotFound, ex.Kind);
+      Assert.Contains($"'{organization}' is not an organization or account name", ex.Message);
+      Assert.False(asked, "no request may be made for a name that is not a name");
+   }
+
+
+
    [Fact]
    public async Task Repos_OrgNotFound_ButItIsAnOrganizationTheTokenCannotSee_FailsInsteadOfListingPublicRepos()
    {

@@ -147,7 +147,7 @@ internal sealed class FakeGit : IGitClient
 
 
 
-   public Task FetchAndPullAsync(string path, string token, CancellationToken cancellationToken)
+   public Task FetchAndPullAsync(string url, string path, string token, CancellationToken cancellationToken)
        => OnPull(path, token, cancellationToken);
 
 

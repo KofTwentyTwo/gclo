@@ -1102,8 +1102,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       {
          _log.Info($"{item.Name}: cloning in WSL instead.");
          item.Status = SyncStatus.Pulling; // indeterminate bar; git in WSL reports no percentage here
+         // The organization the table was loaded for, not whatever the box says now:
+         // the row belongs to that organization, and its folder under ~/gclo should too.
          WslCloneResult result = await _wsl.CloneAsync(
-             item.Descriptor.CloneUrl, Organization.Trim(), item.Name, Token.Trim(), _lifetimeCts.Token);
+             item.Descriptor.CloneUrl, LoadedOrganization ?? Organization.Trim(), item.Name, Token.Trim(), _lifetimeCts.Token);
 
          item.Status = SyncStatus.Done;
          item.Error = null;

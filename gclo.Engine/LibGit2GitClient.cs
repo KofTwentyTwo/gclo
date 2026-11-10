@@ -53,6 +53,26 @@ public sealed class LibGit2GitClient : IGitClient
    private static readonly JsonSerializerOptions s_recoveryJsonOptions = new() { WriteIndented = true };
 
    /// <summary>
+   /// Name of the remote that exists only for the duration of one fetch, when a
+   /// folder's origin names the listed repository but spells its URL differently
+   /// (see <see cref="FetchListedUrl"/>).
+   /// </summary>
+   private const string SyncRemoteName = "gclo-sync";
+
+   /// <summary>
+   /// The sync remote's own refspec. It maps to a namespace nothing is ever fetched
+   /// into, so removing the remote (which deletes the tracking refs its refspecs
+   /// cover) cannot touch origin's.
+   /// </summary>
+   private const string SyncRemoteRefSpec = "+refs/heads/*:refs/remotes/" + SyncRemoteName + "/*";
+
+   /// <summary>
+   /// Marks the sync remote as gclo's, so cleanup never removes a remote of the same
+   /// name that the user created. It goes away with the remote.
+   /// </summary>
+   private const string SyncRemoteMarkerKey = "remote." + SyncRemoteName + ".gclo-temporary";
+
+   /// <summary>
    /// Test seam: invoked right after a fetch completed, before the cancellation
    /// check that precedes any working-tree work. Local-transport fixtures fire no
    /// transfer callbacks, so this is how the offline suite exercises "canceled
@@ -79,9 +99,9 @@ public sealed class LibGit2GitClient : IGitClient
 
 
    /// <inheritdoc/>
-   public Task FetchAndPullAsync(string path, string token, CancellationToken cancellationToken)
+   public Task FetchAndPullAsync(string url, string path, string token, CancellationToken cancellationToken)
        => Task.Factory.StartNew(
-           () => FetchAndPull(path, token, cancellationToken),
+           () => FetchAndPull(url, path, token, cancellationToken),
            cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
 
@@ -106,7 +126,7 @@ public sealed class LibGit2GitClient : IGitClient
          // not a libgit2 one. On other platforms phase two is a plain checkout.
          Checkout = false,
       };
-      options.FetchOptions.CredentialsProvider = MakeCredentialsProvider(token);
+      options.FetchOptions.CredentialsProvider = MakeCredentialsProvider(token, url);
       int lastPercent = -1;
       options.FetchOptions.OnTransferProgress = tp =>
       {
@@ -202,7 +222,7 @@ public sealed class LibGit2GitClient : IGitClient
 
 
 
-   private void FetchAndPull(string path, string token, CancellationToken ct)
+   private void FetchAndPull(string url, string path, string token, CancellationToken ct)
    {
       using var repo = new Repository(path);
 
@@ -212,12 +232,11 @@ public sealed class LibGit2GitClient : IGitClient
          repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
       }
 
-      Remote remote = repo.Network.Remotes["origin"]
-          ?? throw new InvalidOperationException("Repository has no 'origin' remote.");
+      Remote remote = OriginOfListedRepository(repo, url);
 
       var fetchOptions = new FetchOptions
       {
-         CredentialsProvider = MakeCredentialsProvider(token),
+         CredentialsProvider = MakeCredentialsProvider(token, url),
          OnTransferProgress = _ => !ct.IsCancellationRequested,
          // Drop tracking refs for branches origin deleted. Without this a renamed
          // default branch leaves refs/remotes/origin/<old> frozen at its last SHA,
@@ -225,10 +244,9 @@ public sealed class LibGit2GitClient : IGitClient
          Prune = true,
       };
 
-      var refSpecs = remote.FetchRefSpecs.Select(s => s.Specification).ToList();
       try
       {
-         Commands.Fetch(repo, remote.Name, refSpecs, fetchOptions, logMessage: null);
+         FetchListedUrl(repo, remote, url, fetchOptions);
       }
       catch(UserCancelledException) when(ct.IsCancellationRequested)
       {
@@ -296,7 +314,9 @@ public sealed class LibGit2GitClient : IGitClient
          // Upstream is configured but gone from origin (the fetch pruned it): the
          // default branch was renamed (master -> main) or deleted. Follow origin's
          // current default instead of reporting "up to date" forever (#31).
-         tracked = RetargetToRemoteDefaultBranch(repo, remote, fetchOptions.CredentialsProvider, ct);
+         // A provider of its own: the fetch already spent one of the two requests
+         // the replay guard allows.
+         tracked = RetargetToRemoteDefaultBranch(repo, remote, url, MakeCredentialsProvider(token, url), ct);
       }
 
       if(string.Equals(repo.Head.Tip?.Sha, tracked.Tip.Sha, StringComparison.Ordinal))
@@ -347,6 +367,160 @@ public sealed class LibGit2GitClient : IGitClient
 
 
    /// <summary>
+   /// Fetches the listed <paramref name="url"/> into <paramref name="origin"/>'s own
+   /// refspecs, so the tracking refs land exactly where a fetch of origin puts them
+   /// while the remote that is contacted is the one the listing returned.
+   /// </summary>
+   /// <remarks>
+   /// When origin's URL is the listed URL, which is every clone gclo made itself, this
+   /// is a plain fetch of origin. Otherwise the origin names the same repository in
+   /// another spelling: switched to SSH for pushing, plain HTTP, credentials typed
+   /// into it. Fetching that origin would let the folder's configuration choose the
+   /// transport. LibGit2Sharp cannot fetch a bare URL, so the listed URL is fetched
+   /// through a remote that exists only for this call; origin itself is never
+   /// rewritten. The user's own (global) git configuration still applies to that
+   /// remote, as it does to everything git does for them (#139).
+   /// </remarks>
+   private static void FetchListedUrl(Repository repo, Remote origin, string url, FetchOptions options)
+   {
+      TryRemoveSyncRemote(repo); // left behind by a run that was killed mid-fetch
+
+      var refSpecs = origin.FetchRefSpecs.Select(s => s.Specification).ToList();
+      if(string.Equals(origin.Url, url, StringComparison.Ordinal))
+      {
+         RefuseSshCommandOfTheFolder(repo, origin.Url);
+         Commands.Fetch(repo, origin.Name, refSpecs, options, logMessage: null);
+         return;
+      }
+
+      if(repo.Network.Remotes[SyncRemoteName] is not null)
+      {
+         // Not marked as gclo's, or TryRemoveSyncRemote would have removed it.
+         throw new InvalidOperationException(
+             $"This repository has a remote of its own named '{SyncRemoteName}', a name gclo needs for a moment "
+             + "to fetch the listed URL. Rename that remote, then sync again.");
+      }
+
+      Remote sync = repo.Network.Remotes.Add(SyncRemoteName, url, SyncRemoteRefSpec);
+      repo.Config.Set(SyncRemoteMarkerKey, true, ConfigurationLevel.Local);
+      try
+      {
+         RefuseSshCommandOfTheFolder(repo, sync.Url);
+         // The fetch behaves like a fetch of origin in every respect but the URL.
+         options.TagFetchMode = origin.TagFetchMode;
+         Commands.Fetch(repo, SyncRemoteName, refSpecs, options, logMessage: null);
+      }
+      finally
+      {
+         TryRemoveSyncRemote(repo);
+      }
+   }
+
+
+
+   /// <summary>
+   /// Removes the remote <see cref="FetchListedUrl"/> adds, when it is there and carries
+   /// gclo's marker; a remote of that name the user made themselves is left alone.
+   /// Best effort: a failure here (another program holding .git/config open) must not
+   /// replace the outcome of the fetch, and the next sync removes what is left.
+   /// </summary>
+   private static void TryRemoveSyncRemote(Repository repo)
+   {
+      try
+      {
+         if(repo.Network.Remotes[SyncRemoteName] is not null && repo.Config.Get<bool>(SyncRemoteMarkerKey)?.Value == true)
+         {
+            repo.Network.Remotes.Remove(SyncRemoteName);
+         }
+      }
+      catch(LibGit2SharpException)
+      {
+         // See the summary: never mask the fetch's own result.
+      }
+   }
+
+
+
+   /// <summary>
+   /// A folder's own git configuration must not decide where a sync's fetch goes. Two
+   /// settings could: <c>url.&lt;base&gt;.insteadOf</c>, which rewrites the URL of any
+   /// remote, and (see <see cref="RefuseSshCommandOfTheFolder"/>) the program used for
+   /// SSH. Both are refused when they come from the folder's own configuration; the
+   /// user's global configuration is theirs and is honored (#139).
+   /// </summary>
+   private static void RefuseUrlRewritesOfTheFolder(Repository repo)
+   {
+      foreach(ConfigurationEntry<string> entry in repo.Config)
+      {
+         if(entry.Level >= ConfigurationLevel.Local
+             && entry.Key.StartsWith("url.", StringComparison.OrdinalIgnoreCase)
+             && entry.Key.EndsWith(".insteadof", StringComparison.OrdinalIgnoreCase))
+         {
+            throw new InvalidOperationException(
+                "This folder's own git configuration rewrites remote URLs (a url.<base>.insteadOf entry in its .git/config), "
+                + "so a fetch could go somewhere other than the listed repository. Remove that entry, then sync again.");
+         }
+      }
+   }
+
+
+
+   /// <summary>
+   /// When the URL a fetch will really use is not HTTPS (the user's global git
+   /// configuration rewrites it to SSH), the transport is an external SSH program.
+   /// Which program must not be up to the folder: a <c>core.sshCommand</c> in its own
+   /// configuration is refused (#139).
+   /// </summary>
+   private static void RefuseSshCommandOfTheFolder(Repository repo, string effectiveUrl)
+   {
+      if(RemoteUrl.IsHttps(effectiveUrl))
+      {
+         return;
+      }
+
+      foreach(ConfigurationEntry<string> entry in repo.Config)
+      {
+         if(entry.Level >= ConfigurationLevel.Local && string.Equals(entry.Key, "core.sshcommand", StringComparison.OrdinalIgnoreCase))
+         {
+            throw new InvalidOperationException(
+                "This folder's own git configuration sets core.sshCommand, and this fetch would go over SSH. "
+                + "gclo does not run a program chosen by the folder it is syncing. Remove that entry from its .git/config, then sync again.");
+         }
+      }
+   }
+
+
+
+   /// <summary>
+   /// The folder's <c>origin</c>, once it is known to name the repository listed at
+   /// <paramref name="url"/>. A folder with the right name is not proof of the right
+   /// repository: it may be a fork, a same-named repository of another owner or host,
+   /// or something another tool put there. Pulling it would report the listed
+   /// repository as updated when it was not, so it fails here, before any network
+   /// request (#139).
+   /// </summary>
+   private static Remote OriginOfListedRepository(Repository repo, string url)
+   {
+      RefuseUrlRewritesOfTheFolder(repo);
+
+      Remote remote = repo.Network.Remotes["origin"]
+          ?? throw new InvalidOperationException("Repository has no 'origin' remote.");
+
+      if(!RemoteUrl.IsSameRepository(url, remote.Url))
+      {
+         string folder = Path.TrimEndingDirectorySeparator(repo.Info.WorkingDirectory ?? repo.Info.Path);
+         throw new InvalidOperationException(
+             $"This folder is a clone of a different repository: its origin is '{RemoteUrl.Redact(remote.Url)}', not '{url}'. "
+             + "If the repository was renamed or moved to another owner, point the folder at it with "
+             + $"'git -C \"{folder}\" remote set-url origin {url}'. Otherwise move or delete the folder. Then sync again.");
+      }
+
+      return remote;
+   }
+
+
+
+   /// <summary>
    /// The current branch's upstream no longer exists on origin. Asks origin for its
    /// current default branch (the remote HEAD symref), checks it out as the new
    /// local branch with upstream wired, and removes the orphaned local branch — but
@@ -355,12 +529,12 @@ public sealed class LibGit2GitClient : IGitClient
    /// tracking branch so the normal pull continues from it.
    /// </summary>
    private static Branch RetargetToRemoteDefaultBranch(
-       Repository repo, Remote remote, CredentialsHandler credentials, CancellationToken ct)
+       Repository repo, Remote remote, string url, CredentialsHandler credentials, CancellationToken ct)
    {
       const string Prefix = "refs/heads/";
       string oldName = repo.Head.FriendlyName;
 
-      string? defaultRef = repo.Network.ListReferences(remote, credentials)
+      string? defaultRef = repo.Network.ListReferences(url, credentials)
           .FirstOrDefault(r => string.Equals(r.CanonicalName, "HEAD", StringComparison.Ordinal))?.TargetIdentifier;
       if(defaultRef is null || !defaultRef.StartsWith(Prefix, StringComparison.Ordinal))
       {
@@ -803,12 +977,24 @@ public sealed class LibGit2GitClient : IGitClient
    /// up with "too many redirects or authentication replays", once per repository.
    /// A correct token is never asked for a third time, so the third request means the
    /// token is bad and gets the same actionable message the API listers produce (#31).
+   /// The token is for <paramref name="expectedUrl"/>'s host only: a remote on any
+   /// other host, or one reached over anything but HTTPS, is refused, so the token is
+   /// never offered to a server the repository was not listed on (#139). libgit2 asks
+   /// with the remote's own URL; a redirect the listed host itself issues is that
+   /// host's doing, and it already holds the token.
    /// </summary>
-   private static CredentialsHandler MakeCredentialsProvider(string token)
+   internal static CredentialsHandler MakeCredentialsProvider(string token, string expectedUrl)
    {
       int requests = 0;
-      return (_, _, _) =>
+      return (requestedUrl, _, _) =>
       {
+         if(!RemoteUrl.MayReceiveCredentials(expectedUrl, requestedUrl))
+         {
+            throw new InvalidOperationException(
+                  $"'{RemoteUrl.Redact(requestedUrl)}' asked for credentials, but the token is only sent over HTTPS "
+                  + "to the host the repository was listed on. Nothing was sent.");
+         }
+
          if(Interlocked.Increment(ref requests) > 2)
          {
             throw new InvalidOperationException(

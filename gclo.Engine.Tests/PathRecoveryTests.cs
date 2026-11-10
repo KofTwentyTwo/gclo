@@ -217,7 +217,7 @@ public sealed class PathRecoveryTests : IDisposable
       // the pull fails typed, exactly like the original clone did.
       AppendForgedCommit(source, ("worse:new.txt", "new content"));
       InvalidRepositoryPathsException ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
       Assert.Contains(ex.Paths, p => string.Equals(p.RepoPath, "worse:new.txt", StringComparison.Ordinal));
 
       // Applying a recovery that covers ONLY the new path merges with the stored one:
@@ -245,7 +245,7 @@ public sealed class PathRecoveryTests : IDisposable
       Assert.True(File.Exists(Path.Combine(target, "gone.txt")));
 
       ReplaceForgedEntry(source, remove: "gone.txt", add: ("new/nested.txt", "new"));
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       // A real checkout removes what left the tree; the materialization must too.
       Assert.False(File.Exists(Path.Combine(target, "gone.txt")));
@@ -254,7 +254,7 @@ public sealed class PathRecoveryTests : IDisposable
 
       // And a directory emptied by a later deletion is pruned too.
       ReplaceForgedEntry(source, remove: "new/nested.txt", add: ("other.txt", "o"));
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
       Assert.False(Directory.Exists(Path.Combine(target, "new")));
    }
 
@@ -269,12 +269,12 @@ public sealed class PathRecoveryTests : IDisposable
 
       // A local edit is the witness: an unchanged tip must leave the tree alone.
       File.WriteAllText(Path.Combine(target, "keep.txt"), "locally edited");
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
       Assert.Equal("locally edited", File.ReadAllText(Path.Combine(target, "keep.txt")));
 
       // A new upstream commit re-materializes through the mapping as before.
       ReplaceForgedEntry(source, remove: "keep.txt", add: ("keep.txt", "upstream edit"));
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
       Assert.Equal("upstream edit", File.ReadAllText(Path.Combine(target, "keep.txt")));
    }
 
@@ -290,7 +290,7 @@ public sealed class PathRecoveryTests : IDisposable
       File.WriteAllText(file, "{ \"SegmentRenames\": { truncated");
 
       InvalidOperationException pullError = await Assert.ThrowsAsync<InvalidOperationException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
       Assert.Contains("corrupt", pullError.Message);
       Assert.Contains(file, pullError.Message);
       Assert.Contains("Delete it", pullError.Message);
@@ -302,7 +302,7 @@ public sealed class PathRecoveryTests : IDisposable
       // "null" is a corrupt document too.
       File.WriteAllText(file, "null");
       InvalidOperationException nullError = await Assert.ThrowsAsync<InvalidOperationException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
       Assert.Contains("empty", nullError.Message);
    }
 
@@ -337,7 +337,7 @@ public sealed class PathRecoveryTests : IDisposable
 
       // The repo must not silently report success with an empty working tree.
       InvalidRepositoryPathsException ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
 
       Assert.Contains(ex.Paths, p => string.Equals(p.RepoPath, "bad:file.txt", StringComparison.Ordinal));
       Assert.True(IsCheckoutPending(target));
@@ -353,7 +353,7 @@ public sealed class PathRecoveryTests : IDisposable
 
       ReplaceForgedEntry(source, remove: "bad:file.txt", add: ("fixed.txt", "fixed content"));
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       Assert.Equal("good content", File.ReadAllText(Path.Combine(target, "good.txt")));
       Assert.Equal("fixed content", File.ReadAllText(Path.Combine(target, "fixed.txt")));
@@ -376,7 +376,7 @@ public sealed class PathRecoveryTests : IDisposable
       // content at the mapped name.
       string newSha = AppendForgedCommit(source, ("bad:file.txt", "v2"));
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
 
       Assert.Equal("v2", File.ReadAllText(Path.Combine(target, "bad_file.txt")));
       Assert.Equal("g1", File.ReadAllText(Path.Combine(target, "good.txt")));
@@ -396,7 +396,7 @@ public sealed class PathRecoveryTests : IDisposable
       AppendForgedCommit(source, ("worse:new.txt", "not covered"));
 
       InvalidRepositoryPathsException ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
 
       Assert.Contains(ex.Paths, p => string.Equals(p.RepoPath, "worse:new.txt", StringComparison.Ordinal));
       // The previously materialized working tree is untouched.
@@ -415,7 +415,7 @@ public sealed class PathRecoveryTests : IDisposable
       Assert.False(IsCheckoutPending(target));
       Assert.False(File.Exists(RecoveryFilePath(target)));
 
-      await _client.FetchAndPullAsync(target, Token, CancellationToken.None);
+      await _client.PullAsync(target, Token, CancellationToken.None);
       Assert.False(IsCheckoutPending(target));
       Assert.False(File.Exists(RecoveryFilePath(target)));
       Assert.Equal("hello", File.ReadAllText(Path.Combine(target, "readme.txt")));

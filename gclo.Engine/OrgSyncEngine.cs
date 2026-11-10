@@ -141,7 +141,7 @@ public sealed class OrgSyncEngine
                if(_git.IsValidRepository(path))
                {
                   progress?.Report(new RepoProgress(repo.Name, SyncStatus.Pulling));
-                  await _git.FetchAndPullAsync(path, request.Token, token).WaitAsync(token).ConfigureAwait(false);
+                  await _git.FetchAndPullAsync(repo.CloneUrl, path, request.Token, token).WaitAsync(token).ConfigureAwait(false);
                   Interlocked.Increment(ref updated);
                }
                else

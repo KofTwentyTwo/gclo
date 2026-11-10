@@ -38,6 +38,18 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
       ArgumentException.ThrowIfNullOrWhiteSpace(token);
       cancellationToken.ThrowIfCancellationRequested();
 
+      ///////////////////////////////////////////////////////////////////////////
+      // The name goes into request paths and, with the org-subfolder option and //
+      // the WSL recovery, into local paths. Anything that is not one plain name //
+      // is refused before a request is made (#139).                             //
+      ///////////////////////////////////////////////////////////////////////////
+      if(!RepositoryPathResolver.TryValidateName(organization, out string? invalidName))
+      {
+         throw new GitHubAccessException(
+             GitHubAccessKind.NotFound,
+             $"'{organization}' is not an organization or account name ({invalidName}). Check the spelling.");
+      }
+
       IGitHubGateway gateway = _gatewayFactory(token);
 
       // Pages manually (instead of one GetAll* call) so cancellation is honored

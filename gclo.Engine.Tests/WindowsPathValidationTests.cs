@@ -324,7 +324,7 @@ public sealed class WindowsPathValidationTests : IDisposable
       AppendForgedCommit(source, ("bad:incoming.txt", "x"));
 
       InvalidRepositoryPathsException ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
-          () => _client.FetchAndPullAsync(target, Token, CancellationToken.None));
+          () => _client.PullAsync(target, Token, CancellationToken.None));
 
       Assert.Contains(ex.Paths, p => string.Equals(p.RepoPath, "bad:incoming.txt", StringComparison.Ordinal));
       // The valid original working tree must be untouched.

@@ -133,7 +133,7 @@ public sealed class WslClonerTests
 
       ProcessCall call = Assert.Single(_runner.Calls);
       Assert.Equal(WslExe, call.FileName);
-      Assert.Equal(["-e", "sh", "-s", "acme", "repo", "https://github.com/acme/repo.git"], call.Arguments);
+      Assert.Equal(["-e", "sh", "-s", "acme", "repo", "https://github.com/acme/repo.git", "github.com"], call.Arguments);
       Assert.Equal(WslCloner.CloneScript, call.StandardInput);
       Assert.DoesNotContain(Token, string.Join(" ", call.Arguments));
       Assert.DoesNotContain(Token, call.StandardInput);
@@ -156,7 +156,7 @@ public sealed class WslClonerTests
 
       Assert.Contains("password=$" + WslCloner.TokenVariable, script);
       Assert.Contains("credential.helper=", script);
-      Assert.Contains("git clone", script.Replace("-c credential.helper= -c \"credential.helper=$helper\" ", ""));
+      Assert.Contains("git clone", script.Replace("-c credential.helper= -c \"credential.https://$host.helper=$helper\" ", ""));
       Assert.Contains("pull --ff-only", script);
       Assert.Contains("$HOME/gclo/$org/$repo", script);
       Assert.Contains("$WSL_DISTRO_NAME", script);
@@ -265,6 +265,84 @@ public sealed class WslClonerTests
       await Assert.ThrowsAsync<ArgumentNullException>(
           () => Create().CloneAsync("https://x/y.git", "acme", "repo", null!, CancellationToken.None));
    }
+
+
+
+   [Fact]
+   public void CloneScript_ScopesTheHelperToTheUrlsHost_AndRefusesAFolderClonedFromElsewhere()
+   {
+      string script = WslCloner.CloneScript;
+
+      // Every git invocation first clears inherited helpers, then installs the token
+      // helper for the listed host only: nothing unscoped may remain (#139).
+      Assert.Equal(2, CountOf(script, "-c credential.helper= -c \"credential.https://$host.helper=$helper\""));
+      Assert.Equal(0, CountOf(script, "\"credential.helper=$helper\""));
+      Assert.Contains("host=\"$4\"", script);
+      // "--" ends option parsing, so a URL can never be read as an option.
+      Assert.Contains("clone --quiet -- \"$url\" \"$dest\"", script);
+      // An existing destination is only fast-forwarded when it is a clone of this URL.
+      // The stored URL is compared, not "remote get-url": that one applies the user's
+      // url.*.insteadOf rewrites and would refuse a destination gclo itself cloned.
+      Assert.Contains("config --get remote.origin.url)\" != \"$url\"", script);
+      Assert.DoesNotContain("remote get-url", script);
+      Assert.True(
+          script.IndexOf("config --get remote.origin.url", StringComparison.Ordinal) < script.IndexOf("pull --ff-only", StringComparison.Ordinal),
+          "the origin check must come before the pull");
+   }
+
+
+
+   [Fact]
+   public async Task Clone_PassesTheHostWithItsPort_ForAServerOnANonDefaultPort()
+   {
+      _runner.Handler = (_, _) => Task.FromResult(new ProcessResult(0, "Ubuntu\n/home/me/gclo/acme/repo\n", ""));
+
+      await Create().CloneAsync("https://git.example.com:3000/acme/repo.git", "acme", "repo", Token, CancellationToken.None);
+
+      ProcessCall call = Assert.Single(_runner.Calls);
+      Assert.Equal(["-e", "sh", "-s", "acme", "repo", "https://git.example.com:3000/acme/repo.git", "git.example.com:3000"], call.Arguments);
+   }
+
+
+
+   [Theory]
+   [InlineData("../..", "repo")]
+   [InlineData("..", "repo")]
+   [InlineData("acme/other", "repo")]
+   [InlineData("acme", "../../.ssh")]
+   [InlineData("acme", "re/po")]
+   [InlineData("acme", @"re\po")]
+   public async Task Clone_NameThatWouldLeaveTheGcloFolder_IsRefused_WithoutStartingWsl(string organization, string repository)
+   {
+      WslCloneException ex = await Assert.ThrowsAsync<WslCloneException>(
+          () => Create().CloneAsync("https://github.com/acme/repo.git", organization, repository, Token, CancellationToken.None));
+
+      Assert.StartsWith("Clone in WSL refused: '", ex.Message);
+      Assert.Contains("cannot be used as a folder name", ex.Message);
+      Assert.Empty(_runner.Calls);
+   }
+
+
+
+   [Theory]
+   [InlineData("http://github.com/acme/repo.git")]
+   [InlineData("ssh://git@github.com/acme/repo.git")]
+   [InlineData("git@github.com:acme/repo.git")]
+   [InlineData("--upload-pack=touch /tmp/x")]
+   [InlineData(@"C:\src\acme\repo")]
+   public async Task Clone_UrlThatIsNotHttps_IsRefused_WithoutStartingWsl(string url)
+   {
+      WslCloneException ex = await Assert.ThrowsAsync<WslCloneException>(
+          () => Create().CloneAsync(url, "acme", "repo", Token, CancellationToken.None));
+
+      Assert.Equal("Clone in WSL refused: the clone URL is not an HTTPS URL.", ex.Message);
+      Assert.Empty(_runner.Calls);
+   }
+
+
+
+   private static int CountOf(string text, string fragment)
+       => (text.Length - text.Replace(fragment, "", StringComparison.Ordinal).Length) / fragment.Length;
 
 
 

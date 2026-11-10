@@ -43,7 +43,7 @@ public sealed record CloneCall(string Url, string LocalPath, string Token);
 
 
 
-public sealed record PullCall(string LocalPath, string Token);
+public sealed record PullCall(string LocalPath, string Token, string Url);
 
 
 
@@ -126,9 +126,9 @@ public sealed class FakeGitClient : IGitClient
 
 
 
-   public async Task FetchAndPullAsync(string path, string token, CancellationToken cancellationToken)
+   public async Task FetchAndPullAsync(string url, string path, string token, CancellationToken cancellationToken)
    {
-      _pullCalls.Enqueue(new PullCall(path, token));
+      _pullCalls.Enqueue(new PullCall(path, token, url));
       await FetchAndPullHandler(path, token, cancellationToken).ConfigureAwait(false);
    }
 
