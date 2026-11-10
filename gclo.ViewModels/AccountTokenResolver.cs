@@ -50,14 +50,15 @@ public sealed class AccountTokenResolver
 
    /// <summary>
    /// Why <see cref="TryResolve"/> returned null for <paramref name="account"/>, worded
-   /// for the user and naming the source, so every "no token" message says what to fix.
-   /// Never contains a token.
+   /// for the user and naming the source, so every "no token" message says what to fix:
+   /// for a token of the account's own, the entry as this vault names it. Never
+   /// contains a token.
    /// </summary>
-   public static string MissingDescription(Account account)
+   public string MissingDescription(Account account)
    {
       ArgumentNullException.ThrowIfNull(account);
       return account.TokenSource == TokenSource.Default
           ? "uses the default token, but no default token is saved (desktop app: Settings)"
-          : $"has no token in Windows Credential Manager (entry 'gclo:account:{account.Id:N}')";
+          : $"has no token in {_vault.DescribeEntry(account.Id)}";
    }
 }

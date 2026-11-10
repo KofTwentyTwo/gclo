@@ -764,6 +764,8 @@ public sealed class AccountsCommandTests : IDisposable
       public void Delete(Guid accountId)
       {
       }
+
+      public string DescribeEntry(Guid accountId) => $"a broken vault (account {accountId:N})";
    }
 
 

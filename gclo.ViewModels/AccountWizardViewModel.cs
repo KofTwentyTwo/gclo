@@ -211,6 +211,13 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    public bool IsOwnTokenSelected => !UseDefaultToken;
 
    /// <summary>
+   /// Whether the choice between the default token and a token of the account's own
+   /// is shown: when a default token is saved, and also for an account that uses the
+   /// default token while none is saved, which otherwise could not be given another.
+   /// </summary>
+   public bool OffersTokenChoice => HasDefaultToken || _existing?.UsesDefaultToken == true;
+
+   /// <summary>
    /// <see cref="UseDefaultToken"/> as the selected index of a two-item radio group:
    /// 0 = the default token, 1 = a token of this account's own.
    /// </summary>
@@ -228,6 +235,11 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    {
       get
       {
+         if(!HasDefaultToken)
+         {
+            return "No default token is saved right now. Save one in Settings, or give this account a token of its own.";
+         }
+
          int others = _store.CountUsingDefaultToken() - (_existing?.UsesDefaultToken == true ? 1 : 0);
          string shared = others switch
          {

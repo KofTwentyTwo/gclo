@@ -43,7 +43,7 @@ public sealed class AccountTokenResolverTests
       var resolver = new AccountTokenResolver(_vault);
 
       Assert.Throws<ArgumentNullException>(() => resolver.TryResolve(null!));
-      Assert.Throws<ArgumentNullException>(() => AccountTokenResolver.MissingDescription(null!));
+      Assert.Throws<ArgumentNullException>(() => resolver.MissingDescription(null!));
    }
 
 
@@ -129,11 +129,38 @@ public sealed class AccountTokenResolverTests
       Account own = MakeAccount(TokenSource.Own);
       Account byDefault = MakeAccount(TokenSource.Default);
 
-      string ownText = AccountTokenResolver.MissingDescription(own);
-      string defaultText = AccountTokenResolver.MissingDescription(byDefault);
+      var resolver = new AccountTokenResolver(_vault);
+      string ownText = resolver.MissingDescription(own);
+      string defaultText = resolver.MissingDescription(byDefault);
 
-      Assert.Contains($"gclo:account:{own.Id:N}", ownText);
+      Assert.Contains($"{own.Id:N}", ownText);
       Assert.Contains("Settings", defaultText);
       Assert.DoesNotContain("ghp", ownText + defaultText);
+   }
+
+
+
+   [Fact]
+   public void MissingDescription_NamesTheEntry_TheWayTheVaultInUseNamesIt()
+   {
+      if(!OperatingSystem.IsWindows())
+      {
+         return; // Credential Manager is a Windows store
+      }
+      // The data folder scopes the entry names in Credential Manager (#157): the
+      // message must name the entry a person will actually find there.
+      Account own = MakeAccount(TokenSource.Own);
+      var unscoped = new AccountTokenResolver(new CredentialManagerVault(isWindows: true));
+      var scoped = new AccountTokenResolver(new CredentialManagerVault(isWindows: true, scope: "0123456789abcdef"));
+
+      Assert.Equal(
+          $"has no token in Windows Credential Manager (entry 'gclo:account:{own.Id:N}')",
+          unscoped.MissingDescription(own));
+      Assert.Equal(
+          $"has no token in Windows Credential Manager (entry 'gclo:0123456789abcdef:account:{own.Id:N}')",
+          scoped.MissingDescription(own));
+      Assert.Equal(
+          $"has no token in this session's memory (account {own.Id:N})",
+          new AccountTokenResolver(new InMemoryVault()).MissingDescription(own));
    }
 }

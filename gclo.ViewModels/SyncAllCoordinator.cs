@@ -78,13 +78,16 @@ public sealed class SyncAllCoordinator(IActivityLog log)
             continue;
          }
 
-         if(workspace.UsesDefaultToken && string.IsNullOrEmpty(workspace.Token))
+         // A token saved, replaced, or removed since the workspace was opened counts.
+         workspace.RefreshAccountToken();
+         if(workspace.MissingTokenDescription is { } missingToken)
          {
-            // The account resolves to the default token and none is saved: a
-            // generic auth failure would send the user to the wrong place.
+            // Whichever source the account's token comes from, it holds none: say
+            // which, instead of a sync that cannot start or a generic auth failure
+            // that sends the user to the wrong place.
             skipped++;
             Announce(workspace, SyncAllAccountState.Skipped);
-            _log.Info($"Sync all: skipped '{workspace.DisplayName}' — no default token is saved (Settings).");
+            _log.Info($"Sync all: skipped '{workspace.DisplayName}' — {missingToken}");
             continue;
          }
 
@@ -114,6 +117,17 @@ public sealed class SyncAllCoordinator(IActivityLog log)
 
          _log.Info($"Sync all: syncing '{workspace.DisplayName}'.");
          await workspace.SyncCommand.ExecuteAsync(null);
+         if(workspace.ResultKind == RunResultKind.Error)
+         {
+            // The sync never ran its repositories (its target folder could not be
+            // used, its token went away at that moment): that is not a success with
+            // nothing to report.
+            skipped++;
+            Announce(workspace, SyncAllAccountState.Failed);
+            _log.Info($"Sync all: '{workspace.DisplayName}' could not be synced — {workspace.ResultMessage}");
+            continue;
+         }
+
          ran++;
          Announce(
              workspace,

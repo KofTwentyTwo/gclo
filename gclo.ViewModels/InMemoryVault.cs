@@ -37,4 +37,9 @@ public sealed class InMemoryVault : ITokenVault
    /// <inheritdoc/>
    public void Delete(Guid accountId)
        => _tokens.TryRemove(accountId, out _);
+
+
+
+   /// <inheritdoc/>
+   public string DescribeEntry(Guid accountId) => $"this session's memory (account {accountId:N})";
 }

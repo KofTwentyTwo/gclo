@@ -32,4 +32,12 @@ public interface ITokenVault
 
    /// <summary>Removes the account's token. Deleting an absent entry is a no-op.</summary>
    void Delete(Guid accountId);
+
+
+
+   /// <summary>
+   /// Where this vault keeps the account's token, in words a person can follow to
+   /// look for it ("Windows Credential Manager (entry '...')"). Never a token.
+   /// </summary>
+   string DescribeEntry(Guid accountId);
 }

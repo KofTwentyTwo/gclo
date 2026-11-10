@@ -515,10 +515,11 @@ internal static class SyncCommand
       }
 
       // vault is non-null whenever account is: both come from AccountsCommand.Open.
+      var resolver = new AccountTokenResolver(vault!);
       string? token;
       try
       {
-         token = new AccountTokenResolver(vault!).TryResolve(account);
+         token = resolver.TryResolve(account);
       }
       catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
       {
@@ -535,7 +536,7 @@ internal static class SyncCommand
              : "Re-enter the token with 'gclo accounts edit --name <name> --token-stdin' or in the desktop app's "
                + "account wizard, restore the credential entry manually,";
          throw new CliErrorException(
-             $"Account '{account.Name}' {AccountTokenResolver.MissingDescription(account)}. {fix} "
+             $"Account '{account.Name}' {resolver.MissingDescription(account)}. {fix} "
              + "or pass a token with --token-env, --token-file, or --token-stdin.");
       }
       return token;

@@ -462,4 +462,77 @@ public sealed class SyncAllCoordinatorTests : IDisposable
           },
           states);
    }
+
+
+
+   // ---------------------------------------------------------------- a token saved after the workspace opened (#157)
+
+   [Fact]
+   public async Task RunAsync_DefaultTokenAccount_WhoseTokenWasSavedAfterItOpened_Runs()
+   {
+      WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: false);
+      Assert.Equal("", shared.Token);
+      _vault.Store(AppSettings.DefaultTokenVaultId, "tok-saved-later"); // saved in Settings meanwhile
+
+      SyncAllResult result = await _coordinator.RunAsync([shared], CancellationToken.None);
+
+      Assert.Equal(1, result.Ran);
+      Assert.Equal(0, result.Skipped);
+      Assert.Equal("tok-saved-later", shared.Token);
+   }
+
+
+
+   [Fact]
+   public async Task RunAsync_DefaultTokenAccount_WhoseTokenWasRemovedAfterItOpened_IsSkipped()
+   {
+      WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: true);
+      _vault.Delete(AppSettings.DefaultTokenVaultId); // removed in Settings meanwhile
+
+      SyncAllResult result = await _coordinator.RunAsync([shared], CancellationToken.None);
+
+      Assert.Equal(0, result.Ran);
+      Assert.Equal(1, result.Skipped);
+      Assert.Empty(_lister.Organizations); // GitHub was never asked with the old token
+   }
+
+
+
+   // ---------------------------------------------------------------- review of #157: no success for a sync that never ran
+
+   [Fact]
+   public async Task RunAsync_AnAccountWhoseOwnTokenIsGone_IsSkipped_NotReportedAsSucceeded()
+   {
+      WorkspaceViewModel workspace = CreateWorkspace("own");
+      await workspace.LoadReposCommand.ExecuteAsync(null); // a loaded table: the sync command can run without a token
+      _vault.Delete(workspace.AccountId!.Value);
+      var states = new List<SyncAllAccountState>();
+      _coordinator.AccountStateChanged = (_, state) => states.Add(state);
+
+      SyncAllResult result = await _coordinator.RunAsync([workspace], CancellationToken.None);
+
+      Assert.Equal(0, result.Ran);
+      Assert.Equal(1, result.Skipped);
+      Assert.Equal([SyncAllAccountState.Queued, SyncAllAccountState.Skipped], states);
+   }
+
+
+
+   [Fact]
+   public async Task RunAsync_ASyncThatCouldNotStart_IsFailed_NotSucceeded_AndIsNotCountedAsRun()
+   {
+      // The target folder cannot be used: a file sits where it should be.
+      WorkspaceViewModel workspace = CreateWorkspace("blocked");
+      Directory.CreateDirectory(_root);
+      File.WriteAllText(Path.Combine(_root, "blocked"), "a file, not a folder");
+      var states = new List<SyncAllAccountState>();
+      _coordinator.AccountStateChanged = (_, state) => states.Add(state);
+
+      SyncAllResult result = await _coordinator.RunAsync([workspace], CancellationToken.None);
+
+      Assert.Equal(RunResultKind.Error, workspace.ResultKind);
+      Assert.Equal(0, result.Ran);
+      Assert.Equal(1, result.Skipped);
+      Assert.Equal([SyncAllAccountState.Queued, SyncAllAccountState.Running, SyncAllAccountState.Failed], states);
+   }
 }

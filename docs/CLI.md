@@ -263,7 +263,8 @@ throttle is reported as such (exit code 4) rather than shrinking the list.
 An *account* is a saved sync profile: a name, an organization, a target root
 folder, a parallelism setting, an org-subfolder preference, an optional
 description, and a token stored in **Windows Credential Manager** (under
-`gclo:account:<id>`; the metadata file,
+`gclo:account:<id>`, or `gclo:<scope>:account:<id>` when `GCLO_DATA_DIR` points
+the data elsewhere; the metadata file,
 `%LOCALAPPDATA%\KofTwentyTwo\gclo\accounts.json`, never contains the token).
 Accounts are shared between the CLI and the desktop app: create them with
 `gclo accounts add` on a headless mirror server, or in the app's account

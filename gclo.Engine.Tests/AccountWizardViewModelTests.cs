@@ -743,4 +743,46 @@ public sealed class AccountWizardViewModelTests : IDisposable
       Assert.Equal(account.Id, Assert.Single(_store.GetAll()).Id);
       Assert.Equal("ghp_rotated", _vault.TryRetrieve(account.Id));
    }
+
+
+
+   // ---------------------------------------------------------------- an account on the default token while none is saved (#157)
+
+   [Fact]
+   public async Task Edit_OfAnAccountOnTheDefaultToken_WhileNoneIsSaved_OffersTheChoice_SoItCanGetATokenOfItsOwn()
+   {
+      Account account = MakeAccount("Shared") with { TokenSource = TokenSource.Default };
+      _store.Save(account, token: null);
+      AccountWizardViewModel wizard = NewWizardWithDefault(defaultToken: null, existing: account);
+
+      Assert.False(wizard.HasDefaultToken);
+      Assert.True(wizard.UseDefaultToken);
+      Assert.True(wizard.OffersTokenChoice);
+      Assert.StartsWith("No default token is saved right now.", wizard.DefaultTokenCaption);
+
+      // Step 2 as it is: nothing to validate with, and the message says what to do...
+      await AdvanceToStepAsync(wizard, 2);
+      Assert.False(await wizard.TryAdvanceAsync());
+      Assert.Contains("use a different token for this account", wizard.TokenError);
+
+      // ...which is now possible.
+      wizard.TokenChoiceIndex = 1;
+      wizard.Token = "ghp_a_token_of_its_own";
+      Assert.True(await wizard.TryAdvanceAsync());
+      Assert.Equal(3, wizard.Step);
+   }
+
+
+
+   [Fact]
+   public void TheTokenChoice_IsOffered_WhenADefaultTokenIsSaved_AndNotForAnAccountThatNeverUsedOne()
+   {
+      Account own = MakeAccount("Own");
+      _store.Save(own, "ghp_own");
+
+      Assert.True(NewWizardWithDefault("ghp_default").OffersTokenChoice);
+      Assert.True(NewWizardWithDefault("ghp_default", existing: own, existingToken: "ghp_own").OffersTokenChoice);
+      Assert.False(NewWizardWithDefault(defaultToken: null).OffersTokenChoice);
+      Assert.False(NewWizardWithDefault(defaultToken: null, existing: own, existingToken: "ghp_own").OffersTokenChoice);
+   }
 }

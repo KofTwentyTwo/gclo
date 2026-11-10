@@ -2392,4 +2392,389 @@ public sealed class WorkspaceViewModelTests : IDisposable
       Assert.DoesNotContain(vm.Repos, r => string.Equals(r.Name, "ghost-repo", StringComparison.Ordinal));
 
    }
+
+
+
+   // ---------------------------------------------------------------- a saved token is read when it is used (#157)
+
+   private static Account MakeDefaultTokenAccount(string targetRoot) => MakeAccount(targetRoot) with { TokenSource = TokenSource.Default };
+
+
+
+   /// <summary>A folder of this test's own; the view model's target folder is removed when the test ends.</summary>
+   private static string NewTargetRoot() => Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+
+
+
+   [Fact]
+   public async Task AccountWorkspace_UsesTheDefaultTokenAsItIsNow_NotAsItWasWhenTheWorkspaceOpened()
+   {
+      var vault = new InMemoryVault();
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-old-123");
+      _lister.Repositories = [Repo("alpha")];
+      WorkspaceViewModel vm = CreateViewModel(account: MakeDefaultTokenAccount(NewTargetRoot()), vault: vault);
+      await vm.LoadReposCommand.ExecuteAsync(null);
+
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-new-456"); // replaced in Settings
+      await vm.LoadReposCommand.ExecuteAsync(null);
+      await vm.SyncCommand.ExecuteAsync(null);
+
+      Assert.Equal(["default-token-old-123", "default-token-new-456"], _lister.Calls.Select(c => c.Token), StringComparer.Ordinal);
+      Assert.Equal("default-token-new-456", Assert.Single(_git.CloneCalls).Token);
+      Assert.Equal("default-token-new-456", vm.Token);
+   }
+
+
+
+   [Fact]
+   public async Task AccountWorkspace_WhoseDefaultTokenWasSavedAfterItOpened_LoadsWhenShown()
+   {
+      var vault = new InMemoryVault();
+      _lister.Repositories = [Repo("alpha")];
+      WorkspaceViewModel vm = CreateViewModel(account: MakeDefaultTokenAccount(NewTargetRoot()), vault: vault);
+      Assert.False(vm.LoadRepositoriesIfSaved()); // no token yet: nothing to load with
+
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-saved-789"); // first saved in Settings
+      bool started = vm.LoadRepositoriesIfSaved();
+      await WaitUntilAsync(() => vm.HasLoadedRepos, "the load to finish");
+
+      Assert.True(started);
+      Assert.Equal("default-token-saved-789", Assert.Single(_lister.Calls).Token);
+   }
+
+
+
+   [Fact]
+   public async Task AccountWorkspace_WhoseDefaultTokenWasRemoved_DoesNotSyncWithTheOldOne_AndSaysWhereToLook()
+   {
+      var vault = new InMemoryVault();
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-old-123");
+      _lister.Repositories = [Repo("alpha")];
+      WorkspaceViewModel vm = CreateViewModel(account: MakeDefaultTokenAccount(NewTargetRoot()), vault: vault);
+      await vm.LoadReposCommand.ExecuteAsync(null);
+
+      vault.Delete(AppSettings.DefaultTokenVaultId); // removed in Settings
+      await vm.SyncCommand.ExecuteAsync(null);
+
+      Assert.Empty(_git.CloneCalls);
+      Assert.Equal(RunResultKind.Error, vm.ResultKind);
+      Assert.Equal("Account 'Work' uses the default token, but no default token is saved (desktop app: Settings).", vm.ResultMessage);
+      Assert.Equal("", vm.Token);
+   }
+
+
+
+   [Fact]
+   public async Task AccountWorkspace_WhoseOwnTokenIsGone_FailsTheLoad_NamingTheEntry()
+   {
+      var vault = new InMemoryVault();
+      Account account = MakeAccount(NewTargetRoot());
+      vault.Store(account.Id, "own-token-1234567890");
+      WorkspaceViewModel vm = CreateViewModel(account: account, vault: vault);
+      vault.Delete(account.Id);
+
+      await vm.LoadReposCommand.ExecuteAsync(null);
+
+      Assert.True(vm.LoadErrorOpen);
+      Assert.Equal($"Account 'Work' has no token in this session's memory (account {account.Id:N}).", vm.LoadErrorMessage);
+      Assert.Empty(_lister.Calls);
+   }
+
+
+
+   [Fact]
+   public void QuickSync_FollowsTheDefaultToken_OnlyWhileItsBoxHoldsWhatSettingsPutThere()
+   {
+      WorkspaceViewModel prefilled = CreateViewModel();
+      prefilled.Token = "default-token-old-123"; // what the shell pre-fills from Settings
+      WorkspaceViewModel typed = CreateViewModel();
+      typed.Token = "typed-by-hand-0000000";
+      WorkspaceViewModel empty = CreateViewModel();
+
+      foreach(WorkspaceViewModel vm in new[] { prefilled, typed, empty })
+      {
+         vm.OnDefaultTokenChanged(previous: "default-token-old-123", current: "default-token-new-456");
+      }
+
+      Assert.Equal("default-token-new-456", prefilled.Token);
+      Assert.Equal("typed-by-hand-0000000", typed.Token); // somebody's own token stays
+      Assert.Equal("", empty.Token);                      // the box was cleared by hand: it stays cleared
+
+      prefilled.OnDefaultTokenChanged(previous: "default-token-new-456", current: null);
+      empty.OnDefaultTokenChanged(previous: null, current: "default-token-first-1"); // first saved: nothing was there before
+      prefilled.RefreshAccountToken(); // Quick Sync has no source to read from: nothing happens
+
+      Assert.Equal("", prefilled.Token);
+      Assert.Equal("default-token-first-1", empty.Token);
+   }
+
+
+
+   [Fact]
+   public void AccountWorkspace_IsToldWhenTheDefaultTokenChanged_AndTakesItFromTheVault()
+   {
+      var vault = new InMemoryVault();
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-old-123");
+      WorkspaceViewModel vm = CreateViewModel(account: MakeDefaultTokenAccount(NewTargetRoot()), vault: vault);
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-new-456");
+
+      // What the caller passes is not what an account uses: its source is the vault.
+      vm.OnDefaultTokenChanged(previous: "something else entirely", current: "also something else");
+
+      Assert.Equal("default-token-new-456", vm.Token);
+   }
+
+
+
+   [Fact]
+   public void ATokenReadFromItsSource_IsLoggedAsSuch_NotAsTyped_AndNeverByValue()
+   {
+      var log = new RecordingActivityLog();
+      var vault = new InMemoryVault();
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-old-123");
+      WorkspaceViewModel vm = Track(new WorkspaceViewModel(
+          _lister, _git, _orgs, handler => new SyncProgress(handler), TimeSpan.FromMilliseconds(1), log,
+          MakeDefaultTokenAccount(NewTargetRoot()), vault, null, _wsl));
+
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-new-456");
+      vm.RefreshAccountToken();
+      vm.RefreshAccountToken(); // unchanged: nothing to say
+      vault.Delete(AppSettings.DefaultTokenVaultId);
+      vm.RefreshAccountToken();
+
+      Assert.Equal(
+          ["Workspace 'Work': its saved token changed (21 characters).", "Workspace 'Work': its token is no longer saved."],
+          log.Messages.Where(m => m.StartsWith("Workspace 'Work'", StringComparison.Ordinal)),
+          StringComparer.Ordinal);
+      Assert.DoesNotContain(log.Messages, m => m.Contains("Token entered", StringComparison.Ordinal));
+      Assert.DoesNotContain(log.Messages, m => m.Contains("default-token", StringComparison.Ordinal));
+   }
+
+
+
+   // ---------------------------------------------------------------- review of #157: what a token that went away must not break
+
+   /// <summary>An account workspace with its own token in <paramref name="vault"/>, loaded with the given repositories.</summary>
+   private async Task<(WorkspaceViewModel Vm, Account Account)> CreateLoadedAccountWorkspaceAsync(
+       InMemoryVault vault, params RepoDescriptor[] repos)
+   {
+      Account account = MakeAccount(NewTargetRoot());
+      vault.Store(account.Id, "own-token-1234567890");
+      _lister.Repositories = repos;
+      WorkspaceViewModel vm = CreateViewModel(account: account, vault: vault);
+      await vm.LoadReposCommand.ExecuteAsync(null);
+      return (vm, account);
+   }
+
+
+
+   [Fact]
+   public async Task ASyncThatCannotStartForWantOfAToken_LeavesTheRowsAsTheyWere()
+   {
+      var vault = new InMemoryVault();
+      MakeAlphaFailWithInvalidPaths();
+      (WorkspaceViewModel vm, Account account) = await CreateLoadedAccountWorkspaceAsync(vault, Repo("alpha"), Repo("bravo"));
+      await vm.SyncCommand.ExecuteAsync(null); // alpha fails with its paths, bravo is done
+      RepoItemViewModel alpha = vm.Repos.Single(r => string.Equals(r.Name, "alpha", StringComparison.Ordinal));
+      Assert.True(vm.ResolvePathsCommand.CanExecute(alpha));
+
+      vault.Delete(account.Id);
+      await vm.RetryFailedCommand.ExecuteAsync(null);
+
+      Assert.Equal(RunResultKind.Error, vm.ResultKind);
+      Assert.StartsWith("Account 'Work' has no token in", vm.ResultMessage);
+      // The failure, its paths, and the way to act on them are all still there.
+      Assert.Equal(SyncStatus.Failed, alpha.Status);
+      Assert.NotNull(alpha.Error);
+      Assert.NotNull(alpha.InvalidPaths);
+      Assert.True(vm.HasFailedRepos);
+      Assert.True(vm.ResolvePathsCommand.CanExecute(alpha));
+      Assert.True(vm.RetryFailedCommand.CanExecute(null));
+      Assert.Single(_git.CloneCalls, c => string.Equals(Path.GetFileName(c.LocalPath), "alpha", StringComparison.Ordinal));
+   }
+
+
+
+   [Fact]
+   public async Task TheOrganization_SurvivesItsTokenGoingAway_AlsoWhenTheBoxDropsItsTextWithTheList()
+   {
+      var vault = new InMemoryVault();
+      (WorkspaceViewModel vm, Account account) = await CreateLoadedAccountWorkspaceAsync(vault, Repo("alpha"));
+      await WaitUntilAsync(() => vm.Organizations.Count > 0 || !vm.IsLoadingOrgs, "the first lookup to settle");
+      // What the editable box does: when its list changes it loses its text, and
+      // the two-way binding writes the empty text back.
+      vm.Organizations.CollectionChanged += (_, _) => vm.Organization = "";
+
+      vault.Delete(account.Id);
+      vm.RefreshAccountToken();
+
+      Assert.Equal("acme", vm.Organization);
+      Assert.False(vm.IsTableStale);
+   }
+
+
+
+   [Fact]
+   public async Task TheLookupStartedByReadingTheTokenAgain_SaysNothing_AndLeavesTheLoadsErrorOpen()
+   {
+      var vault = new InMemoryVault();
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-old-123");
+      var lookup = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+      WorkspaceViewModel vm = CreateViewModel(account: MakeDefaultTokenAccount(NewTargetRoot()), vault: vault);
+      await WaitUntilAsync(() => vm.StatusText.Length > 0, "the first lookup to settle");
+
+      // The token is replaced; the load that reads it fails; the lookup it started lands afterwards.
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-new-456");
+      _orgs.Handler = (_, _) => lookup.Task;
+      _lister.ExceptionToThrow = new InvalidOperationException("organization not found");
+      await vm.LoadReposCommand.ExecuteAsync(null);
+      Assert.True(vm.LoadErrorOpen);
+      string statusAfterTheLoad = vm.StatusText;
+      lookup.SetResult(["me", "acme"]);
+      await WaitUntilAsync(() => vm.Organizations.Count == 2, "the lookup to land");
+
+      Assert.True(vm.LoadErrorOpen, "the error of the load was closed by a lookup nobody asked for");
+      Assert.Equal("organization not found", vm.LoadErrorMessage);
+      Assert.Equal(statusAfterTheLoad, vm.StatusText);
+   }
+
+
+
+   [Fact]
+   public async Task ALookupThatFails_AfterTheTokenWasReadAgain_IsLogged_NotShown()
+   {
+      var log = new RecordingActivityLog();
+      var vault = new InMemoryVault();
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-old-123");
+      WorkspaceViewModel vm = Track(new WorkspaceViewModel(
+          _lister, _git, _orgs, handler => new SyncProgress(handler), TimeSpan.FromMilliseconds(1), log,
+          MakeDefaultTokenAccount(NewTargetRoot()), vault, null, _wsl));
+      await WaitUntilAsync(() => vm.StatusText.Length > 0, "the first lookup to settle");
+
+      _orgs.Handler = (_, _) => Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("rate limited"));
+      vault.Store(AppSettings.DefaultTokenVaultId, "default-token-new-456");
+      vm.RefreshAccountToken();
+      await WaitUntilAsync(
+          () => log.Messages.Any(m => m.StartsWith("Organization lookup failed", StringComparison.Ordinal)), "the lookup to fail");
+
+      Assert.False(vm.LoadErrorOpen);
+   }
+
+
+
+   [Fact]
+   public async Task CloneInWsl_UsesTheTokenAsItIsNow()
+   {
+      var vault = new InMemoryVault();
+      MakeAlphaFailWithInvalidPaths();
+      _wsl.Availability = new WslAvailability(true, "git version 2.53.0");
+      (WorkspaceViewModel vm, Account account) = await CreateLoadedAccountWorkspaceAsync(vault, Repo("alpha"));
+      await vm.SyncCommand.ExecuteAsync(null);
+      vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.CloneInWsl());
+
+      vault.Store(account.Id, "own-token-replaced-99"); // replaced from another gclo process
+      await vm.ResolvePathsCommand.ExecuteAsync(vm.Repos[0]);
+
+      Assert.Equal("own-token-replaced-99", Assert.Single(_wsl.CloneCalls).Token);
+   }
+
+
+
+   [Fact]
+   public void AnAccountSwitchedToATokenOfItsOwn_IsReadFromItsNewSource()
+   {
+      string root = NewTargetRoot();
+      try
+      {
+         var vault = new InMemoryVault();
+         vault.Store(AppSettings.DefaultTokenVaultId, "default-token-old-123");
+         var store = new AccountsStore(vault, Path.Combine(root, "store"), new NullActivityLog());
+         Account account = MakeDefaultTokenAccount(Path.Combine(root, "repos"));
+         store.Save(account, token: null);
+         WorkspaceViewModel vm = CreateViewModel(account: account, vault: vault, store: store);
+         Assert.Equal("default-token-old-123", vm.Token);
+
+         // The source changes in the store (an edit made elsewhere); the workspace
+         // still holds the record it was opened with.
+         store.Save(account with { TokenSource = TokenSource.Own }, "own-token-1234567890");
+         vm.RefreshAccountToken();
+
+         Assert.Equal("own-token-1234567890", vm.Token);
+      }
+      finally
+      {
+         TryDeleteDirectory(root);
+      }
+   }
+
+
+
+   /// <summary>A vault whose reads fail, as Credential Manager's do when it does not answer.</summary>
+   private sealed class UnreadableVault(InMemoryVault inner) : ITokenVault
+   {
+      public bool Fails { get; set; }
+
+      public void Store(Guid accountId, string token) => inner.Store(accountId, token);
+
+      public string? TryRetrieve(Guid accountId)
+          => Fails ? throw new System.ComponentModel.Win32Exception(1312, "A specified logon session does not exist.") : inner.TryRetrieve(accountId);
+
+      public void Delete(Guid accountId) => inner.Delete(accountId);
+
+      public string DescribeEntry(Guid accountId) => inner.DescribeEntry(accountId);
+   }
+
+
+
+   [Fact]
+   public void ACredentialStoreThatDoesNotAnswer_KeepsTheTokenReadEarlier_AndSaysSoInTheLog()
+   {
+      var log = new RecordingActivityLog();
+      var inner = new InMemoryVault();
+      inner.Store(AppSettings.DefaultTokenVaultId, "default-token-old-123");
+      var vault = new UnreadableVault(inner);
+      WorkspaceViewModel vm = Track(new WorkspaceViewModel(
+          _lister, _git, _orgs, handler => new SyncProgress(handler), TimeSpan.FromMilliseconds(1), log,
+          MakeDefaultTokenAccount(NewTargetRoot()), vault, null, _wsl));
+
+      vault.Fails = true;
+      vm.RefreshAccountToken(); // must not throw: the shell and Sync all call this
+      vm.OnDefaultTokenChanged(previous: null, current: null);
+
+      Assert.Equal("default-token-old-123", vm.Token);
+      Assert.Contains(log.Messages, m => m.Contains("its saved token could not be read", StringComparison.Ordinal));
+      Assert.DoesNotContain(log.Messages, m => m.Contains("default-token", StringComparison.Ordinal));
+   }
+
+
+
+   [Fact]
+   public async Task ASavedTokenOfNothingButSpaces_IsNoToken()
+   {
+      var vault = new InMemoryVault();
+      vault.Store(AppSettings.DefaultTokenVaultId, "   ");
+      WorkspaceViewModel vm = CreateViewModel(account: MakeDefaultTokenAccount(NewTargetRoot()), vault: vault);
+      vm.Token = "typed-over-it-000000"; // so the command can be run at all
+
+      await vm.LoadReposCommand.ExecuteAsync(null);
+
+      Assert.True(vm.LoadErrorOpen);
+      Assert.Equal("Account 'Work' uses the default token, but no default token is saved (desktop app: Settings).", vm.LoadErrorMessage);
+      Assert.Empty(_lister.Calls);
+   }
+
+
+
+   [Fact]
+   public async Task QuickSync_WhoseTokenBoxWasEmptied_FailsTheSyncInItsOwnWords()
+   {
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+      vm.OnDefaultTokenChanged(previous: "token-1234567890", current: null); // the pre-filled default was removed
+
+      await vm.SyncCommand.ExecuteAsync(null);
+
+      Assert.Equal(RunResultKind.Error, vm.ResultKind);
+      Assert.Equal("There is no token: enter one in the token box.", vm.ResultMessage);
+      Assert.Empty(_git.CloneCalls);
+   }
 }

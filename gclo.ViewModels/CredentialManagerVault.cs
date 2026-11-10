@@ -88,6 +88,13 @@ public sealed class CredentialManagerVault : ITokenVault
 
 
 
+   /// <inheritdoc/>
+   /// <remarks>Names the entry as this process's data root scopes it, which is what Credential Manager lists.</remarks>
+   public string DescribeEntry(Guid accountId)
+       => $"Windows Credential Manager (entry '{TargetName(accountId, _scope)}')";
+
+
+
    /// <summary>The Credential Manager target name for an account under a scope.</summary>
    internal static string TargetName(Guid accountId, string? scope)
        => scope is null ? $"gclo:account:{accountId:N}" : $"gclo:{scope}:account:{accountId:N}";

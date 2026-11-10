@@ -42,6 +42,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
    private readonly Account? _account;
 
+   /// <summary>Where an account workspace's token comes from; null for Quick Sync.</summary>
+   private readonly AccountTokenResolver? _tokenResolver;
+
+   /// <summary>True while the token is being taken from its source again, which is not the user typing one.</summary>
+   private bool _readingTokenFromItsSource;
+
    private readonly AccountsStore? _accountsStore;
 
    private readonly Dictionary<string, RepoItemViewModel> _itemsByName = new(StringComparer.OrdinalIgnoreCase);
@@ -99,6 +105,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// organization, target folder, subfolder preference, and concurrency — and pulls the
    /// token from <paramref name="tokenVault"/> (the Token setter's org lookup fires
    /// naturally); finished syncs are then recorded on <paramref name="accountsStore"/>.
+   /// The token is read from the vault again whenever it is about to be used
+   /// (<see cref="RefreshAccountToken"/>), so one that was replaced or removed since
+   /// (the default token in Settings, the account's own in the wizard) takes effect
+   /// without a restart.
    /// </summary>
    public WorkspaceViewModel(
        IRepositoryLister? lister = null,
@@ -142,7 +152,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          MaxConcurrency = account.MaxConcurrency;
          // The Token setter's existing org lookup fires naturally with the resolved
          // token: the account's own entry, or the default token from Settings.
-         Token = tokenVault is null ? "" : new AccountTokenResolver(tokenVault).TryResolve(account) ?? "";
+         _tokenResolver = tokenVault is null ? null : new AccountTokenResolver(tokenVault);
+         Token = _tokenResolver?.TryResolve(account) ?? "";
       }
       _constructed = true;
    }
@@ -175,6 +186,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// </summary>
    public bool LoadRepositoriesIfSaved()
    {
+      RefreshAccountToken();
       if(_account is null || HasLoadedRepos || !LoadReposCommand.CanExecute(null))
       {
          return false;
@@ -513,13 +525,135 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       // The value itself never reaches the log; its length is enough to tell a
       // paste from a cleared box when reading back a session (#40). Construction
       // seeds the property (empty, or the vault token) and is not a user action.
-      if(_constructed)
+      if(_readingTokenFromItsSource)
+      {
+         _log.Info(value.Length == 0
+             ? $"Workspace '{DisplayName}': its token is no longer saved."
+             : $"Workspace '{DisplayName}': its saved token changed ({value.Length} characters).");
+      }
+      else if(_constructed)
       {
          _log.Info(value.Length == 0
              ? $"Token cleared in workspace '{DisplayName}'."
              : $"Token entered in workspace '{DisplayName}' ({value.Length} characters).");
       }
       _ = RefreshOrganizationsAsync();
+   }
+
+
+
+   /// <summary>
+   /// Takes an account workspace's token from its source again (its own vault entry,
+   /// or the default token from Settings) and uses it from here on. Called before the
+   /// token is used and whenever the shell knows a saved token changed. Nothing
+   /// happens for Quick Sync, whose token is whatever is in its box, or when the
+   /// source still holds the same token.
+   /// </summary>
+   public void RefreshAccountToken()
+   {
+      if(_account is null || _tokenResolver is null)
+      {
+         return;
+      }
+
+      string token;
+      try
+      {
+         token = _tokenResolver.TryResolve(AccountAsItIsNow()) ?? "";
+      }
+      catch(Exception ex) when(ex is System.ComponentModel.Win32Exception or IOException or InvalidOperationException)
+      {
+         ///////////////////////////////////////////////////////////////////////////
+         // The credential store did not answer. That says nothing about the      //
+         // token: the one read earlier stays in use, and whatever needs it next  //
+         // succeeds or fails on its own terms.                                    //
+         ///////////////////////////////////////////////////////////////////////////
+         _log.Error($"Workspace '{DisplayName}': its saved token could not be read ({ex.Message}); the one read earlier stays in use.", ex);
+         return;
+      }
+
+      SetTokenFromItsSource(token);
+   }
+
+
+
+   /// <summary>
+   /// The account as the store has it now: where its token comes from can have been
+   /// changed (to the default token, or to a token of its own) since this workspace
+   /// was opened. The record the workspace was opened with when the store no longer
+   /// has the account, or when there is no store.
+   /// </summary>
+   private Account AccountAsItIsNow()
+       => _accountsStore?.GetAll().FirstOrDefault(a => a.Id == _account!.Id) ?? _account!;
+
+
+
+   /// <summary>
+   /// Why this workspace has no token to work with, in words that name where to look;
+   /// null when it has one. For callers that decide before starting anything (Sync
+   /// all) and want to say why they did not.
+   /// </summary>
+   public string? MissingTokenDescription
+       => Token.Trim().Length > 0
+           ? null
+           : _account is not null && _tokenResolver is not null
+               ? $"Account '{_account.Name}' {_tokenResolver.MissingDescription(AccountAsItIsNow())}."
+               : "There is no token: enter one in the token box.";
+
+
+
+   /// <summary>
+   /// Tells the workspace that the default token in Settings was saved, replaced, or
+   /// removed. An account workspace takes its token from its source again. Quick
+   /// Sync follows only when its box still holds what Settings put there
+   /// (<paramref name="previous"/>, or nothing): a token somebody typed stays.
+   /// </summary>
+   /// <param name="previous">The default token before the change; null when there was none.</param>
+   /// <param name="current">The default token now; null when there is none.</param>
+   public void OnDefaultTokenChanged(string? previous, string? current)
+   {
+      if(_account is not null)
+      {
+         RefreshAccountToken();
+      }
+      else if(string.Equals(Token, previous ?? "", StringComparison.Ordinal))
+      {
+         SetTokenFromItsSource(current ?? "");
+      }
+   }
+
+
+
+   private void SetTokenFromItsSource(string token)
+   {
+      if(string.Equals(token, Token, StringComparison.Ordinal))
+      {
+         return;
+      }
+
+      _readingTokenFromItsSource = true;
+      try
+      {
+         Token = token;
+      }
+      finally
+      {
+         _readingTokenFromItsSource = false;
+      }
+   }
+
+
+
+   /// <summary>
+   /// The token to use right now: for an account, read from its source this moment,
+   /// and a failure that names the source when it holds none.
+   /// </summary>
+   private string TokenToUseNow()
+   {
+      RefreshAccountToken();
+      return MissingTokenDescription is { } missing
+          ? throw new InvalidOperationException(missing)
+          : Token.Trim();
    }
 
 
@@ -574,10 +708,24 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       // Captured before any successor can dispose cts; used everywhere below.
       CancellationToken lookupToken = cts.Token;
 
+      ///////////////////////////////////////////////////////////////////////////////
+      // A lookup started because the saved token was read again is nobody's       //
+      // action: it refreshes the list of organizations and says nothing. The load //
+      // or sync that read the token owns the status line and the error bar, and a //
+      // lookup that lands in the middle of it must not write over either.         //
+      ///////////////////////////////////////////////////////////////////////////////
+      bool quiet = _readingTokenFromItsSource;
+
       string token = Token.Trim();
       if(token.Length < 10)
       {
+         // The same capture and restore as below: the editable box loses its text
+         // when its list changes, and an account's organization must survive its
+         // token going away (it is what the account syncs).
+         string organizationBeforeClear = Organization;
          Organizations.Clear();
+         Organization = organizationBeforeClear;
+         OnPropertyChanged(nameof(Organization));
          // The newest invocation owns the flag: a canceled predecessor deliberately
          // leaves it alone, so an early return must clear any spinner it left behind.
          IsLoadingOrgs = false;
@@ -606,12 +754,15 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          }
          Organization = organizationBeforeRefresh;
          OnPropertyChanged(nameof(Organization));
-         LoadErrorOpen = false; // a lookup that works clears a stale lookup failure
-                                // The production lister always lists the token's own account first, so a
-                                // single entry means no organizations were visible.
-         StatusText = orgs.Count <= 1
-             ? "Only your personal account is visible — add read:org (classic) for organizations, or type an org name manually."
-             : $"Found {orgs.Count} organizations and accounts.";
+         if(!quiet)
+         {
+            LoadErrorOpen = false; // a lookup that works clears a stale lookup failure
+            // The production lister always lists the token's own account first, so a
+            // single entry means no organizations were visible.
+            StatusText = orgs.Count <= 1
+                ? "Only your personal account is visible — add read:org (classic) for organizations, or type an org name manually."
+                : $"Found {orgs.Count} organizations and accounts.";
+         }
       }
       catch(OperationCanceledException)
       {
@@ -622,7 +773,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          if(_orgLoadCts == cts)
          {
             _log.Error($"Organization lookup failed: {ex.Message}", ex);
-            ShowLoadError("Could not list organizations", ex.Message);
+            if(!quiet)
+            {
+               ShowLoadError("Could not list organizations", ex.Message);
+            }
          }
       }
       finally
@@ -764,11 +918,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       try
       {
          string organization = Organization.Trim();
+         string token = TokenToUseNow();
          StatusText = "Loading repositories...";
          _log.Info($"Loading repositories for organization '{organization}'.");
 
          var descriptors = (await _lister
-             .ListOrganizationRepositoriesAsync(organization, Token.Trim()))
+             .ListOrganizationRepositoriesAsync(organization, token))
              // Names key the row dictionary; a duplicate (possible from pagination
              // shifts) must not produce two rows fighting over one folder.
              .DistinctBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
@@ -844,6 +999,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       ActiveRepos.Clear();
       try
       {
+         // First, before any row is touched: a sync that cannot start for want of a
+         // token leaves the table (failures, their paths, the retry) as it was.
+         string token = TokenToUseNow();
+
          var selected = Repos.Where(r => r.IsSelected).ToList();
          foreach(RepoItemViewModel item in selected)
          {
@@ -870,7 +1029,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          var progress = new FailureLoggingProgress(_progressFactory(HandleProgress), _log);
 
          var request = new SyncRequest(
-             Organization.Trim(), Token.Trim(), targetRoot, MaxConcurrency);
+             Organization.Trim(), token, targetRoot, MaxConcurrency);
          IReadOnlyList<RepoDescriptor> descriptors = selected.Select(r => r.Descriptor).ToList();
 
          Func<SyncRequest, IReadOnlyList<RepoDescriptor>, IProgress<RepoProgress>, CancellationToken, Task<SyncSummary>> run =
@@ -1105,7 +1264,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          // The organization the table was loaded for, not whatever the box says now:
          // the row belongs to that organization, and its folder under ~/gclo should too.
          WslCloneResult result = await _wsl.CloneAsync(
-             item.Descriptor.CloneUrl, LoadedOrganization ?? Organization.Trim(), item.Name, Token.Trim(), _lifetimeCts.Token);
+             item.Descriptor.CloneUrl, LoadedOrganization ?? Organization.Trim(), item.Name, TokenToUseNow(), _lifetimeCts.Token);
 
          item.Status = SyncStatus.Done;
          item.Error = null;

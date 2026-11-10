@@ -1105,8 +1105,15 @@ public sealed partial class MainWindow : Window
       int concurrencyBefore = _settings.DefaultMaxConcurrency;
       if(await DialogGuard.ShowAsync(dialog) == ContentDialogResult.Primary)
       {
+         // Held only to tell the open workspaces what changed; never logged or stored.
+         string? defaultTokenBefore = _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId);
          dialog.ApplyAndSave(); // logs what changed
          ApplySettings(seedQuickSyncConcurrency: _settings.DefaultMaxConcurrency != concurrencyBefore);
+         string? defaultTokenNow = _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId);
+         foreach(WorkspaceEntry workspace in _workspaces.Values)
+         {
+            workspace.ViewModel.OnDefaultTokenChanged(defaultTokenBefore, defaultTokenNow);
+         }
       }
       else
       {

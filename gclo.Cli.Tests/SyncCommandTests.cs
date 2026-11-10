@@ -818,6 +818,8 @@ public sealed class SyncCommandTests : IDisposable
       public void Delete(Guid accountId)
       {
       }
+
+      public string DescribeEntry(Guid accountId) => $"an unreadable vault (account {accountId:N})";
    }
 
 

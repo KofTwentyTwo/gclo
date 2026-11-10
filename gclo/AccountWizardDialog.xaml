@@ -65,7 +65,7 @@
                 AutomationProperties.AutomationId="WizardTokenChoice"
                 Header="Which token should this account use?"
                 SelectedIndex="{x:Bind ViewModel.TokenChoiceIndex, Mode=TwoWay}"
-                Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.HasDefaultToken), Mode=OneWay}">
+                Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.OffersTokenChoice), Mode=OneWay}">
                 <RadioButton AutomationProperties.AutomationId="WizardUseDefaultToken" Content="Use the default token from Settings" />
                 <RadioButton AutomationProperties.AutomationId="WizardUseOwnToken" Content="Use a different token for this account" />
             </RadioButtons>

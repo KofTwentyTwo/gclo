@@ -491,6 +491,10 @@ public sealed class AccountsStoreConsistencyTests : IDisposable
 
 
 
+      public string DescribeEntry(Guid accountId) => _inner.DescribeEntry(accountId);
+
+
+
       public void Delete(Guid accountId)
       {
          DeleteCalls++;
