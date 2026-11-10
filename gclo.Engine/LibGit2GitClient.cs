@@ -47,10 +47,24 @@ public sealed class LibGit2GitClient : IGitClient
    /// </summary>
    private const string CheckoutPendingKey = "gclo.checkoutpending";
 
+   /// <summary>
+   /// Local git config flag meaning "gclo writes this repository's working tree
+   /// itself, through a path recovery". It outlives the recovery file, so a
+   /// repository whose file was deleted (as the message for a corrupt one advises)
+   /// is still known to be recovery-managed and can be resolved again, instead of
+   /// being taken for a clone someone checked out (#147). Set only once a recovery
+   /// has been read or written successfully, never because a file merely exists.
+   /// </summary>
+   private const string RecoveryManagedKey = "gclo.recoverymanaged";
+
    /// <summary>File name (under .git) of the persisted <see cref="PathRecovery"/>.</summary>
    private const string RecoveryFileName = "gclo-recovery.json";
 
    private static readonly JsonSerializerOptions s_recoveryJsonOptions = new() { WriteIndented = true };
+
+   /// <summary>No renames, no skips: every entry of a tree under its own path.</summary>
+   private static readonly PathRecovery s_noRecovery = new(
+       new Dictionary<string, string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal));
 
    /// <summary>
    /// Name of the remote that exists only for the duration of one fetch, when a
@@ -262,22 +276,16 @@ public sealed class LibGit2GitClient : IGitClient
       // recovery). Both take a dedicated path — their working tree is materialized
       // from the tip, never by a merge checkout that trusts the existing tree.
       // Every other repository takes the normal fetch + fast-forward pull below.
-      string recoveryFile = GetRecoveryFilePath(repo);
-      if(File.Exists(recoveryFile))
+      if(File.Exists(GetRecoveryFilePath(repo)) || IsRecoveryManaged(repo)
+          || (!IsCheckoutPending(repo) && WasWrittenWithoutAnIndex(repo) && HasPathsWindowsCannotCreate(repo)))
       {
-         // A recovery-managed repo stays recovery-managed: re-materialize the new
-         // tip through the stored mapping. Freshly-invalid paths the mapping does
-         // not cover surface as a typed failure listing the effective paths.
-         AdvanceHeadToTrackedTip(repo);
-         RecoveryDocument stored = LoadRecoveryDocument(recoveryFile, WorkingDirectoryOf(repo));
-         if(stored.MaterializedTip is not null && string.Equals(stored.MaterializedTip, repo.Head.Tip?.Sha, StringComparison.Ordinal))
-         {
-            // The tree on disk already reflects this tip: nothing to rewrite. A
-            // recovery-managed repo used to re-materialize every blob on every
-            // sync, touching gigabytes and every mtime for zero change (#31).
-            return;
-         }
-         ApplyRecoveryCore(repo, ToRecovery(stored), ct);
+         // A recovery-managed repo stays recovery-managed: the new tip is written
+         // through the stored mapping, or nothing is touched when the tree on disk
+         // already reflects it (a managed repo used to re-materialize every blob on
+         // every sync, touching gigabytes and every mtime for zero change, #31).
+         // Freshly-invalid paths the mapping does not cover surface as a typed
+         // failure listing the effective paths.
+         ApplyRecoveryCore(repo, incoming: null, ct);
          return;
       }
 
@@ -613,6 +621,20 @@ public sealed class LibGit2GitClient : IGitClient
          return; // the remote is still empty; nothing to pull
       }
 
+      ///////////////////////////////////////////////////////////////////////////////
+      // No commit on the branch does not mean nothing was checked out: a branch   //
+      // started with "checkout --orphan" keeps the index and the working tree of  //
+      // the branch it was started from. Checking out over that, with force, would //
+      // replace someone's files.                                                  //
+      ///////////////////////////////////////////////////////////////////////////////
+      if(repo.Index.Count > 0)
+      {
+         throw new InvalidOperationException(
+             $"'{branchName}' has no commits here yet, but files are staged in this folder (a branch started with "
+             + "'git checkout --orphan'?). gclo does not check out over them; fetched, but nothing was checked out. "
+             + "Commit or remove them, or check out another branch.");
+      }
+
       if(OperatingSystem.IsWindows())
       {
          IReadOnlyList<InvalidPathInfo> invalidPaths = WindowsPathValidator.Validate(remoteBranch.Tip.Tree);
@@ -662,48 +684,109 @@ public sealed class LibGit2GitClient : IGitClient
 
 
    /// <summary>
-   /// Materializes HEAD's tree into the working directory with the recovery's renames
-   /// and skips applied, after validating that the effective path set is actually
-   /// creatable on Windows. Any recovery persisted from an earlier run is merged in
-   /// first (the incoming recovery wins on conflicts), so a recovery-managed repo
-   /// that gains new invalid paths can be fixed incrementally. Persists the merged
-   /// recovery so later pulls re-apply it, then clears the pending-checkout marker.
+   /// Materializes a commit's tree into the working directory with renames and skips
+   /// applied, after validating that the effective path set is actually creatable on
+   /// Windows. <paramref name="incoming"/> is what the user just chose (it wins over
+   /// stored choices path by path), or null when a pull re-applies what is stored.
    /// </summary>
-   private static void ApplyRecoveryCore(Repository repo, PathRecovery recovery, CancellationToken ct)
+   /// <remarks>
+   /// <para>
+   /// This writes a working tree by hand, with force. It is therefore only ever done
+   /// to a tree that is gclo's to write (#147):
+   /// </para>
+   /// <list type="bullet">
+   /// <item>A repository whose clone was fetched but never checked out (the pending
+   /// marker), or that is empty: nothing was ever written there.</item>
+   /// <item>A recovery-managed repository: an earlier apply wrote its tree, and the
+   /// documentation says to treat it as a read-only mirror.</item>
+   /// </list>
+   /// <para>
+   /// A clone that was checked out normally is refused, whatever its state. Proving
+   /// that such a clone holds nothing of the user's is not possible in general
+   /// (untracked files, files git was told to ignore changes in, an apply interrupted
+   /// half-way and edited since), and a wrong guess destroys work. The way to get such
+   /// a repository with renamed paths is a fresh clone.
+   /// </para>
+   /// <para>
+   /// Commits are protected in every case: the branch only moves where
+   /// <see cref="TargetOf"/> allows. And an apply that is interrupted is completed by
+   /// the next pull: before the first destructive step the recovery file is saved
+   /// without a materialized tip, listing everything that was and will be on disk.
+   /// </para>
+   /// </remarks>
+   private static void ApplyRecoveryCore(Repository repo, PathRecovery? incoming, CancellationToken ct)
    {
+      string workdir = WorkingDirectoryOf(repo);
+      string recoveryFile = GetRecoveryFilePath(repo);
+      RecoveryDocument? stored = File.Exists(recoveryFile) ? LoadRecoveryDocument(recoveryFile, workdir) : null;
+      // "Managed" by gclo's own word (its file, its flag), or only by what the
+      // repository looks like; the second is trusted less (see below).
+      bool managedByRecord = stored is not null || IsRecoveryManaged(repo);
+      bool managed = managedByRecord || WasWrittenWithoutAnIndex(repo);
+
+      ///////////////////////////////////////////////////////////////////////////////
+      // An empty repository counts as never checked out only while git has staged //
+      // nothing in it either: a branch started with "checkout --orphan" has no     //
+      // commit yet, and a working tree full of someone's files.                    //
+      ///////////////////////////////////////////////////////////////////////////////
+      bool emptyAndUntouched = repo.Info.IsHeadUnborn && repo.Index.Count == 0;
+      if(!managed && !IsCheckoutPending(repo) && !emptyAndUntouched)
+      {
+         throw new InvalidOperationException(
+             "This repository is checked out normally. Resolving its paths would replace the working tree with one that gclo "
+             + "writes itself, which could overwrite work in it, so gclo does not do that to a clone that was checked out. "
+             + $"To get it with renamed paths, move or delete the folder '{Path.TrimEndingDirectorySeparator(workdir)}' and sync again"
+             + (OperatingSystem.IsWindows() ? ", or use Clone in WSL in the desktop app." : "."));
+      }
+
+      // Only now: a refused apply leaves the repository's configuration as it was too.
       if(OperatingSystem.IsWindows())
       {
          repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
       }
 
-      string workdir = WorkingDirectoryOf(repo);
-      string recoveryFile = GetRecoveryFilePath(repo);
-      RecoveryDocument? previous = File.Exists(recoveryFile) ? LoadRecoveryDocument(recoveryFile, workdir) : null;
-      if(previous is not null)
+      PathRecovery recovery = MergeRecoveries(stored is null ? s_noRecovery : ToRecovery(stored), incoming ?? s_noRecovery);
+      Commit tip = TargetOf(repo);
+      if(incoming is null && IsAlreadyOnDisk(repo, stored, tip))
       {
-         recovery = MergeRecoveries(stored: ToRecovery(previous), incoming: recovery);
+         // (The file was read without complaint, so the repository is known to be
+         // managed from here on even if the file is lost.)
+         repo.Config.Set(RecoveryManagedKey, true, ConfigurationLevel.Local);
+         return;
       }
-
-      Commit tip = repo.Head.Tip
-          ?? throw new InvalidOperationException("Repository has no commits; nothing to materialize.");
 
       List<(string OriginalPath, string EffectivePath, Blob Blob)> entries = CollectEffectiveEntries(tip.Tree, recovery);
 
       // Validate BEFORE writing anything: a bad mapping (still-invalid segment, or
       // two originals landing on one destination) must fail cleanly with the
-      // effective paths, leaving the working tree untouched.
+      // effective paths, leaving the working tree and the branch untouched.
       IReadOnlyList<InvalidPathInfo> stillInvalid = WindowsPathValidator.ValidatePaths(entries.Select(e => e.EffectivePath));
       if(stillInvalid.Count > 0)
       {
          throw new InvalidRepositoryPathsException(stillInvalid);
       }
 
+      HashSet<string>? ours = stored?.MaterializedPaths is null ? null : new HashSet<string>(stored.MaterializedPaths, StringComparer.Ordinal);
+      var effectiveNow = new HashSet<string>(entries.Select(e => e.EffectivePath), StringComparer.Ordinal);
+      RefuseWhatCannotBeWritten(repo, workdir, entries, ours, effectiveNow, replaceOnlyWhatTheCommitHas: !managedByRecord);
+
+      /////////////////////////////////////////////////////////////////////////////
+      // The point of no return. Record first that this tree is being rewritten,   //
+      // and everything that was and will be on disk by gclo's doing; then move the //
+      // branch, describe the commit in the index (as after any checkout: without   //
+      // it git reports every file as deleted, and attribute lookups can already    //
+      // see the new tree), remove what left the tree, and write the files.         //
+      /////////////////////////////////////////////////////////////////////////////
+      SaveRecovery(repo, recovery, (ours ?? []).Union(effectiveNow, StringComparer.Ordinal), materializedTip: null);
+      repo.Config.Set(RecoveryManagedKey, true, ConfigurationLevel.Local);
+      MoveHeadTo(repo, tip);
+      repo.Index.Replace(tip.Tree);
+      repo.Index.Write();
 
       // A real checkout removes what left the tree; this materialization must too,
-      // or a recovery-managed working tree accumulates every file upstream ever
-      // deleted or renamed (#31). The previous apply's manifest says what it wrote.
-      var effectiveNow = new HashSet<string>(entries.Select(e => e.EffectivePath), StringComparer.Ordinal);
-      foreach(string stale in previous?.MaterializedPaths ?? [])
+      // or the working tree accumulates every file upstream ever deleted or renamed
+      // (#31).
+      foreach(string stale in ours ?? [])
       {
          if(!effectiveNow.Contains(stale))
          {
@@ -712,8 +795,10 @@ public sealed class LibGit2GitClient : IGitClient
       }
 
       // Parent folders are shared by many files; each is checked for a link once.
+      // Attribute files go first: they decide how the files after them are written
+      // (line endings), and a stale one on disk would otherwise outrank the index.
       var verifiedFolders = new HashSet<string>(StringComparer.Ordinal);
-      foreach((string? originalPath, string? effectivePath, Blob? blob) in entries)
+      foreach((string? originalPath, string? effectivePath, Blob? blob) in entries.OrderBy(e => IsAttributesFile(e.OriginalPath) ? 0 : 1))
       {
          ct.ThrowIfCancellationRequested();
 
@@ -725,25 +810,366 @@ public sealed class LibGit2GitClient : IGitClient
          content.CopyTo(file);
       }
 
-      SaveRecovery(repo, recovery, entries.Select(e => e.EffectivePath), tip.Sha);
+      SaveRecovery(repo, recovery, effectiveNow, tip.Sha);
       repo.Config.Set(CheckoutPendingKey, false, ConfigurationLevel.Local);
    }
 
 
 
    /// <summary>
-   /// Overlays <paramref name="incoming"/> onto <paramref name="stored"/>: renames
-   /// union with the incoming value winning on a shared original path; skips union.
+   /// The repository's own word that gclo wrote its working tree. Read from the
+   /// repository's configuration only: a value set for the user or the machine says
+   /// nothing about this folder.
+   /// </summary>
+   private static bool IsRecoveryManaged(Repository repo)
+       => repo.Config.Get<bool>(RecoveryManagedKey, ConfigurationLevel.Local)?.Value == true;
+
+
+
+   /// <summary>
+   /// True for a repository that gclo cloned (it carries gclo's checkout marker,
+   /// whatever its value), has commits, and has no index: git never checked it out,
+   /// so whatever tree is there was written by gclo. That is how a repository looks
+   /// that the released build resolved (it wrote files and no index), also after its
+   /// recovery file was lost. A clone made by git, with or without a checkout, has
+   /// no such marker and is not taken for one. The inference is still only an
+   /// inference (an index can be deleted by hand), so a tree recognised this way is
+   /// rewritten only where its files are what the current commit has
+   /// (<see cref="RefuseWhatCannotBeWritten"/>).
+   /// </summary>
+   private static bool WasWrittenWithoutAnIndex(Repository repo)
+       => !repo.Info.IsHeadUnborn
+           && repo.Config.Get<bool>(CheckoutPendingKey, ConfigurationLevel.Local) is not null
+           && !File.Exists(Path.Combine(repo.Info.Path, "index"));
+
+
+
+   /// <summary>
+   /// True when the current commit holds a path that cannot be created here. Only
+   /// then can a tree without an index be one that path recovery wrote: a repository
+   /// with nothing to rename is an ordinary clone whatever became of its index, and
+   /// takes the ordinary pull, which leaves local changes alone and marks nothing.
+   /// </summary>
+   private static bool HasPathsWindowsCannotCreate(Repository repo)
+       => OperatingSystem.IsWindows() && WindowsPathValidator.Validate(repo.Head.Tip.Tree).Count > 0;
+
+
+
+   /// <summary>
+   /// True when a pull has nothing to write: the branch already is at the commit to
+   /// write, and what gclo last wrote is that commit or one it builds on. In the
+   /// second case the commits on top were made here and origin brought nothing;
+   /// rewriting the tree to what was committed would throw away everything else in it.
+   /// </summary>
+   private static bool IsAlreadyOnDisk(Repository repo, RecoveryDocument? stored, Commit tip)
+   {
+      if(stored?.MaterializedTip is not { } written
+          || !string.Equals(repo.Head.Tip?.Sha, tip.Sha, StringComparison.Ordinal))
+      {
+         return false; // an apply is unfinished, or the branch still has to move
+      }
+
+      if(string.Equals(written, tip.Sha, StringComparison.Ordinal))
+      {
+         return true;
+      }
+
+      ///////////////////////////////////////////////////////////////////////////////
+      // The branch is ahead of what was written. That is "commits made here" only  //
+      // when origin has nothing beyond what was written. If origin does, the       //
+      // branch was moved to origin's commit and the tree was never written for it: //
+      // the released build moved the branch first, so a pull of its that failed    //
+      // half-way (a new invalid path, a cancel, a locked file) leaves exactly that. //
+      ///////////////////////////////////////////////////////////////////////////////
+      Commit? writtenCommit = ObjectId.TryParse(written, out ObjectId writtenId) ? repo.Lookup<Commit>(writtenId) : null;
+      if(writtenCommit is null)
+      {
+         return false;
+      }
+
+      Commit? upstream = repo.Info.IsHeadDetached ? null : repo.Head.TrackedBranch?.Tip;
+      bool originHasNothingNew = upstream is null
+          || string.Equals(repo.ObjectDatabase.FindMergeBase(upstream, writtenCommit)?.Sha, upstream.Sha, StringComparison.Ordinal);
+      return originHasNothingNew
+          && string.Equals(repo.ObjectDatabase.FindMergeBase(writtenCommit, tip)?.Sha, written, StringComparison.Ordinal);
+   }
+
+
+
+   private static bool IsAttributesFile(string repoPath)
+       => repoPath.EndsWith(".gitattributes", StringComparison.Ordinal)
+           && (repoPath.Length == ".gitattributes".Length || repoPath[^(".gitattributes".Length + 1)] == '/');
+
+
+
+   /// <summary>
+   /// The commit an apply writes. gclo moves a branch only to what origin has, and only
+   /// when that drops no commit (#147):
+   /// <list type="bullet">
+   /// <item>An empty repository (unborn HEAD): origin's tip for that branch, its first
+   /// checkout.</item>
+   /// <item>Origin has nothing the current commit lacks (no upstream, a detached HEAD,
+   /// the same commit, or commits made here on top of origin's): the current
+   /// commit.</item>
+   /// <item>The current commit is contained in origin's tip: origin's tip.</item>
+   /// <item>The histories diverged: origin's tip only when the current commit is one
+   /// origin's branch itself once pointed at (<see cref="WasOnceTheTipOf"/>). Then
+   /// nobody committed here and origin rewrote its history. Otherwise a refusal.</item>
+   /// </list>
+   /// </summary>
+   private static Commit TargetOf(Repository repo)
+   {
+      Commit? head = repo.Head.Tip;
+      if(head is null)
+      {
+         const string Prefix = "refs/heads/";
+         string targetRef = repo.Refs.Head.TargetIdentifier;
+         Commit? first = targetRef.StartsWith(Prefix, StringComparison.Ordinal)
+             ? repo.Branches["origin/" + targetRef[Prefix.Length..]]?.Tip
+             : null;
+         return first ?? throw new InvalidOperationException(
+             "This repository has no commits, and neither has its branch on origin; there is nothing to materialize.");
+      }
+
+      Branch? tracked = repo.Info.IsHeadDetached ? null : repo.Head.TrackedBranch;
+      Commit? upstream = tracked?.Tip;
+      if(upstream is null)
+      {
+         return head;
+      }
+
+      string? mergeBase = repo.ObjectDatabase.FindMergeBase(head, upstream)?.Sha;
+      if(string.Equals(mergeBase, upstream.Sha, StringComparison.Ordinal))
+      {
+         return head;
+      }
+
+      if(string.Equals(mergeBase, head.Sha, StringComparison.Ordinal) || WasOnceTheTipOf(repo, tracked!, head))
+      {
+         return upstream;
+      }
+
+      throw new InvalidOperationException(tracked!.IsRemote
+          ? $"'{repo.Head.FriendlyName}' and its branch on origin have diverged, and nothing here shows that the commits "
+            + "in this folder came from origin: either commits were made here, or origin's history was rewritten and the "
+            + "record of what was fetched is gone. gclo only fast-forwards and never merges. "
+            + "Push or reset commits made here, or delete the folder to re-clone."
+          : $"'{repo.Head.FriendlyName}' and the local branch it tracks ('{tracked.FriendlyName}') have diverged. "
+            + "gclo only fast-forwards and never merges. Merge or reset by hand, or check out a branch that tracks origin.");
+   }
+
+
+
+   /// <summary>
+   /// True when origin's branch itself pointed at <paramref name="commit"/> at some
+   /// time, going by the reflog of the remote-tracking branch <paramref name="tracked"/>:
+   /// every clone, fetch, and pull that moves the branch adds an entry saying where
+   /// it went, and only those entries count. Other things write there too (a push
+   /// records the commit that was made here, a hand-made update records anything),
+   /// and they do not. Where the branch was before the oldest entry that is left
+   /// (older ones expire) counts as well. A branch that tracks another local branch
+   /// has no such record of origin, and nothing is taken from its reflog.
+   /// </summary>
+   private static bool WasOnceTheTipOf(Repository repo, Branch tracked, Commit commit)
+   {
+      if(!tracked.IsRemote)
+      {
+         return false;
+      }
+
+      ReflogEntry? oldest = null;
+      foreach(ReflogEntry entry in repo.Refs.Log(tracked.CanonicalName)) // newest first
+      {
+         if(entry.To == commit.Id && IsWrittenByAFetch(entry))
+         {
+            return true;
+         }
+         oldest = entry;
+      }
+      return oldest is not null && oldest.From == commit.Id;
+   }
+
+
+
+   /// <summary>True for a reflog entry whose message says a clone, a fetch, or a pull wrote it.</summary>
+   private static bool IsWrittenByAFetch(ReflogEntry entry)
+   {
+      string message = entry.Message ?? "";
+      return message.StartsWith("fetch", StringComparison.Ordinal)
+          || message.StartsWith("pull", StringComparison.Ordinal)
+          || message.StartsWith("clone", StringComparison.Ordinal);
+   }
+
+
+
+   /// <summary>Points the current branch at <paramref name="tip"/>, creating it (with its upstream) for an empty repository.</summary>
+   private static void MoveHeadTo(Repository repo, Commit tip)
+   {
+      if(repo.Info.IsHeadUnborn)
+      {
+         string targetRef = repo.Refs.Head.TargetIdentifier;
+         repo.Refs.Add(targetRef, tip.Id);
+         Branch local = repo.Branches[targetRef["refs/heads/".Length..]];
+         repo.Branches.Update(local, b =>
+         {
+            b.Remote = "origin";
+            b.UpstreamBranch = targetRef;
+         });
+         return;
+      }
+
+      if(!string.Equals(repo.Head.Tip.Sha, tip.Sha, StringComparison.Ordinal))
+      {
+         repo.Refs.UpdateTarget(repo.Refs.Head.ResolveToDirectReference(), tip.Id);
+      }
+   }
+
+
+
+   /// <summary>
+   /// Finds, before anything has changed, what it can of what would make the apply
+   /// fail half-way or write over something that is not gclo's: another git process at
+   /// work, a destination that is not a usable path in the working tree, a link on the
+   /// way to it or to a file that is to be removed, a file sitting where a folder is
+   /// needed, a folder holding someone's files where a file is needed, and, where
+   /// gclo has no record of having written the tree, a file at a destination that is
+   /// not what the current commit has there. Failing here leaves the branch, the
+   /// index and every file as they were (#147). What only shows while writing (a file
+   /// held open) still fails later; the next pull then completes the apply.
+   /// </summary>
+   /// <remarks>
+   /// <c>replaceOnlyWhatTheCommitHas</c> is true when nothing records that gclo wrote
+   /// this tree (a clone that was never checked out, an empty one, a tree recognised
+   /// only by its shape). A file that is already at a destination is then replaced
+   /// only when it is, byte for byte, what the current commit has for that path: an
+   /// unfinished checkout's file, not something a person put there or changed.
+   /// </remarks>
+   private static void RefuseWhatCannotBeWritten(
+       Repository repo,
+       string workdir,
+       List<(string OriginalPath, string EffectivePath, Blob Blob)> entries,
+       HashSet<string>? ours,
+       HashSet<string> effectiveNow,
+       bool replaceOnlyWhatTheCommitHas)
+   {
+      if(File.Exists(Path.Combine(repo.Info.Path, "index.lock")))
+      {
+         throw new InvalidOperationException(
+             "Another git process is working in this repository (its index is locked). Try again when it has finished; "
+             + $"if no git is running, one that crashed left '{Path.Combine(repo.Info.Path, "index.lock")}' behind, and deleting that file clears it.");
+      }
+
+      Tree? current = replaceOnlyWhatTheCommitHas ? repo.Head.Tip?.Tree : null;
+
+      // The file system decides whether two names are one file; on Windows it does
+      // not tell 'Docs' from 'docs', so neither does the question "is this ours".
+      var oursAsOnDisk = new HashSet<string>(
+          ours ?? [], OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+      var verifiedFolders = new HashSet<string>(StringComparer.Ordinal);
+      var checkedFolders = new HashSet<string>(StringComparer.Ordinal);
+      foreach((string? originalPath, string? effectivePath, _) in entries)
+      {
+         WorkingTree.Verify(workdir, effectivePath, verifiedFolders);
+
+         string full = Path.Combine(workdir, effectivePath.Replace('/', Path.DirectorySeparatorChar));
+         if(replaceOnlyWhatTheCommitHas && File.Exists(full) && !IsWhatTheCommitHas(full, originalPath, current))
+         {
+            throw new InvalidOperationException(
+                $"'{effectivePath}' is already in this folder, and it is not a file gclo has a record of writing "
+                + "or one the current commit has in that form, so it is not gclo's to replace. Move or delete it, then try again; "
+                + "if that goes for many files, move or delete the whole folder and sync again.");
+         }
+
+         string? foreign = WorkingTree.FilesUnder(workdir, effectivePath).FirstOrDefault(file => !oursAsOnDisk.Contains(file));
+         if(foreign is not null)
+         {
+            throw new InvalidOperationException(
+                $"'{effectivePath}' is a folder with files in it ('{foreign}' is one), where the repository has a file. "
+                + "Move or delete the folder, then try again.");
+         }
+
+         for(int slash = effectivePath.IndexOf('/', StringComparison.Ordinal); slash > 0; slash = effectivePath.IndexOf('/', slash + 1))
+         {
+            string folder = effectivePath[..slash];
+            if(checkedFolders.Add(folder)
+                && !oursAsOnDisk.Contains(folder)
+                && File.Exists(Path.Combine(workdir, folder.Replace('/', Path.DirectorySeparatorChar))))
+            {
+               throw new InvalidOperationException(
+                   $"'{folder}' is a file in this folder, and the repository has a folder of that name. "
+                   + "Move or delete the file, then try again.");
+            }
+         }
+      }
+
+      // What left the tree is removed through real folders only, like what is written.
+      foreach(string stale in ours ?? [])
+      {
+         if(!effectiveNow.Contains(stale))
+         {
+            WorkingTree.Verify(workdir, stale, verifiedFolders);
+         }
+      }
+   }
+
+
+
+   /// <summary>
+   /// True when the file at <paramref name="full"/> holds exactly what a checkout of
+   /// <paramref name="commitTree"/> writes for <paramref name="originalPath"/>
+   /// (line-ending conversion included). False when the commit has no such file.
+   /// </summary>
+   private static bool IsWhatTheCommitHas(string full, string originalPath, Tree? commitTree)
+   {
+      if(commitTree?[originalPath]?.Target is not Blob blob)
+      {
+         return false;
+      }
+
+      using Stream expected = blob.GetContentStream(new FilteringOptions(originalPath));
+      using var actual = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+      byte[] expectedBuffer = new byte[81920];
+      byte[] actualBuffer = new byte[81920];
+      while(true)
+      {
+         int expectedRead = expected.ReadAtLeast(expectedBuffer, expectedBuffer.Length, throwOnEndOfStream: false);
+         int actualRead = actual.ReadAtLeast(actualBuffer, actualBuffer.Length, throwOnEndOfStream: false);
+         if(expectedRead != actualRead || !expectedBuffer.AsSpan(0, expectedRead).SequenceEqual(actualBuffer.AsSpan(0, actualRead)))
+         {
+            return false;
+         }
+         if(expectedRead == 0)
+         {
+            return true;
+         }
+      }
+   }
+
+
+
+   /// <summary>
+   /// Overlays <paramref name="incoming"/> onto <paramref name="stored"/>. The newer
+   /// choice for a path wins whatever kind it is: an incoming rename replaces a stored
+   /// rename or a stored skip of that path, and an incoming skip replaces a stored
+   /// rename. Everything else is kept from both.
    /// </summary>
    private static PathRecovery MergeRecoveries(PathRecovery stored, PathRecovery incoming)
    {
-      var renames = new Dictionary<string, string>(stored.SegmentRenames, StringComparer.Ordinal);
+      var renames = new Dictionary<string, string>(StringComparer.Ordinal);
+      foreach((string? originalPath, string? replacement) in stored.SegmentRenames)
+      {
+         if(!incoming.SkippedPaths.Contains(originalPath))
+         {
+            renames[originalPath] = replacement;
+         }
+      }
       foreach((string? originalPath, string? replacement) in incoming.SegmentRenames)
       {
          renames[originalPath] = replacement;
       }
 
-      var skips = new HashSet<string>(stored.SkippedPaths, StringComparer.Ordinal);
+      var skips = new HashSet<string>(
+          stored.SkippedPaths.Where(path => !incoming.SegmentRenames.ContainsKey(path)), StringComparer.Ordinal);
       skips.UnionWith(incoming.SkippedPaths);
 
       return new PathRecovery(renames, skips);
@@ -855,25 +1281,30 @@ public sealed class LibGit2GitClient : IGitClient
 
 
    /// <summary>
-   /// Moves the current branch's ref to its upstream tip without touching the working
-   /// tree. Only used for never-checked-out (marker) and recovery-managed repos, whose
-   /// local branch can hold no local work — so a plain ref move is safe where the
-   /// normal pull path would insist on a fast-forward merge.
+   /// Moves the current branch to where origin's is, without touching the working
+   /// tree, for a repository whose clone was never checked out. By the rule every
+   /// branch move here follows (<see cref="TargetOf"/>): a commit somebody made in
+   /// it by hand is not dropped.
    /// </summary>
    private static void AdvanceHeadToTrackedTip(Repository repo)
    {
-      Branch tracked = repo.Head.TrackedBranch;
-      if(tracked?.Tip is null || string.Equals(repo.Head.Tip?.Sha, tracked.Tip.Sha, StringComparison.Ordinal))
+      if(repo.Info.IsHeadUnborn)
       {
          return;
       }
-      repo.Refs.UpdateTarget(repo.Refs.Head.ResolveToDirectReference(), tracked.Tip.Id);
+
+      Commit target = TargetOf(repo);
+      if(!string.Equals(repo.Head.Tip.Sha, target.Sha, StringComparison.Ordinal))
+      {
+         repo.Refs.UpdateTarget(repo.Refs.Head.ResolveToDirectReference(), target.Id);
+      }
    }
 
 
 
+   /// <summary>The never-checked-out marker, from the repository's own configuration only.</summary>
    private static bool IsCheckoutPending(Repository repo)
-       => repo.Config.Get<bool>(CheckoutPendingKey)?.Value == true;
+       => repo.Config.Get<bool>(CheckoutPendingKey, ConfigurationLevel.Local)?.Value == true;
 
 
 
@@ -886,7 +1317,7 @@ public sealed class LibGit2GitClient : IGitClient
    /// <param name="SegmentRenames">Original path to replacement path map; null when absent from the file.</param>
    /// <param name="SkippedPaths">Paths omitted from the working tree; null when absent from the file.</param>
    /// <param name="MaterializedPaths">Effective paths the last apply wrote, so the next one can delete what left the tree; null in files from before this field existed.</param>
-   /// <param name="MaterializedTip">SHA of the commit the last apply materialized; null in older files.</param>
+   /// <param name="MaterializedTip">SHA of the commit the last apply materialized; null in older files, and while an apply is under way (so a tree left unfinished is never taken for done).</param>
    private sealed record RecoveryDocument(
        Dictionary<string, string>? SegmentRenames,
        List<string>? SkippedPaths,
@@ -896,13 +1327,13 @@ public sealed class LibGit2GitClient : IGitClient
 
 
    private static void SaveRecovery(
-       Repository repo, PathRecovery recovery, IEnumerable<string> materializedPaths, string tipSha)
+       Repository repo, PathRecovery recovery, IEnumerable<string> materializedPaths, string? materializedTip)
    {
       var document = new RecoveryDocument(
           new Dictionary<string, string>(recovery.SegmentRenames, StringComparer.Ordinal),
           recovery.SkippedPaths.Order(StringComparer.Ordinal).ToList(),
           materializedPaths.Order(StringComparer.Ordinal).ToList(),
-          tipSha);
+          materializedTip);
 
       // Atomic replace: a crash mid-write must not leave a truncated document that
       // fails every later pull of this repository (#31).

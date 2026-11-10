@@ -86,6 +86,17 @@ internal static class WorkingTree
 
 
    /// <summary>
+   /// Everything <see cref="Create"/> checks before it touches the disk, without
+   /// touching it: the path resolves inside the working directory, and no folder on
+   /// the way is a link. For finding out up front, before an operation that cannot be
+   /// undone begins, whether its writes can succeed.
+   /// </summary>
+   public static void Verify(string workdir, string repoPath, ISet<string>? verifiedFolders = null)
+       => RefuseLinkOnTheWay(workdir, Resolve(workdir, repoPath), verifiedFolders);
+
+
+
+   /// <summary>
    /// Opens <paramref name="repoPath"/> for writing as a new, empty file, creating its
    /// folders. Whatever file is already there is removed first, read-only or not, so
    /// the content never goes through a link (symbolic or hard) left in its place.
@@ -109,13 +120,20 @@ internal static class WorkingTree
 
 
    /// <summary>
-   /// Deletes <paramref name="repoPath"/> (a missing file is fine) and then the folders
-   /// it leaves empty, stopping at the working directory itself.
+   /// Deletes the file <paramref name="repoPath"/> (a missing one is fine) and then
+   /// the folders it leaves empty, stopping at the working directory itself. A folder
+   /// that sits there now is left alone with everything in it: the file gclo wrote
+   /// is gone already, and whoever put the folder there owns it.
    /// </summary>
    public static void Delete(string workdir, string repoPath)
    {
       string full = Resolve(workdir, repoPath);
       RefuseLinkOnTheWay(workdir, full, verifiedFolders: null);
+      var folder = new DirectoryInfo(full);
+      if(folder.Exists && folder.LinkTarget is null)
+      {
+         return;
+      }
       RemoveFile(full);
 
       string root = Root(workdir);
@@ -213,9 +231,67 @@ internal static class WorkingTree
 
 
    /// <summary>
-   /// Removes what is at <paramref name="full"/> when it is a file or a link, read-only
-   /// or not: a link is removed itself (even one whose target is gone, even one to a
-   /// directory), never what it points at.
+   /// The files inside the real folder at <paramref name="repoPath"/>, as paths
+   /// relative to the working directory; nothing when no folder is there, or a link
+   /// is. Links inside it are not entered and not listed.
+   /// </summary>
+   public static IEnumerable<string> FilesUnder(string workdir, string repoPath)
+   {
+      var folder = new DirectoryInfo(Resolve(workdir, repoPath));
+      return folder.Exists && folder.LinkTarget is null ? FilesIn(folder, repoPath) : [];
+   }
+
+
+
+   private static IEnumerable<string> FilesIn(DirectoryInfo folder, string repoPath)
+   {
+      foreach(FileInfo file in folder.EnumerateFiles())
+      {
+         yield return repoPath + "/" + file.Name;
+      }
+
+      foreach(DirectoryInfo child in folder.EnumerateDirectories())
+      {
+         if(child.LinkTarget is not null)
+         {
+            continue;
+         }
+         foreach(string inner in FilesIn(child, repoPath + "/" + child.Name))
+         {
+            yield return inner;
+         }
+      }
+   }
+
+
+
+   /// <summary>
+   /// Removes a folder that holds nothing but empty folders and links, bottom up.
+   /// Called only for a folder already found to hold no file.
+   /// </summary>
+   private static void RemoveEmptyFolders(DirectoryInfo folder)
+   {
+      foreach(DirectoryInfo child in folder.EnumerateDirectories())
+      {
+         if(child.LinkTarget is not null)
+         {
+            child.Delete(); // a link is nobody's content; remove the link itself
+            continue;
+         }
+         RemoveEmptyFolders(child);
+      }
+
+      folder.Attributes = FileAttributes.Directory;
+      folder.Delete();
+   }
+
+
+
+   /// <summary>
+   /// Removes what is at <paramref name="full"/> when it is a file, a link, or a folder
+   /// that holds no files, read-only or not: a link is removed itself (even one whose
+   /// target is gone, even one to a directory), never what it points at. A folder that
+   /// still holds files is refused.
    /// </summary>
    private static void RemoveFile(string full)
    {
@@ -223,6 +299,22 @@ internal static class WorkingTree
       if(directory.LinkTarget is not null && directory.Attributes.HasFlag(FileAttributes.Directory))
       {
          directory.Delete(); // a junction or a symbolic link to a directory
+         return;
+      }
+
+      if(directory.Exists)
+      {
+         // A real folder where a file belongs (upstream turned a folder into a file).
+         // Whatever the tree had in it is gone by now; if files remain they are not
+         // gclo's to remove, and empty folders are nobody's. Looked at as a whole
+         // first: a folder that is refused loses nothing, not even an empty subfolder.
+         if(FilesIn(directory, directory.Name).Any())
+         {
+            throw new InvalidOperationException(
+                $"'{directory.FullName}' is a folder with files in it, where the repository has a file. "
+                + "Move or delete the folder, then try again.");
+         }
+         RemoveEmptyFolders(directory);
          return;
       }
 

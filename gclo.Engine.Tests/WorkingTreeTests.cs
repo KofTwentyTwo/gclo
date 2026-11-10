@@ -330,6 +330,77 @@ public sealed class WorkingTreeTests : IDisposable
 
 
    [Fact]
+   public void Create_WhereAFolderWithoutFilesSits_ReplacesItWithTheFile()
+   {
+      // Upstream turned a folder into a file; its files left with the old tree, and
+      // empty folders are nobody's.
+      Directory.CreateDirectory(Path.Combine(_workdir, "docs", "empty", "deeper"));
+
+      using(FileStream file = WorkingTree.Create(_workdir, "docs"))
+      {
+         file.Write("now a file"u8);
+      }
+
+      Assert.Equal("now a file", File.ReadAllText(Path.Combine(_workdir, "docs")));
+   }
+
+
+
+   [Fact]
+   public void Create_WhereAFolderHoldingOnlyALinkSits_ReplacesIt_AndLeavesTheLinksTargetAlone()
+   {
+      File.WriteAllText(Path.Combine(_outside, "kept.txt"), "kept");
+      Directory.CreateDirectory(Path.Combine(_workdir, "docs", "inner"));
+      LinkDirectory(Path.Combine(_workdir, "docs", "inner", "linked"), _outside);
+
+      using(FileStream file = WorkingTree.Create(_workdir, "docs"))
+      {
+         file.Write("now a file"u8);
+      }
+
+      Assert.Equal("now a file", File.ReadAllText(Path.Combine(_workdir, "docs")));
+      Assert.Equal("kept", File.ReadAllText(Path.Combine(_outside, "kept.txt")));
+   }
+
+
+
+   [Fact]
+   public void Verify_ChecksWhatCreateChecks_WithoutTouchingTheDisk()
+   {
+      var verified = new HashSet<string>(StringComparer.Ordinal);
+      Directory.CreateDirectory(Path.Combine(_workdir, "src"));
+      LinkDirectory(Path.Combine(_workdir, "vendor"), _outside);
+
+      WorkingTree.Verify(_workdir, "src/app/main.cs", verified);
+      WorkingTree.Verify(_workdir, "readme.txt");
+      Assert.Throws<InvalidOperationException>(() => WorkingTree.Verify(_workdir, "../outside/x.txt", verified));
+      Assert.Throws<InvalidOperationException>(() => WorkingTree.Verify(_workdir, ".git/config", verified));
+      Assert.Throws<InvalidOperationException>(() => WorkingTree.Verify(_workdir, "vendor/lib.txt", verified));
+
+      Assert.False(Directory.Exists(Path.Combine(_workdir, "src", "app")), "nothing is created by a check");
+      Assert.False(File.Exists(Path.Combine(_workdir, "readme.txt")));
+      Assert.Contains(Path.Combine(_workdir, "src"), verified);
+      Assert.Empty(Directory.EnumerateFileSystemEntries(_outside));
+   }
+
+
+
+   [Fact]
+   public void Create_WhereAFolderWithFilesSits_IsRefused_AndTheFilesSurvive()
+   {
+      string mine = Path.Combine(_workdir, "docs", "deeper", "mine.txt");
+      Directory.CreateDirectory(Path.GetDirectoryName(mine)!);
+      File.WriteAllText(mine, "not gclo's to remove");
+
+      InvalidOperationException ex = Assert.Throws<InvalidOperationException>(() => WorkingTree.Create(_workdir, "docs"));
+
+      Assert.Contains("is a folder with files in it", ex.Message);
+      Assert.Equal("not gclo's to remove", File.ReadAllText(mine));
+   }
+
+
+
+   [Fact]
    public void Create_OutsideOrInGit_IsRefused_BeforeAnythingIsTouched()
    {
       Directory.CreateDirectory(Path.Combine(_workdir, ".git"));
@@ -374,6 +445,74 @@ public sealed class WorkingTreeTests : IDisposable
 
       Assert.False(Directory.Exists(Path.Combine(_workdir, "a", "b")));
       Assert.True(File.Exists(Path.Combine(_workdir, "a", "keep.txt")));
+   }
+
+
+
+   [Fact]
+   public void Delete_WhereAFolderNowSits_LeavesIt_WithEverythingInIt()
+   {
+      Directory.CreateDirectory(Path.Combine(_workdir, "notes", "empty"));
+      File.WriteAllText(Path.Combine(_workdir, "notes", "mine.txt"), "mine");
+
+      WorkingTree.Delete(_workdir, "notes");
+
+      Assert.Equal("mine", File.ReadAllText(Path.Combine(_workdir, "notes", "mine.txt")));
+      Assert.True(Directory.Exists(Path.Combine(_workdir, "notes", "empty")));
+   }
+
+
+
+   [Fact]
+   public void Create_WhereAFolderWithFilesSits_IsRefused_BeforeAnythingInItIsTouched()
+   {
+      Directory.CreateDirectory(Path.Combine(_workdir, "docs", "aaa-empty"));
+      Directory.CreateDirectory(Path.Combine(_workdir, "docs", "zzz"));
+      File.WriteAllText(Path.Combine(_workdir, "docs", "zzz", "mine.txt"), "mine");
+      LinkDirectory(Path.Combine(_workdir, "docs", "bbb-link"), _outside);
+
+      Assert.Throws<InvalidOperationException>(() => WorkingTree.Create(_workdir, "docs").Dispose());
+
+      // Not even the empty folder or the link that come before the file is found.
+      Assert.True(Directory.Exists(Path.Combine(_workdir, "docs", "aaa-empty")));
+      Assert.True(Directory.Exists(Path.Combine(_workdir, "docs", "bbb-link")));
+      Assert.Equal("mine", File.ReadAllText(Path.Combine(_workdir, "docs", "zzz", "mine.txt")));
+   }
+
+
+
+   [Fact]
+   public void Create_WhereAReadOnlyEmptyFolderSits_ReplacesIt()
+   {
+      var folder = new DirectoryInfo(Path.Combine(_workdir, "docs"));
+      folder.Create();
+      folder.Attributes |= FileAttributes.ReadOnly;
+
+      using(FileStream file = WorkingTree.Create(_workdir, "docs"))
+      {
+         file.Write("now a file"u8);
+      }
+
+      Assert.Equal("now a file", File.ReadAllText(Path.Combine(_workdir, "docs")));
+   }
+
+
+
+   [Fact]
+   public void FilesUnder_ListsTheFilesOfARealFolder_NotThoseBehindALink()
+   {
+      Directory.CreateDirectory(Path.Combine(_workdir, "docs", "deeper"));
+      File.WriteAllText(Path.Combine(_workdir, "docs", "a.txt"), "a");
+      File.WriteAllText(Path.Combine(_workdir, "docs", "deeper", "b.txt"), "b");
+      File.WriteAllText(Path.Combine(_outside, "outside.txt"), "o");
+      LinkDirectory(Path.Combine(_workdir, "docs", "linked"), _outside);
+      LinkDirectory(Path.Combine(_workdir, "whole-link"), _outside);
+      File.WriteAllText(Path.Combine(_workdir, "plain.txt"), "p");
+
+      Assert.Equal(["docs/a.txt", "docs/deeper/b.txt"], WorkingTree.FilesUnder(_workdir, "docs").Order(StringComparer.Ordinal), StringComparer.Ordinal);
+      Assert.Empty(WorkingTree.FilesUnder(_workdir, "whole-link"));
+      Assert.Empty(WorkingTree.FilesUnder(_workdir, "plain.txt"));
+      Assert.Empty(WorkingTree.FilesUnder(_workdir, "not/there"));
    }
 
 

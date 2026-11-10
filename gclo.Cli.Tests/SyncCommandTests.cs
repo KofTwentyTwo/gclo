@@ -468,7 +468,9 @@ public sealed class SyncCommandTests : IDisposable
       Assert.Contains("\"sanitized\":[{\"repo\":\"fixable\",\"renamed\":1,\"skipped\":1,\"skippedPaths\":[\"dup\"]}]", json);
       Assert.Contains("\"repo\":\"stuck\"", json);
       Assert.Contains("path sanitization failed: disk full", json);
-      Assert.Contains("\"invalidPaths\":null", json); // a non-path failure has no list
+      // The paths that made it fail in the first place are still what is wrong with it.
+      Assert.Contains("\"path\":\"bad:name.txt\"", json);
+      Assert.DoesNotContain("\"invalidPaths\":null", json);
    }
 
 
@@ -716,6 +718,27 @@ public sealed class SyncCommandTests : IDisposable
 
       Assert.Equal(1, code);
       Assert.Contains("path sanitization failed", console.Error);
+   }
+
+
+
+   [Fact]
+   public async Task SanitizePaths_RecoveryRefused_StillNamesThePathsInTheDocument()
+   {
+      using var console = new ConsoleCapture();
+      var lister = new FakeRepoLister { Result = [Repo("a")] };
+      var git = new FakeGit
+      {
+         OnClone = (_, _, _, _, _) => Task.FromException(InvalidPaths()),
+         OnApplyRecovery = (_, _, _) => Task.FromException(new InvalidOperationException("This repository is checked out normally.")),
+      };
+
+      int code = await Run(lister, git, "--org", "acme", "--target", Target, "--token-env", EnvVar, "--sanitize-paths", "--json");
+
+      Assert.Equal(1, code);
+      Assert.Contains("path sanitization failed: This repository is checked out normally.", console.Out);
+      Assert.Contains("\"path\":\"bad:name.txt\"", console.Out);
+      Assert.DoesNotContain("\"invalidPaths\":null", console.Out);
    }
 
 

@@ -670,9 +670,12 @@ internal static class SyncCommand
       }
       catch(Exception ex)
       {
+         // The paths that made the repository fail are still what is wrong with it,
+         // whatever stopped the sanitization (for one, a clone that was checked out
+         // normally is never rewritten): the report keeps them.
          progress.Report(new RepoProgress(
              pending.Repo, SyncStatus.Failed, $"path sanitization failed: {ex.Message}",
-             InvalidPaths: (ex as InvalidRepositoryPathsException)?.Paths));
+             InvalidPaths: (ex as InvalidRepositoryPathsException)?.Paths ?? pending.Paths));
          return false;
       }
    }

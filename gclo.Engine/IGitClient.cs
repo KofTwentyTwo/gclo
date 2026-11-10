@@ -41,15 +41,24 @@ public interface IGitClient
 
 
    /// <summary>
-   /// Materializes the working tree of a fetched-but-never-checked-out repository
-   /// (one whose clone failed with <see cref="InvalidRepositoryPathsException"/>)
-   /// by writing HEAD's blobs to disk with <paramref name="recovery"/>'s renames
-   /// and skips applied. Any previously persisted recovery is merged in first,
-   /// with <paramref name="recovery"/> winning on conflicts, so a repository that
-   /// gains new invalid paths can be fixed without restating earlier choices.
-   /// Throws <see cref="InvalidRepositoryPathsException"/> when the effective
-   /// (post-mapping) path set is still invalid or collides; on success the merged
-   /// recovery is persisted so later pulls re-apply it to new commits.
+   /// Writes the working tree of a repository whose paths Windows cannot create, with
+   /// <paramref name="recovery"/>'s renames and skips applied. It applies to a
+   /// repository that was fetched but never checked out (its clone failed with
+   /// <see cref="InvalidRepositoryPathsException"/>, or it was empty) and to one an
+   /// earlier call already wrote this way, for which it also brings in origin's new
+   /// commits. Any previously persisted recovery is merged in first, the newer choice
+   /// for a path winning, so a repository that gains new invalid paths can be fixed
+   /// without restating earlier choices.
    /// </summary>
+   /// <remarks>
+   /// The tree is written by hand, with force, so this refuses
+   /// (<see cref="InvalidOperationException"/>) a clone that was checked out
+   /// normally: that tree may hold someone's work. It moves a branch only to the
+   /// tip of the branch it tracks, and off the current commit only when that is
+   /// contained in that tip or was itself once origin's tip. Throws
+   /// <see cref="InvalidRepositoryPathsException"/> when the effective path set is
+   /// still invalid or collides, before anything is changed; on success the merged
+   /// recovery is persisted so later pulls re-apply it to new commits.
+   /// </remarks>
    Task ApplyRecoveryAsync(string path, PathRecovery recovery, CancellationToken cancellationToken);
 }

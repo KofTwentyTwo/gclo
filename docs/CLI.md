@@ -158,12 +158,31 @@ With `--sanitize-paths`, gclo checks such a repository out anyway:
   upstream tip has not moved. A later sync that brings *new* invalid paths not
   covered by the stored mapping fails with those paths listed — sync again with
   `--sanitize-paths` (or use the GUI's **Resolve…** dialog) and the new renames
-  and skips are merged into the stored mapping. Use `--include <repo>` to
-  target just that repository.
+  and skips are merged into the stored mapping; a newer choice for a path
+  replaces the stored one. Use `--include <repo>` to target just that
+  repository.
+- A repository that was already checked out normally is never rewritten this
+  way. When an update brings such a repository its first invalid path, it
+  fails with those paths listed; with `--sanitize-paths` the failure says
+  that the repository is checked out normally, and nothing in it is changed:
+  its working tree may hold work, and writing it by hand could destroy that.
+  To get it with the renames, move or delete its folder and sync again (the
+  fresh clone is then sanitized), or use the desktop app's **Clone in WSL**.
+  The same holds when the paths of a clone that was never checked out, or of
+  an empty one, are resolved and files were put into its folder by hand: a file
+  that is already where the repository has one, and is not what an unfinished
+  checkout would have left there, is not replaced by the renaming.
 
 Only the working tree is renamed — the repository's history and index still hold
-the original paths, so `git status` reports the renamed and skipped files as
-local changes. Treat a sanitized repository as a read-only mirror.
+the original paths, so `git status` reports renamed and skipped paths as local
+changes. Treat a sanitized repository as a read-only mirror: later syncs
+rewrite its working tree, so edits made there are overwritten. A commit made
+there is not dropped: while origin has nothing new, a sync leaves the tree as
+it is, and once origin has moved on as well the sync fails for that
+repository, as it does for any clone with local commits. The branch is only
+ever moved to the tip of the branch it tracks: forward, or, when origin's
+history was rewritten, off a commit that this clone's record of earlier
+fetches shows was origin's own.
 
 #### `--json`
 
@@ -181,7 +200,8 @@ run ends (also on cancellation):
 - `type` is always `"summary"`.
 - `failures[].invalidPaths` is the **full** list of offending paths when the
   failure was Windows path validation (the message itself only quotes the
-  first three); `null` for any other failure.
+  first three), also when `--sanitize-paths` then could not fix the repository
+  (`error` says why); `null` for any other failure.
 - `sanitized[]` lists the repositories `--sanitize-paths` checked out with
   renames and skips; they are counted under `cloned`, but `skippedPaths` are
   not on disk.
