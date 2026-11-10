@@ -118,7 +118,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       _orgLister = orgLister ?? new GitHubOrganizationLister();
       _progressFactory = progressFactory ?? (handler => new Progress<RepoProgress>(handler));
       _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
-      _log = log ?? new FileActivityLog();
+      _log = log ?? new FileActivityLog(GcloPaths.LogDirectory);
       _account = account;
       _accountsStore = accountsStore;
       Organization = "";

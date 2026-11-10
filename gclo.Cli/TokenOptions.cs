@@ -153,9 +153,18 @@ internal sealed class TokenOptions
 
    private static string FromStdin()
    {
-      string? line = Console.IsInputRedirected
-          ? Console.In.ReadLine()?.Trim()
-          : ReadInteractiveToken();
+      string? line;
+      Terminal.IsReadingInput = true;
+      try
+      {
+         line = Console.IsInputRedirected
+             ? Console.In.ReadLine()?.Trim()
+             : ReadInteractiveToken();
+      }
+      finally
+      {
+         Terminal.IsReadingInput = false;
+      }
 
       if(string.IsNullOrEmpty(line))
       {

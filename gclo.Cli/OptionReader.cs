@@ -58,11 +58,23 @@ internal sealed class OptionReader
    /// argument. A following token that itself starts with '--' is treated as a
    /// missing value (use '--name=--literal' to pass such a value literally).
    /// </summary>
-   public string RequireValue()
+   public string RequireValue() => RequireValue(mayBeEmpty: false);
+
+
+
+   /// <summary>
+   /// The value for <see cref="Current"/>, which may be empty: '--note=' means the
+   /// same as '--note ""', an empty text.
+   /// </summary>
+   public string RequireValueOrEmpty() => RequireValue(mayBeEmpty: true);
+
+
+
+   private string RequireValue(bool mayBeEmpty)
    {
       if(_inlineValue is not null)
       {
-         if(_inlineValue.Length == 0)
+         if(_inlineValue.Length == 0 && !mayBeEmpty)
          {
             throw new CliUsageException($"Option '{Current}' requires a value.");
          }

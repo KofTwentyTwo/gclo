@@ -754,4 +754,81 @@ public sealed class SyncCommandTests : IDisposable
       Assert.Equal(1, code);
       Assert.Contains("and 5 more invalid paths", console.Error);
    }
+
+
+
+   // ---------------------------------------------------------------- a dry run that was canceled (#159)
+
+   [Theory]
+   [InlineData(false)]
+   [InlineData(true)]
+   public async Task DryRun_CanceledWhileListing_SaysSo_AndDoesNotPrintAnEmptyPlan(bool json)
+   {
+      using var console = new ConsoleCapture();
+      using var cts = new CancellationTokenSource();
+      cts.Cancel();
+      string[] args = json
+          ? ["--org", "acme", "--target", Target, "--token-env", EnvVar, "--dry-run", "--json"]
+          : ["--org", "acme", "--target", Target, "--token-env", EnvVar, "--dry-run"];
+
+      int code = await SyncCommand.RunAsync(args, new FakeRepoLister { Result = [Repo("a")] }, new FakeGit(), Open, new NullLog(), cts.Token);
+
+      Assert.Equal(ExitCodes.Partial, code);
+      Assert.Contains("Canceled.", console.Error);
+      Assert.Equal("", console.Out); // no plan, and no document that says "nothing to do"
+   }
+
+
+
+   // ---------------------------------------------------------------- sync --account when the stores cannot be used (#159)
+
+   /// <summary>A vault whose reads fail the way Credential Manager's do when it cannot be used.</summary>
+   private sealed class UnreadableVault : ITokenVault
+   {
+      public void Store(Guid accountId, string token)
+      {
+      }
+
+      public string? TryRetrieve(Guid accountId)
+          => throw new System.ComponentModel.Win32Exception(1312, "CredReadW failed (error 1312) for target 'gclo:account:test'.");
+
+      public void Delete(Guid accountId)
+      {
+      }
+   }
+
+
+
+   [Fact]
+   public async Task Account_WhoseTokenCannotBeReadFromTheCredentialStore_IsAFatalError_NotAnUnexpectedOne()
+   {
+      Seed("work", "acme", orgSubfolder: false);
+      var vault = new UnreadableVault();
+      var lister = new FakeRepoLister { Result = [Repo("a")] };
+
+      CliErrorException ex = await Assert.ThrowsAsync<CliErrorException>(() => SyncCommand.RunAsync(
+          ["--account", "work"], lister, new FakeGit(), _ => (Store, vault), new NullLog(), CancellationToken.None));
+
+      Assert.Equal(ExitCodes.Fatal, ex.ExitCode);
+      Assert.StartsWith("CredReadW failed (error 1312)", ex.Message);
+      Assert.Null(lister.LastToken); // nothing was listed
+   }
+
+
+
+   [Fact]
+   public async Task Account_WhenTheAccountsCannotBeOpened_IsAFatalError_OrRetryLater()
+   {
+      Func<IActivityLog, (AccountsStore, ITokenVault)> unreadable = _ => throw new UnauthorizedAccessException("Access to the path is denied.");
+      Func<IActivityLog, (AccountsStore, ITokenVault)> busy =
+          _ => throw new AccountsFileBusyException("The accounts file is in use by another gclo process.", new IOException("sharing violation"));
+
+      CliErrorException denied = await Assert.ThrowsAsync<CliErrorException>(() => SyncCommand.RunAsync(
+          ["--account", "work"], new FakeRepoLister(), new FakeGit(), unreadable, new NullLog(), CancellationToken.None));
+      CliErrorException retry = await Assert.ThrowsAsync<CliErrorException>(() => SyncCommand.RunAsync(
+          ["--account", "work"], new FakeRepoLister(), new FakeGit(), busy, new NullLog(), CancellationToken.None));
+
+      Assert.Equal(ExitCodes.Fatal, denied.ExitCode);
+      Assert.Equal(ExitCodes.Transient, retry.ExitCode);
+   }
 }

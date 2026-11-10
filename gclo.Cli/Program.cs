@@ -72,15 +72,18 @@ internal static class Program
       using var cts = new CancellationTokenSource();
       Console.CancelKeyPress += (_, e) =>
       {
-         if(!cts.IsCancellationRequested)
+         string? command = args.Length > 0 ? args[0] : null;
+         if(CancelKeyPolicy.HoldsBack(command, Terminal.IsReadingInput, cts.IsCancellationRequested))
          {
             // Finish gracefully: in-flight git operations stop, remaining
-            // repositories are marked Canceled, and the summary still prints.
+            // repositories are marked Canceled, and the summary still prints; a
+            // change to the accounts runs to its end.
             e.Cancel = true;
             cts.Cancel();
-            Terminal.Error("Canceling... (press Ctrl+C again to abort immediately)");
+            Terminal.Error(CancelKeyPolicy.Notice(command));
          }
-         // Second Ctrl+C: e.Cancel stays false and the process terminates.
+         // Otherwise (a second Ctrl+C, a prompt waiting for a line, nothing that
+         // could be cut off half-way): e.Cancel stays false and the process terminates.
       };
 
       try
@@ -127,7 +130,7 @@ internal static class Program
       string details = "";
       try
       {
-         var log = new FileActivityLog();
+         var log = new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory);
          log.Error($"unexpected error ({ex.GetType().FullName}): {ex.Message}", ex);
          details = log.CurrentLogFilePath;
       }

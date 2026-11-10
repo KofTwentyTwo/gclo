@@ -567,4 +567,294 @@ public sealed class AccountsCommandTests : IDisposable
 
       Assert.Throws<CliErrorException>(() => AccountsCommand.Run([], failing, new NullLog()));
    }
+
+
+
+   // ---------------------------------------------------------------- option handling (#159)
+
+   [Fact]
+   public void ShortHelp_IsHelp_NotAnUnknownSubcommand()
+   {
+      using var console = new ConsoleCapture();
+
+      int code = AccountsCommand.Run(["-h"], Open, new NullLog());
+
+      Assert.Equal(0, code);
+      Assert.Contains("gclo accounts", console.Out);
+   }
+
+
+
+   [Fact]
+   public void Add_AnEmptyDescription_IsAccepted_InEitherForm()
+   {
+      using IDisposable _ = TokenEnv("ghp_added");
+      using var console = new ConsoleCapture();
+
+      Assert.Equal(0, AccountsCommand.Run(
+          ["add", "--name", "one", "--org", "acme", "--target", @"C:\src", "--description=", "--token-env", EnvVar], Open, new NullLog()));
+      Assert.Equal(0, AccountsCommand.Run(
+          ["add", "--name", "two", "--org", "acme", "--target", @"C:\src", "--description", "", "--token-env", EnvVar], Open, new NullLog()));
+
+      Assert.All(Store.GetAll(), a => Assert.Equal("", a.Description));
+   }
+
+
+
+   [Fact]
+   public void Edit_AnEmptyDescription_ClearsIt()
+   {
+      Seed("work", "acme", @"C:\src");
+      Store.Save(Store.FindByName("work")! with { Description = "day job" }, token: null);
+      using var console = new ConsoleCapture();
+
+      int code = AccountsCommand.Run(["edit", "--name", "work", "--description="], Open, new NullLog());
+
+      Assert.Equal(0, code);
+      Assert.Equal("", Store.FindByName("work")!.Description);
+   }
+
+
+
+   [Theory]
+   [InlineData("--rename")]
+   [InlineData("--org")]
+   [InlineData("--target")]
+   public void Edit_ABlankNameOrganizationOrFolder_IsAUsageError_AndChangesNothing(string option)
+   {
+      Seed("work", "acme", @"C:\src");
+      Account before = Store.FindByName("work")!;
+
+      CliUsageException ex = Assert.Throws<CliUsageException>(
+          () => AccountsCommand.Run(["edit", "--name", "work", option, "  "], Open, new NullLog()));
+
+      Assert.Equal($"{option} expects a value that is not blank.", ex.Message);
+      Assert.Equal(before, Store.FindByName("work"));
+   }
+
+
+
+   [Fact]
+   public void ARelativeTarget_IsStoredAsAFullPath_ByAddAndByEdit()
+   {
+      using IDisposable _ = TokenEnv("ghp_added");
+      using var console = new ConsoleCapture();
+
+      AccountsCommand.Run(
+          ["add", "--name", "work", "--org", "acme", "--target", "repos", "--token-env", EnvVar], Open, new NullLog());
+      string added = Store.FindByName("work")!.TargetRoot;
+      AccountsCommand.Run(["edit", "--name", "work", "--target", Path.Combine("other", "place")], Open, new NullLog());
+      string edited = Store.FindByName("work")!.TargetRoot;
+
+      // The account will be used from other places; "repos" must mean one folder.
+      Assert.Equal(Path.GetFullPath("repos"), added);
+      Assert.Equal(Path.GetFullPath(Path.Combine("other", "place")), edited);
+      Assert.True(Path.IsPathFullyQualified(added));
+   }
+
+
+
+   [Theory]
+   [InlineData("a|b", "a character no folder name can have")]
+   [InlineData("a<b>", "a character no folder name can have")]
+   [InlineData("repos*", "a character no folder name can have")]
+   [InlineData("~", "are not expanded by gclo")]
+   [InlineData(@"~\src", "are not expanded by gclo")]
+   [InlineData(@"%USERPROFILE%\src", "are not expanded by gclo")]
+   [InlineData("repos:x", "a colon belongs after a drive letter only")]
+   [InlineData(@"C:\src:stream", "a colon belongs after a drive letter only")]
+   [InlineData("con", "it names a device, not a folder")]
+   public void ATargetThatCannotBeAFolder_IsAUsageError_BeforeTheTokenIsEvenRead(string target, string reason)
+   {
+      if(!OperatingSystem.IsWindows() && string.Equals(target, "con", StringComparison.Ordinal))
+      {
+         return; // device names are a Windows notion
+      }
+      using var stdin = new StdinRedirect("ghp_not_to_be_read\n");
+
+      CliUsageException add = Assert.Throws<CliUsageException>(() => AccountsCommand.Run(
+          ["add", "--name", "work", "--org", "acme", "--target", target, "--token-stdin"], Open, new NullLog()));
+      Seed("existing", "acme", @"C:\src");
+      CliUsageException edit = Assert.Throws<CliUsageException>(() => AccountsCommand.Run(
+          ["edit", "--name", "existing", "--target", target, "--token-stdin"], Open, new NullLog()));
+
+      Assert.Contains("is not a usable folder path", add.Message);
+      Assert.Contains(reason, add.Message);
+      Assert.Contains(reason, edit.Message);
+      Assert.Null(Store.FindByName("work"));
+      Assert.Equal(@"C:\src", Store.FindByName("existing")!.TargetRoot);
+      Assert.Equal("ghp_not_to_be_read", Console.In.ReadLine()); // the token line is still there: nothing read it
+   }
+
+
+
+   [Fact]
+   public void ATargetLongerThanAnyPathCanBe_IsAUsageError()
+   {
+      using IDisposable _ = TokenEnv("ghp_added");
+      string tooLong = new('a', 40_000);
+
+      CliUsageException ex = Assert.Throws<CliUsageException>(() => AccountsCommand.Run(
+          ["add", "--name", "work", "--org", "acme", "--target", tooLong, "--token-env", EnvVar], Open, new NullLog()));
+
+      Assert.Contains("is not a usable folder path", ex.Message);
+      Assert.Empty(Store.GetAll());
+   }
+
+
+
+   [Fact]
+   public void ATargetWithADriveLetter_OrAFullPath_IsKeptAsItIs()
+   {
+      if(!OperatingSystem.IsWindows())
+      {
+         return; // drive letters
+      }
+      using IDisposable _ = TokenEnv("ghp_added");
+      using var console = new ConsoleCapture();
+
+      AccountsCommand.Run(["add", "--name", "work", "--org", "acme", "--target", @"D:\mirror\acme", "--token-env", EnvVar], Open, new NullLog());
+
+      Assert.Equal(@"D:\mirror\acme", Store.FindByName("work")!.TargetRoot);
+   }
+
+
+
+   // ---------------------------------------------------------------- failures of the file or the credential store (#159)
+
+   /// <summary>Makes the next write of accounts.json fail: a folder sits where its temporary file goes.</summary>
+   private void BlockAccountsFile() => Directory.CreateDirectory(Path.Combine(_dir, "accounts.json.tmp"));
+
+
+
+   [Fact]
+   public void AFailureToWriteTheAccountsFile_IsAFatalError_NotAnUnexpectedOne()
+   {
+      using IDisposable _ = TokenEnv("ghp_added");
+      Seed("work", "acme", @"C:\src");
+      BlockAccountsFile();
+
+      CliErrorException add = Assert.Throws<CliErrorException>(() => AccountsCommand.Run(
+          ["add", "--name", "other", "--org", "acme", "--target", @"C:\src", "--token-env", EnvVar], Open, new NullLog()));
+      CliErrorException edit = Assert.Throws<CliErrorException>(
+          () => AccountsCommand.Run(["edit", "--name", "work", "--org", "elsewhere"], Open, new NullLog()));
+      CliErrorException remove = Assert.Throws<CliErrorException>(
+          () => AccountsCommand.Run(["remove", "--name", "work"], Open, new NullLog()));
+
+      Assert.All(new[] { add, edit, remove }, ex =>
+      {
+         Assert.Equal(ExitCodes.Fatal, ex.ExitCode);
+         Assert.IsType<UnauthorizedAccessException>(ex.InnerException);
+      });
+      Assert.Equal("acme", Store.FindByName("work")!.Organization);
+      Assert.Equal("tok-work", _vault.TryRetrieve(Store.FindByName("work")!.Id)); // the removal was undone
+   }
+
+
+
+   /// <summary>A vault that fails the way Credential Manager does when it cannot be used.</summary>
+   private sealed class BrokenVault : ITokenVault
+   {
+      // What CredentialManagerVault throws: the call that failed and the number, no words for it.
+      public void Store(Guid accountId, string token)
+          => throw new System.ComponentModel.Win32Exception(1312, "CredWriteW failed (error 1312) for target 'gclo:account:test'.");
+
+      public string? TryRetrieve(Guid accountId) => null;
+
+      public void Delete(Guid accountId)
+      {
+      }
+   }
+
+
+
+   [Fact]
+   public void AFailureOfTheCredentialStore_IsAFatalError_WithItsReason()
+   {
+      using IDisposable _ = TokenEnv("ghp_added");
+      var vault = new BrokenVault();
+      var store = new AccountsStore(vault, _dir, new NullLog());
+
+      CliErrorException ex = Assert.Throws<CliErrorException>(() => AccountsCommand.Run(
+          ["add", "--name", "work", "--org", "acme", "--target", @"C:\src", "--token-env", EnvVar], _ => (store, vault), new NullLog()));
+
+      Assert.Equal(ExitCodes.Fatal, ex.ExitCode);
+      Assert.StartsWith("CredWriteW failed (error 1312)", ex.Message);
+      if(OperatingSystem.IsWindows())
+      {
+         // The number alone says nothing; what Windows means by it is added.
+         Assert.Contains("logon session", ex.Message);
+      }
+      Assert.Empty(store.GetAll());
+   }
+
+
+
+   [Fact]
+   public void AnEdit_OfAnAccountAnotherGcloProcessRemovedMeanwhile_IsAFatalError_NotAnUnexpectedOne()
+   {
+      Seed("work", "acme", @"C:\src");
+      Account work = Store.FindByName("work")!;
+      // The store this command works with still lists the account; the file no longer does.
+      new AccountsStore(_vault, _dir, new NullLog()).Delete(work.Id);
+
+      CliErrorException ex = Assert.Throws<CliErrorException>(
+          () => AccountsCommand.Run(["edit", "--name", "work", "--org", "elsewhere"], Open, new NullLog()));
+
+      Assert.Equal(ExitCodes.Fatal, ex.ExitCode);
+      Assert.Contains("was removed by another gclo process", ex.Message);
+   }
+
+
+
+   [Fact]
+   public void AChange_WhileAnotherGcloProcessHoldsTheAccountsLock_IsRetryLater_AfterTheStoresOwnWait()
+   {
+      // The real path, once: the store waits its few seconds for the lock, then says so.
+      Seed("work", "acme", @"C:\src");
+      using var held = new FileStream(Path.Combine(_dir, "accounts.json.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+
+      CliErrorException ex = Assert.Throws<CliErrorException>(
+          () => AccountsCommand.Run(["remove", "--name", "work"], Open, new NullLog()));
+
+      Assert.Equal(ExitCodes.Transient, ex.ExitCode);
+      Assert.Contains("in use by another gclo process", ex.Message);
+      Assert.NotNull(Store.FindByName("work"));
+   }
+
+
+
+   [Theory]
+   [InlineData("list")]
+   [InlineData("add")]
+   [InlineData("edit")]
+   [InlineData("remove")]
+   public void AnAccountsFileThatAnotherGcloProcessIsChanging_IsRetryLater(string subcommand)
+   {
+      using IDisposable _ = TokenEnv("ghp_added");
+      Func<IActivityLog, (AccountsStore, ITokenVault)> busy =
+          _ => throw new AccountsFileBusyException("The accounts file is in use by another gclo process.", new IOException("sharing violation"));
+      string[] args = subcommand switch
+      {
+         "add" => ["add", "--name", "work", "--org", "acme", "--target", @"C:\src", "--token-env", EnvVar],
+         "edit" => ["edit", "--name", "work", "--org", "elsewhere"],
+         "remove" => ["remove", "--name", "work"],
+         _ => ["list"],
+      };
+
+      CliErrorException ex = Assert.Throws<CliErrorException>(() => AccountsCommand.Run(args, busy, new NullLog()));
+
+      Assert.Equal(ExitCodes.Transient, ex.ExitCode);
+      Assert.Contains("in use by another gclo process", ex.Message);
+   }
+
+
+
+   [Fact]
+   public void AFailureThatIsNeitherTheFileNorTheStore_StaysWhatItIs()
+   {
+      Func<IActivityLog, (AccountsStore, ITokenVault)> bug = _ => throw new InvalidOperationException("a bug");
+
+      Assert.Throws<InvalidOperationException>(() => AccountsCommand.Run(["list"], bug, new NullLog()));
+   }
 }

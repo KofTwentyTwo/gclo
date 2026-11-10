@@ -57,4 +57,24 @@ public sealed class GcloPathsTests
       Assert.False(
           GcloPaths.DefaultDataRoot.StartsWith(installRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
    }
+
+
+
+   /// <summary>The log folder follows the data folder, so the app and the CLI log side by side wherever that is (#159).</summary>
+   [Fact]
+   public void LogDirectory_IsLogsUnderTheDataRoot_AlsoWhenTheDataRootIsMoved()
+   {
+      string moved = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      Environment.SetEnvironmentVariable("GCLO_DATA_DIR", moved);
+      try
+      {
+         Assert.Equal(Path.Combine(moved, "logs"), GcloPaths.LogDirectory);
+      }
+      finally
+      {
+         Environment.SetEnvironmentVariable("GCLO_DATA_DIR", null);
+      }
+
+      Assert.Equal(Path.Combine(GcloPaths.DefaultDataRoot, "logs"), GcloPaths.LogDirectory);
+   }
 }

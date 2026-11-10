@@ -34,6 +34,14 @@ public static class GcloPaths
 
 
    /// <summary>
+   /// Where the activity log is written: "logs" under <see cref="DataRoot"/>, for the
+   /// desktop app and the CLI alike, so both follow GCLO_DATA_DIR together.
+   /// </summary>
+   public static string LogDirectory => Path.Combine(DataRoot, "logs");
+
+
+
+   /// <summary>
    /// The installed edition: "" for the stable app (Velopack app id <c>gclo</c>) and
    /// "dev" for the dev-channel app (<c>gclo-dev</c>), which installs beside the
    /// stable one and keeps its own data root so both can run on one machine (#114).

@@ -209,4 +209,47 @@ public sealed class TokenOptionsTests
 
       Assert.Throws<CliUsageException>(() => new TokenOptions().TryConsume(reader));
    }
+
+
+
+   // ---------------------------------------------------------------- waiting for a line (#159)
+
+   /// <summary>Standard input that notes, when it is read, whether the process says it is waiting for input.</summary>
+   private sealed class WatchfulInput(string line) : TextReader
+   {
+      public bool? WasReadingInput { get; private set; }
+
+      public override string? ReadLine()
+      {
+         WasReadingInput = Terminal.IsReadingInput;
+         return line;
+      }
+   }
+
+
+
+   [Fact]
+   public void WhileTheTokenIsReadFromStandardInput_TheProcessSaysItIsWaitingForInput_AndNotAfterwards()
+   {
+      TextReader original = Console.In;
+      var input = new WatchfulInput("ghp_from_stdin");
+      Console.SetIn(input);
+      try
+      {
+         var options = new TokenOptions();
+         var reader = new OptionReader(["--token-stdin"]);
+         Assert.True(reader.MoveNext());
+         Assert.True(options.TryConsume(reader));
+
+         string token = options.Resolve();
+
+         Assert.Equal("ghp_from_stdin", token);
+         Assert.True(input.WasReadingInput);
+         Assert.False(Terminal.IsReadingInput);
+      }
+      finally
+      {
+         Console.SetIn(original);
+      }
+   }
 }

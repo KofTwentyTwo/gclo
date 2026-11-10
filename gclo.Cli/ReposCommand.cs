@@ -51,7 +51,7 @@ internal static class ReposCommand
    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
        Justification = "Wires the real network lister and file log; delegates to the covered core.")]
    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
-       => RunAsync(args, new GitHubRepositoryLister(), new FileActivityLog(), cancellationToken);
+       => RunAsync(args, new GitHubRepositoryLister(), new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory), cancellationToken);
 
 
 

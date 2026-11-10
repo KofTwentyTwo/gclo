@@ -100,7 +100,13 @@ broken-repo  Failed  remote authentication failed
 
 **Ctrl+C** cancels gracefully: in-flight git operations stop, remaining
 repositories are marked `Canceled`, and the summary still prints. A second
-Ctrl+C aborts the process immediately.
+Ctrl+C aborts the process immediately. So does the first one while gclo waits
+for the token at its prompt (`--token-stdin` in a terminal), where nothing has
+been started yet. In `gclo accounts`, the first Ctrl+C lets a change that is
+under way finish (it writes to the credential store and to the accounts file,
+and is not cut off between the two). A `--dry-run` that is canceled while the
+repositories are being listed prints no plan, and with `--json` or
+`--json-lines` no document, and exits 1.
 
 #### Windows-invalid paths and `--sanitize-paths`
 
@@ -290,7 +296,12 @@ gh auth token | gclo accounts add --name work --org contoso --target C:\src\cont
 ```
 
 `--name`, `--org`, and `--target` are required; `--parallel` (1-64, default 8),
-`--org-subfolder`, and `--description` are optional. The token comes from a
+`--org-subfolder`, and `--description` are optional. A relative `--target` is
+stored as a full path, resolved against the current directory, because the
+account is used later from other places; a target that cannot be a folder
+(a character no folder name can have, a device name, an unexpanded `~` or
+`%NAME%`) is refused. `--description=` (or `--description ""`) is an empty
+description. The token comes from a
 token option exactly as for `gclo sync` (default: the `GITHUB_TOKEN` environment
 variable) and is written to Windows Credential Manager — never put it on the
 command line. A name that another account already uses (case-insensitive)
@@ -393,16 +404,18 @@ still wins for that run (the stored token is left untouched).
 
 Every invocation appends to a daily activity log file, `gclo-yyyy-MM-dd.log`,
 under `%LOCALAPPDATA%\KofTwentyTwo\gclo\logs` (on Linux/macOS: the platform's
-local application data folder). It records the run's parameters, per-repository
+local application data folder), or under `logs` in the folder `GCLO_DATA_DIR`
+names when that variable is set, the same folder the desktop app logs to. It records the run's parameters, per-repository
 failures, and path-sanitization notes — the same log the desktop app shows
 under **View > Activity log**. Tokens are never written to the log, or anywhere
 else on disk; see [SECURITY.md](../SECURITY.md).
 
 Daily files are kept for 30 days, today included; older ones are removed the
-first time something is logged on a given day. When the desktop app and the
-CLI log to the same file (they do unless `GCLO_DATA_DIR` moves the app's data),
-an entry that finds the file in use is tried again for a moment rather than
-dropped; if the file stays in use, entries are dropped until it is free again.
+first time something is logged on a given day. The desktop app and the CLI
+log to the same file (the stable desktop app, that is; a development build
+of the app keeps its own data folder); an entry that finds the file in use is
+tried again for a moment rather than dropped, and if the file stays in use,
+entries are dropped until it is free again.
 
 Each entry is one line that starts with its timestamp: local time, followed by
 its offset from UTC (`2026-11-10 14:03:22.123 -06:00 [INFO] ...`). Text that came from a repository, such as a file path, is written with control characters shown as `\uXXXX`, and the lines of an exception are indented under their entry, so nothing in a repository can add or imitate an entry. Everything the CLI prints as text shows such characters the same way, and on a console whose code page cannot represent a character (code page 437 or 850, for example) that character is shown in the same form too; the JSON modes use JSON's own escaping.

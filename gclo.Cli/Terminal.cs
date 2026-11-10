@@ -29,6 +29,10 @@ namespace gclo.Cli;
 /// </remarks>
 internal static class Terminal
 {
+   private static bool s_isReadingInput;
+
+
+
    /// <summary>Writes one line of run-time text to standard output, made safe for the terminal.</summary>
    public static void Out(string text) => Console.Out.WriteLine(Safe(text, Console.Out.Encoding));
 
@@ -49,6 +53,19 @@ internal static class Terminal
 
    /// <summary>Writes a fixed prompt to standard error, without a line break after it.</summary>
    public static void ErrorPrompt(string fixedText) => Console.Error.Write(fixedText);
+
+
+
+   /// <summary>
+   /// True while the process waits for a line on standard input (the token prompt).
+   /// A Ctrl+C then ends the process: there is nothing to finish gracefully, and
+   /// the read would otherwise go on waiting.
+   /// </summary>
+   public static bool IsReadingInput
+   {
+      get => Volatile.Read(ref s_isReadingInput);
+      set => Volatile.Write(ref s_isReadingInput, value);
+   }
 
 
 

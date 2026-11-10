@@ -105,4 +105,38 @@ public sealed class OptionReaderTests
 
       reader.RejectValue(); // must not throw
    }
+
+
+
+   // ---------------------------------------------------------------- a value that may be empty (#159)
+
+   [Fact]
+   public void RequireValueOrEmpty_AcceptsAnEmptyInlineValue_AndAnEmptyArgument()
+   {
+      var inline = new OptionReader(["--note="]);
+      Assert.True(inline.MoveNext());
+      Assert.Equal("", inline.RequireValueOrEmpty());
+
+      var separate = new OptionReader(["--note", ""]);
+      Assert.True(separate.MoveNext());
+      Assert.Equal("", separate.RequireValueOrEmpty());
+
+      var given = new OptionReader(["--note=text"]);
+      Assert.True(given.MoveNext());
+      Assert.Equal("text", given.RequireValueOrEmpty());
+   }
+
+
+
+   [Fact]
+   public void RequireValueOrEmpty_StillNeedsAValue_AndRequireValueStillRefusesAnEmptyOne()
+   {
+      var missing = new OptionReader(["--note"]);
+      Assert.True(missing.MoveNext());
+      Assert.Throws<CliUsageException>(() => missing.RequireValueOrEmpty());
+
+      var empty = new OptionReader(["--name="]);
+      Assert.True(empty.MoveNext());
+      Assert.Throws<CliUsageException>(() => empty.RequireValue());
+   }
 }

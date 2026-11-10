@@ -256,7 +256,7 @@ internal static class SyncCommand
    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
        => RunAsync(
            args,
-           new GitHubRepositoryLister(), new LibGit2GitClient(), AccountsCommand.Open, new FileActivityLog(),
+           new GitHubRepositoryLister(), new LibGit2GitClient(), AccountsCommand.Open, new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory),
            cancellationToken);
 
 
@@ -296,8 +296,7 @@ internal static class SyncCommand
          ITokenVault? vault = null;
          if(accountName is not null)
          {
-            (store, vault) = openAccounts(log);
-            account = store.FindByName(accountName) ?? throw UnknownAccount(accountName, store);
+            (account, store, vault) = OpenAccount(openAccounts, accountName, log);
             org ??= account.Organization;
             target ??= account.CreateOrgSubfolder ? Path.Combine(account.TargetRoot, org) : account.TargetRoot;
             parallel ??= account.MaxConcurrency;
@@ -353,7 +352,7 @@ internal static class SyncCommand
 
          if(dryRun)
          {
-            return PrintDryRun(repositories, git, targetRoot, machineReadable, log);
+            return EndDryRun(canceledWhileListing, repositories, git, targetRoot, machineReadable, log);
          }
 
          OutputMode mode = jsonLines ? OutputMode.JsonLines
@@ -426,6 +425,30 @@ internal static class SyncCommand
 
 
    /// <summary>
+   /// What a dry run ends with: the plan, or, when the listing was canceled, the
+   /// fact that it was. Nothing was listed then, and an empty plan with exit code 0
+   /// would say the organization has no repositories.
+   /// </summary>
+   private static int EndDryRun(
+       bool canceledWhileListing,
+       IReadOnlyList<RepoDescriptor> repositories,
+       IGitClient git,
+       string targetRoot,
+       bool machineReadable,
+       IActivityLog log)
+   {
+      if(canceledWhileListing)
+      {
+         Terminal.Error("Canceled.");
+         log.Info("sync --dry-run: canceled while listing repositories.");
+         return ExitCodes.Partial;
+      }
+      return PrintDryRun(repositories, git, targetRoot, machineReadable, log);
+   }
+
+
+
+   /// <summary>
    /// '--dry-run': says what the run would do with each selected repository and
    /// touches nothing. Exit 0 even for an empty selection.
    /// </summary>
@@ -458,6 +481,28 @@ internal static class SyncCommand
 
 
    /// <summary>
+   /// Opens the accounts and finds the one named. A failure of the accounts file or
+   /// of the credential store is a fatal error with its reason (or "retry later"
+   /// when another gclo process holds the file), as it is for 'gclo accounts'.
+   /// </summary>
+   private static (Account Account, AccountsStore Store, ITokenVault Vault) OpenAccount(
+       Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> openAccounts, string accountName, IActivityLog log)
+   {
+      try
+      {
+         (AccountsStore store, ITokenVault vault) = openAccounts(log);
+         Account account = store.FindByName(accountName) ?? throw UnknownAccount(accountName, store);
+         return (account, store, vault);
+      }
+      catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
+      {
+         throw CliErrorException.FromStorage(ex);
+      }
+   }
+
+
+
+   /// <summary>
    /// The token for this run. Any explicit token option wins; otherwise a saved
    /// account's token comes from Windows Credential Manager; plain runs fall back
    /// to the default environment variable.
@@ -470,7 +515,18 @@ internal static class SyncCommand
       }
 
       // vault is non-null whenever account is: both come from AccountsCommand.Open.
-      string? token = new AccountTokenResolver(vault!).TryResolve(account);
+      string? token;
+      try
+      {
+         token = new AccountTokenResolver(vault!).TryResolve(account);
+      }
+      catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
+      {
+         // The credential store did not answer: say so with its reason (exit 2),
+         // not as an unexpected error inside gclo.
+         throw CliErrorException.FromStorage(ex);
+      }
+
       if(token is null)
       {
          string fix = account.UsesDefaultToken

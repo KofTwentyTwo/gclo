@@ -19,6 +19,11 @@ namespace gclo.Cli;
 /// </summary>
 internal static class AccountsCommand
 {
+   /// <summary>Characters that no folder path can contain on Windows, wherever gclo runs.</summary>
+   private static readonly System.Buffers.SearchValues<char> s_neverInAFolderPath = System.Buffers.SearchValues.Create("|<>\"*?");
+
+
+
    private const string HelpText = """
         Usage: gclo accounts [list] [--json]
                gclo accounts add --name <name> --org <name> --target <folder> [options] <token option>
@@ -44,7 +49,8 @@ internal static class AccountsCommand
         add
           --name <name>          Display name; must be unique (case-insensitive).
           --org <name>           GitHub organization or user account to sync.
-          --target <folder>      Target root folder.
+          --target <folder>      Target root folder. A relative folder is stored as
+                                 a full path, resolved against the current directory.
           --parallel <N>         Parallel clone/pull count, 1-64 (default 8).
           --org-subfolder        Clone under <target>\<org> instead of <target>.
           --description <text>   Optional note.
@@ -77,7 +83,9 @@ internal static class AccountsCommand
         Exit codes:
           0  done
           2  fatal: bad arguments, unknown account, duplicate name, missing token,
-             or not running on Windows
+             not running on Windows, or the accounts file or Windows Credential
+             Manager could not be used (the message says why)
+          4  another gclo process was changing the accounts; run the command again
         """;
 
 
@@ -85,7 +93,7 @@ internal static class AccountsCommand
    /// <summary>Composition root: wires the real Credential Manager store and file log.</summary>
    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
        Justification = "Wires the real Credential Manager and file log; delegates to the covered core.")]
-   public static int Run(string[] args) => Run(args, Open, new FileActivityLog());
+   public static int Run(string[] args) => Run(args, Open, new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory));
 
 
 
@@ -93,8 +101,9 @@ internal static class AccountsCommand
    {
       // The first argument names the subcommand unless it is an option, in which
       // case it is 'list' (the original, option-only form of the command).
-      string subcommand = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : "list";
-      string[] rest = string.Equals(subcommand, "list", StringComparison.Ordinal) && (args.Length == 0 || args[0].StartsWith("--", StringComparison.Ordinal))
+      // ('-h' is an option too: 'gclo accounts -h' asks for help, it names no subcommand.)
+      string subcommand = args.Length > 0 && !args[0].StartsWith('-') ? args[0] : "list";
+      string[] rest = string.Equals(subcommand, "list", StringComparison.Ordinal) && (args.Length == 0 || args[0].StartsWith('-'))
           ? args
           : args[1..];
 
@@ -171,6 +180,11 @@ internal static class AccountsCommand
          }
          return ExitCodes.Success;
       }
+      catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
+      {
+         log.Error($"accounts failed: {ex.Message}", ex);
+         throw CliErrorException.FromStorage(ex);
+      }
       catch(Exception ex)
       {
          // Fatal path: unusable accounts store or non-Windows platform.
@@ -216,7 +230,7 @@ internal static class AccountsCommand
                target = reader.RequireValue();
                break;
             case "--description":
-               description = reader.RequireValue();
+               description = reader.RequireValueOrEmpty();
                break;
             case "--parallel":
                parallel = OptionReader.ParseParallel(reader.RequireValue());
@@ -243,6 +257,8 @@ internal static class AccountsCommand
          throw new CliUsageException("--target is required.");
       }
 
+      string targetRoot = AbsoluteTarget(target);
+
       log.Info($"accounts add started: name='{name.Trim()}', org='{org.Trim()}', token={(tokenOptions.UseDefault ? "default" : "own")}");
       try
       {
@@ -257,7 +273,7 @@ internal static class AccountsCommand
             Name = name.Trim(),
             Description = description.Trim(),
             Organization = org.Trim(),
-            TargetRoot = target.Trim(),
+            TargetRoot = targetRoot,
             CreateOrgSubfolder = orgSubfolder,
             MaxConcurrency = parallel,
             TokenSource = tokenOptions.UseDefault ? TokenSource.Default : TokenSource.Own,
@@ -265,6 +281,11 @@ internal static class AccountsCommand
          SaveOrFail(store, account, token);
          Terminal.Out($"Account '{account.Name}' added" + (tokenOptions.UseDefault ? " (uses the default token)." : "."));
          return ExitCodes.Success;
+      }
+      catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
+      {
+         log.Error($"accounts add failed: {ex.Message}", ex);
+         throw CliErrorException.FromStorage(ex);
       }
       catch(Exception ex)
       {
@@ -313,7 +334,7 @@ internal static class AccountsCommand
                target = reader.RequireValue();
                break;
             case "--description":
-               description = reader.RequireValue();
+               description = reader.RequireValueOrEmpty();
                break;
             case "--parallel":
                parallel = OptionReader.ParseParallel(reader.RequireValue());
@@ -342,6 +363,11 @@ internal static class AccountsCommand
              + "--description, --org-subfolder/--no-org-subfolder, or a token option.");
       }
 
+      RequireNotBlank(rename, "--rename");
+      RequireNotBlank(org, "--org");
+      RequireNotBlank(target, "--target");
+      string? targetRoot = target is null ? null : AbsoluteTarget(target);
+
       log.Info($"accounts edit started: name='{name.Trim()}'");
       try
       {
@@ -360,7 +386,7 @@ internal static class AccountsCommand
          {
             Name = rename?.Trim() ?? existing.Name,
             Organization = org?.Trim() ?? existing.Organization,
-            TargetRoot = target?.Trim() ?? existing.TargetRoot,
+            TargetRoot = targetRoot ?? existing.TargetRoot,
             Description = description?.Trim() ?? existing.Description,
             MaxConcurrency = parallel ?? existing.MaxConcurrency,
             CreateOrgSubfolder = orgSubfolder ?? existing.CreateOrgSubfolder,
@@ -372,6 +398,11 @@ internal static class AccountsCommand
              : token is null ? "." : " (token replaced).";
          Terminal.Out($"Account '{updated.Name}' updated" + tokenNote);
          return ExitCodes.Success;
+      }
+      catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
+      {
+         log.Error($"accounts edit failed: {ex.Message}", ex);
+         throw CliErrorException.FromStorage(ex);
       }
       catch(Exception ex)
       {
@@ -418,6 +449,11 @@ internal static class AccountsCommand
          Terminal.Out($"Account '{existing.Name}' removed.");
          return ExitCodes.Success;
       }
+      catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
+      {
+         log.Error($"accounts remove failed: {ex.Message}", ex);
+         throw CliErrorException.FromStorage(ex);
+      }
       catch(Exception ex)
       {
          log.Error($"accounts remove failed: {ex.Message}", ex);
@@ -453,15 +489,71 @@ internal static class AccountsCommand
 
 
 
-   /// <summary>A duplicate name is the one validation the store itself enforces; everything else is fatal as is.</summary>
+   /// <summary>A value that was given must say something: a blank name, organization, or folder is a mistake.</summary>
+   private static void RequireNotBlank(string? value, string option)
+   {
+      if(value is not null && string.IsNullOrWhiteSpace(value))
+      {
+         throw new CliUsageException($"{option} expects a value that is not blank.");
+      }
+   }
+
+
+
+   /// <summary>
+   /// The target folder as a full path. An account is used later from other places
+   /// (the desktop app, a scheduled task, another working directory); a relative
+   /// folder would mean a different one each time, so it is resolved once, here.
+   /// What cannot be a folder is refused instead of being stored: characters no
+   /// folder name can have, a device name, and text that a shell was meant to expand
+   /// and did not ('~', '%NAME%'), which would otherwise become a folder of that name.
+   /// </summary>
+   private static string AbsoluteTarget(string target)
+   {
+      string trimmed = target.Trim();
+      string? problem = trimmed.AsSpan().ContainsAny(s_neverInAFolderPath) || trimmed.Any(char.IsControl)
+          ? "it has a character no folder name can have"
+          : trimmed.StartsWith('~') || trimmed.Contains('%')
+              ? "'~' and '%NAME%' are not expanded by gclo; give the folder itself"
+              : !trimmed.StartsWith(@"\\", StringComparison.Ordinal) && trimmed.Where((c, i) => c == ':' && i != 1).Any()
+                  ? "a colon belongs after a drive letter only"
+                  : null;
+
+      string full = "";
+      if(problem is null)
+      {
+         try
+         {
+            full = Path.GetFullPath(trimmed);
+         }
+         catch(Exception ex) when(ex is ArgumentException or PathTooLongException)
+         {
+            problem = ex.Message;
+         }
+      }
+      if(problem is null && full.StartsWith(@"\\.\", StringComparison.Ordinal))
+      {
+         problem = "it names a device, not a folder";
+      }
+
+      return problem is null
+          ? full
+          : throw new CliUsageException($"--target '{target}' is not a usable folder path: {problem}.");
+   }
+
+
+
+   /// <summary>Saves, turning what the store refuses (a duplicate name, an account removed meanwhile) into a fatal error with its reason.</summary>
    private static void SaveOrFail(AccountsStore store, Account account, string? token)
    {
       try
       {
          store.Save(account, token);
       }
-      catch(ArgumentException ex)
+      catch(Exception ex) when(ex is ArgumentException or InvalidOperationException)
       {
+         // A name that is taken, or an account that another gclo process removed
+         // while this command was waiting: the store says which, and nothing was saved.
          throw new CliErrorException(ex.Message, ex);
       }
    }
