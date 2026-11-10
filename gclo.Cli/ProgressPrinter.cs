@@ -94,7 +94,7 @@ internal sealed class ProgressPrinter : IProgress<RepoProgress>
             switch(_mode)
             {
                case OutputMode.Text or OutputMode.Quiet:
-                  Console.Error.WriteLine($"{failure.Repo}  Failed  {failure.Error}");
+                  Terminal.Error($"{failure.Repo}  Failed  {failure.Error}");
                   break;
                case OutputMode.JsonLines:
                   WriteProgressLine(value.RepoName, value.Status, failure.Error);
@@ -108,7 +108,7 @@ internal sealed class ProgressPrinter : IProgress<RepoProgress>
          switch(_mode)
          {
             case OutputMode.Text:
-               Console.Out.WriteLine($"{value.RepoName}  {value.Status}");
+               Terminal.Out($"{value.RepoName}  {value.Status}");
                break;
             case OutputMode.JsonLines:
                WriteProgressLine(value.RepoName, value.Status, null);
@@ -122,7 +122,7 @@ internal sealed class ProgressPrinter : IProgress<RepoProgress>
 
 
    private static void WriteProgressLine(string repo, SyncStatus status, string? error)
-       => Console.Out.WriteLine(JsonSerializer.Serialize(
+       => Terminal.OutVerbatim(JsonSerializer.Serialize(
            new SyncProgressLine("progress", repo, status.ToString(), error), CliJsonContext.Default.SyncProgressLine));
 
 

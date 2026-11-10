@@ -149,7 +149,7 @@ internal static class SyncCommand
          switch(reader.Current)
          {
             case "--help" or "-h":
-               Console.Out.WriteLine(HelpText);
+               Terminal.OutVerbatim(HelpText);
                return null;
             case "--org":
                options.Org = reader.RequireValue();
@@ -232,11 +232,11 @@ internal static class SyncCommand
          var result = new SyncJsonResult(
              "summary", summary.Total, summary.Cloned, summary.Updated, summary.Failed,
              summary.Canceled, summary.WasCanceled, printer.Failures, printer.Sanitized);
-         Console.Out.WriteLine(JsonSerializer.Serialize(result, CliJsonContext.Default.SyncJsonResult));
+         Terminal.OutVerbatim(JsonSerializer.Serialize(result, CliJsonContext.Default.SyncJsonResult));
       }
       else
       {
-         Console.Out.WriteLine(summaryLine);
+         Terminal.Out(summaryLine);
       }
 
       if(account is not null)
@@ -440,16 +440,16 @@ internal static class SyncCommand
 
       if(json)
       {
-         Console.Out.WriteLine(JsonSerializer.Serialize(
+         Terminal.OutVerbatim(JsonSerializer.Serialize(
              (IReadOnlyList<DryRunEntry>)entries, CliJsonContext.Default.IReadOnlyListDryRunEntry));
          return ExitCodes.Success;
       }
 
       foreach(DryRunEntry entry in entries)
       {
-         Console.Out.WriteLine($"{entry.Repo}  would {entry.Action}");
+         Terminal.Out($"{entry.Repo}  would {entry.Action}");
       }
-      Console.Out.WriteLine($"Dry run: {clones} would clone, {entries.Count - clones} would update of {entries.Count}.");
+      Terminal.Out($"Dry run: {clones} would clone, {entries.Count - clones} would update of {entries.Count}.");
       return ExitCodes.Success;
    }
 
@@ -499,7 +499,7 @@ internal static class SyncCommand
       catch(Exception ex)
       {
          log.Error($"could not record the sync result on account '{account.Name}': {ex.Message}", ex);
-         Console.Error.WriteLine(
+         Terminal.Error(
              $"Warning: could not record the sync result on account '{account.Name}': {ex.Message}");
       }
    }
@@ -546,7 +546,7 @@ internal static class SyncCommand
          string detail = DescribeRecovery(recovery);
          if(announce)
          {
-            Console.Error.WriteLine(
+            Terminal.Error(
                 $"{pending.Repo}  Sanitized  {recovery.SegmentRenames.Count} renamed, "
                 + $"{recovery.SkippedPaths.Count} skipped: {detail}");
          }
@@ -703,11 +703,11 @@ internal static class SyncCommand
                // the first three offending paths.
                foreach(InvalidPathInfo info in value.InvalidPaths.Take(MaxListedPaths))
                {
-                  Console.Error.WriteLine($"{value.RepoName}    {info.RepoPath}  ({info.Reason})");
+                  Terminal.Error($"{value.RepoName}    {info.RepoPath}  ({info.Reason})");
                }
                if(value.InvalidPaths.Count > MaxListedPaths)
                {
-                  Console.Error.WriteLine(
+                  Terminal.Error(
                       $"{value.RepoName}    ... and {value.InvalidPaths.Count - MaxListedPaths} more invalid paths");
                }
             }

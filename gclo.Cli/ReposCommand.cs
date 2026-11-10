@@ -73,7 +73,7 @@ internal static class ReposCommand
          switch(reader.Current)
          {
             case "--help" or "-h":
-               Console.Out.WriteLine(HelpText);
+               Terminal.OutVerbatim(HelpText);
                return ExitCodes.Success;
             case "--org":
                org = reader.RequireValue();
@@ -132,13 +132,13 @@ internal static class ReposCommand
             IReadOnlyList<RepoSummary> summaries = repositories
                 .Select(r => new RepoSummary(r.Name, r.DefaultBranch, r.IsArchived, r.CloneUrl))
                 .ToList();
-            Console.Out.WriteLine(JsonSerializer.Serialize(summaries, CliJsonContext.Default.IReadOnlyListRepoSummary));
+            Terminal.OutVerbatim(JsonSerializer.Serialize(summaries, CliJsonContext.Default.IReadOnlyListRepoSummary));
             return ExitCodes.Success;
          }
 
          if(repositories.Count == 0)
          {
-            Console.Error.WriteLine(listed == 0
+            Terminal.Error(listed == 0
                 ? $"No repositories visible in '{org}'."
                 : $"No repositories of '{org}' match the filters ({listed} listed).");
             return ExitCodes.Success;
@@ -149,7 +149,7 @@ internal static class ReposCommand
          foreach(RepoDescriptor repo in repositories)
          {
             string branch = (repo.DefaultBranch ?? "-").PadRight(branchWidth);
-            Console.Out.WriteLine(
+            Terminal.Out(
                 $"{repo.Name.PadRight(nameWidth)}  {branch}" + (repo.IsArchived ? "  archived" : ""));
          }
          return ExitCodes.Success;

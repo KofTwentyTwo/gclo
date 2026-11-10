@@ -122,7 +122,7 @@ internal static class AccountsCommand
          switch(reader.Current)
          {
             case "--help" or "-h":
-               Console.Out.WriteLine(HelpText);
+               Terminal.OutVerbatim(HelpText);
                return ExitCodes.Success;
             case "--json":
                reader.RejectValue();
@@ -148,7 +148,7 @@ internal static class AccountsCommand
                     a.Id.ToString("N"), a.Name, a.Description, a.Organization, a.TargetRoot,
                     a.CreateOrgSubfolder, a.MaxConcurrency, a.LastSyncUtc, a.LastSyncSummary, TokenSourceLabel(a)))
                 .ToList();
-            Console.Out.WriteLine(JsonSerializer.Serialize(
+            Terminal.OutVerbatim(JsonSerializer.Serialize(
                 summaries, CliJsonContext.Default.IReadOnlyListAccountSummary));
             return ExitCodes.Success;
          }
@@ -156,7 +156,7 @@ internal static class AccountsCommand
          if(accounts.Count == 0)
          {
             // Diagnostics go to stderr so redirected stdout stays clean (and empty).
-            Console.Error.WriteLine("No accounts yet. Create one with 'gclo accounts add' or in the gclo desktop app.");
+            Terminal.Error("No accounts yet. Create one with 'gclo accounts add' or in the gclo desktop app.");
             return ExitCodes.Success;
          }
 
@@ -165,7 +165,7 @@ internal static class AccountsCommand
          int targetWidth = accounts.Max(a => a.TargetRoot.Length);
          foreach(Account account in accounts)
          {
-            Console.Out.WriteLine(
+            Terminal.Out(
                 $"{account.Name.PadRight(nameWidth)}  {account.Organization.PadRight(orgWidth)}  "
                 + $"{account.TargetRoot.PadRight(targetWidth)}  {TokenSourceLabel(account).PadRight(7)}  {FormatLastSync(account.LastSyncUtc)}");
          }
@@ -204,7 +204,7 @@ internal static class AccountsCommand
          switch(reader.Current)
          {
             case "--help" or "-h":
-               Console.Out.WriteLine(HelpText);
+               Terminal.OutVerbatim(HelpText);
                return ExitCodes.Success;
             case "--name":
                name = reader.RequireValue();
@@ -263,7 +263,7 @@ internal static class AccountsCommand
             TokenSource = tokenOptions.UseDefault ? TokenSource.Default : TokenSource.Own,
          };
          SaveOrFail(store, account, token);
-         Console.Out.WriteLine($"Account '{account.Name}' added" + (tokenOptions.UseDefault ? " (uses the default token)." : "."));
+         Terminal.Out($"Account '{account.Name}' added" + (tokenOptions.UseDefault ? " (uses the default token)." : "."));
          return ExitCodes.Success;
       }
       catch(Exception ex)
@@ -298,7 +298,7 @@ internal static class AccountsCommand
          switch(reader.Current)
          {
             case "--help" or "-h":
-               Console.Out.WriteLine(HelpText);
+               Terminal.OutVerbatim(HelpText);
                return ExitCodes.Success;
             case "--name":
                name = reader.RequireValue();
@@ -370,7 +370,7 @@ internal static class AccountsCommand
          string tokenNote = tokenOptions.UseDefault
              ? " (now uses the default token)."
              : token is null ? "." : " (token replaced).";
-         Console.Out.WriteLine($"Account '{updated.Name}' updated" + tokenNote);
+         Terminal.Out($"Account '{updated.Name}' updated" + tokenNote);
          return ExitCodes.Success;
       }
       catch(Exception ex)
@@ -394,7 +394,7 @@ internal static class AccountsCommand
          switch(reader.Current)
          {
             case "--help" or "-h":
-               Console.Out.WriteLine(HelpText);
+               Terminal.OutVerbatim(HelpText);
                return ExitCodes.Success;
             case "--name":
                name = reader.RequireValue();
@@ -415,7 +415,7 @@ internal static class AccountsCommand
          (AccountsStore store, _) = open(log);
          Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
          store.Delete(existing.Id); // the store logs the deletion
-         Console.Out.WriteLine($"Account '{existing.Name}' removed.");
+         Terminal.Out($"Account '{existing.Name}' removed.");
          return ExitCodes.Success;
       }
       catch(Exception ex)

@@ -84,6 +84,29 @@ public sealed class ReposCommandTests
 
 
    [Fact]
+   public async Task Plain_NamesAndBranchesFromTheServer_ReachTheTerminalInVisibleForm()
+   {
+      using var console = new ConsoleCapture();
+      using IDisposable _ = Token("ghp_x");
+      string escape = ((char)0x1B).ToString();
+      var lister = new FakeRepoLister { Result = [Repo("api" + escape + "[2J", "ma" + (char)0x0A + "in")] };
+
+      int code = await Run(lister, "--org", "acme", "--token-env", EnvVar);
+
+      Assert.Equal(0, code);
+      Assert.DoesNotContain((char)0x1B, console.Out);
+      Assert.Equal("api" + Visible(0x1B) + "[2J  ma" + Visible(0x0A) + "in", console.Out.TrimEnd());
+   }
+
+
+
+   /// <summary>The visible form of one UTF-16 code unit: a backslash, "u", four upper-case hex digits.</summary>
+   private static string Visible(int unit)
+       => "\\" + "u" + unit.ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
+
+
+
+   [Fact]
    public async Task Filters_NarrowTheListing_AndAnEmptyResultSaysWhy()
    {
       using var console = new ConsoleCapture();

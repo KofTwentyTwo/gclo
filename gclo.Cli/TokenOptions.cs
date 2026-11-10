@@ -173,9 +173,9 @@ internal sealed class TokenOptions
       // Interactive use: prompt on stderr (redirected stdout stays clean) and read
       // WITHOUT echo, like git/gh credential prompts — an echoed token would sit on
       // screen and in the terminal scrollback.
-      Console.Error.Write("Token: ");
+      Terminal.ErrorPrompt("Token: ");
       string line = ReadLineNoEcho().Trim();
-      Console.Error.WriteLine();
+      Terminal.ErrorLineBreak();
       return line;
    }
 

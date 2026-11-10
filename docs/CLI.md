@@ -382,6 +382,8 @@ failures, and path-sanitization notes — the same log the desktop app shows
 under **View > Activity log**. Tokens are never written to the log, or anywhere
 else on disk; see [SECURITY.md](../SECURITY.md).
 
+Each entry is one line that starts with its timestamp. Text that came from a repository, such as a file path, is written with control characters shown as `\uXXXX`, and the lines of an exception are indented under their entry, so nothing in a repository can add or imitate an entry. Everything the CLI prints as text shows such characters the same way, and on a console whose code page cannot represent a character (code page 437 or 850, for example) that character is shown in the same form too; the JSON modes use JSON's own escaping.
+
 ## Exit codes
 
 | Code | Meaning | What to do |

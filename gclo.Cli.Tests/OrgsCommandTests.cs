@@ -66,6 +66,21 @@ public sealed class OrgsCommandTests
 
 
    [Fact]
+   public async Task Plain_ALoginFromTheServer_ReachesTheTerminalInVisibleForm()
+   {
+      using var console = new ConsoleCapture();
+      using IDisposable _ = Token("ghp_x");
+      var lister = new FakeOrgLister { Result = ["ac" + (char)0x1B + "[2Jme"] };
+
+      int code = await Run(lister, "--token-env", EnvVar);
+
+      Assert.Equal(0, code);
+      Assert.Equal("ac" + "\\" + "u001B[2Jme", console.Out.TrimEnd());
+   }
+
+
+
+   [Fact]
    public async Task Json_PrintsAnArray()
    {
       using var console = new ConsoleCapture();

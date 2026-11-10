@@ -68,7 +68,7 @@ internal static class OrgsCommand
          switch(reader.Current)
          {
             case "--help" or "-h":
-               Console.Out.WriteLine(HelpText);
+               Terminal.OutVerbatim(HelpText);
                return ExitCodes.Success;
             case "--json":
                reader.RejectValue();
@@ -103,13 +103,13 @@ internal static class OrgsCommand
 
          if(json)
          {
-            Console.Out.WriteLine(JsonSerializer.Serialize(logins, CliJsonContext.Default.IReadOnlyListString));
+            Terminal.OutVerbatim(JsonSerializer.Serialize(logins, CliJsonContext.Default.IReadOnlyListString));
          }
          else
          {
             foreach(string login in logins)
             {
-               Console.Out.WriteLine(login);
+               Terminal.Out(login);
             }
          }
          return ExitCodes.Success;

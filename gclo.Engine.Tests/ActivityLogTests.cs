@@ -43,6 +43,12 @@ public sealed class ActivityLogTests : IDisposable
 
 
 
+   /// <summary>The visible form of one UTF-16 code unit: a backslash, "u", four upper-case hex digits.</summary>
+   private static string Visible(int unit)
+       => "\\" + "u" + unit.ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
+
+
+
    // ---------------------------------------------------------------- line format
 
    [Fact]
@@ -71,6 +77,51 @@ public sealed class ActivityLogTests : IDisposable
       Assert.Matches(s_linePattern, line);
       Assert.Contains("[ERROR] ", line);
       Assert.EndsWith("something failed", line);
+   }
+
+
+
+   [Fact]
+   public void Message_WithLineBreaksAndEscapeCharacters_IsStillOneEntryOnOneLine()
+   {
+      var log = new FileActivityLog(_root);
+      // What a repository can put into a message: a file path with a newline that
+      // imitates the start of another entry, and a terminal escape sequence.
+      string forged = "repo failed: bad\n2026-01-01 00:00:00.000 [INFO] all repositories synced" + (char)0x1B + "[2J";
+
+      log.Error(forged);
+
+      string line = Assert.Single(File.ReadAllLines(log.CurrentLogFilePath));
+      Assert.Matches(s_linePattern, line);
+      Assert.Contains("[ERROR] repo failed: bad", line);
+      Assert.Contains(Visible(0x0A) + "2026-01-01 00:00:00.000 [INFO] all repositories synced", line);
+      Assert.EndsWith(Visible(0x1B) + "[2J", line, StringComparison.Ordinal);
+      Assert.DoesNotContain((char)0x1B, line);
+   }
+
+
+
+   [Fact]
+   public void Exception_WhoseTextImitatesAnEntry_CannotStartALineInTheFirstColumn()
+   {
+      var log = new FileActivityLog(_root);
+      var exception = new InvalidOperationException(
+          "bad path 'a\n2026-01-01 00:00:00.000 [INFO] forged entry' in tree" + (char)0x1B + "[0m");
+
+      log.Error("sync blew up", exception);
+      log.Info("next entry");
+
+      string[] lines = File.ReadAllLines(log.CurrentLogFilePath);
+      // Exactly two lines look like entries: the real ones.
+      Assert.Equal(2, lines.Count(l => s_linePattern.IsMatch(l)));
+      Assert.Matches(s_linePattern, lines[0]);
+      Assert.Matches(s_linePattern, lines[^1]);
+      Assert.All(lines[1..^1], l => Assert.StartsWith("   ", l, StringComparison.Ordinal));
+      // The indent is what keeps a continuation line from matching an entry's start,
+      // for this pattern and for the Log window's filter alike.
+      Assert.All(lines[1..^1], l => Assert.DoesNotMatch(s_linePattern, l));
+      Assert.Contains(lines, l => l.Contains("2026-01-01 00:00:00.000 [INFO] forged entry", StringComparison.Ordinal));
+      Assert.DoesNotContain(lines, l => l.Contains((char)0x1B));
    }
 
 

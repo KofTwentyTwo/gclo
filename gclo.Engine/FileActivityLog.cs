@@ -19,6 +19,9 @@ namespace gclo.Engine;
 /// </summary>
 public sealed class FileActivityLog : IActivityLog
 {
+   /// <summary>What every line of an exception's text starts with, under its entry.</summary>
+   private const string ContinuationIndent = "   ";
+
    private readonly Lock _gate = new();
 
 
@@ -73,10 +76,17 @@ public sealed class FileActivityLog : IActivityLog
 
             string timestamp = DateTime.Now.ToString(
                 "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
-            string entry = $"{timestamp} [{level}] {message}";
+            ///////////////////////////////////////////////////////////////////////////
+            // An entry is one line that starts with its timestamp; readers (the Log //
+            // window's error filter among them) rely on that. Messages carry text   //
+            // from repositories, so the message is escaped onto one line, and an    //
+            // exception's lines are indented: nothing in them can start a line that //
+            // looks like another entry (#143).                                      //
+            ///////////////////////////////////////////////////////////////////////////
+            string entry = $"{timestamp} [{level}] {DisplayText.Escape(message)}";
             if(exception is not null)
             {
-               entry += Environment.NewLine + exception;
+               entry += Environment.NewLine + DisplayText.EscapeLines(exception.ToString(), ContinuationIndent);
             }
 
             File.AppendAllText(CurrentLogFilePath, entry + Environment.NewLine);

@@ -39,6 +39,38 @@ public sealed class ProgressPrinterTests
 
 
 
+   [Theory]
+   [InlineData(false)]
+   [InlineData(true)]
+   public void TextModes_ShowControlCharactersFromRepositoryContentAsVisibleText(bool quiet)
+   {
+      using var console = new ConsoleCapture();
+      var printer = new ProgressPrinter(quiet ? OutputMode.Quiet : OutputMode.Text);
+      string escape = ((char)0x1B).ToString();
+      // An error that quotes a path from a repository's tree: a newline that would
+      // start a fake line, and an escape sequence the terminal would obey.
+      string error = "invalid path 'a\nother  Done" + escape + "[2J'";
+
+      printer.Report(new RepoProgress("we" + escape + "[31mird", SyncStatus.Cloning));
+      printer.Report(new RepoProgress("repo", SyncStatus.Failed, error));
+
+      string line = Assert.Single(Lines(console.Error));
+      Assert.StartsWith("repo  Failed  invalid path 'a", line, StringComparison.Ordinal);
+      Assert.Contains(Visible(0x0A) + "other  Done", line);
+      Assert.Contains(Visible(0x1B) + "[2J'", line);
+      // Compared as characters: a culture-aware text search treats the escape character as ignorable.
+      Assert.DoesNotContain((char)0x1B, console.Error);
+      Assert.DoesNotContain((char)0x1B, console.Out);
+      if(!quiet)
+      {
+         Assert.Equal("we" + Visible(0x1B) + "[31mird  Cloning", Assert.Single(Lines(console.Out)));
+      }
+      // The record for the summary document keeps the text as it was: JSON has its own escaping.
+      Assert.Equal(error, Assert.Single(printer.Failures).Error);
+   }
+
+
+
    [Fact]
    public void Quiet_PrintsOnlyFailures()
    {
@@ -113,6 +145,12 @@ public sealed class ProgressPrinterTests
       Assert.Null(ProgressPrinter.MapInvalidPaths(null));
       Assert.Null(ProgressPrinter.MapInvalidPaths([]));
    }
+
+
+
+   /// <summary>The visible form of one UTF-16 code unit: a backslash, "u", four upper-case hex digits.</summary>
+   private static string Visible(int unit)
+       => "\\" + "u" + unit.ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
 
 
 

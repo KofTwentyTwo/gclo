@@ -77,7 +77,7 @@ internal static class Program
             // repositories are marked Canceled, and the summary still prints.
             e.Cancel = true;
             cts.Cancel();
-            Console.Error.WriteLine("Canceling... (press Ctrl+C again to abort immediately)");
+            Terminal.Error("Canceling... (press Ctrl+C again to abort immediately)");
          }
          // Second Ctrl+C: e.Cancel stays false and the process terminates.
       };
@@ -88,18 +88,18 @@ internal static class Program
       }
       catch(CliUsageException ex)
       {
-         Console.Error.WriteLine(ex.Message);
-         Console.Error.WriteLine("Run 'gclo --help' for usage.");
+         Terminal.Error(ex.Message);
+         Terminal.Error("Run 'gclo --help' for usage.");
          return ExitCodes.Fatal;
       }
       catch(CliErrorException ex)
       {
-         Console.Error.WriteLine(ex.Message);
+         Terminal.Error(ex.Message);
          return ex.ExitCode;
       }
       catch(OperationCanceledException) when(cts.IsCancellationRequested)
       {
-         Console.Error.WriteLine("Canceled.");
+         Terminal.Error("Canceled.");
          return ExitCodes.Partial;
       }
       catch(Exception ex)
@@ -129,12 +129,12 @@ internal static class Program
          // The log must never make a bad situation worse.
       }
 
-      Console.Error.WriteLine($"Unexpected error ({ex.GetType().Name}): {ex.Message}");
+      Terminal.Error($"Unexpected error ({ex.GetType().Name}): {ex.Message}");
       if(details.Length > 0)
       {
-         Console.Error.WriteLine($"Details: {details}");
+         Terminal.Error($"Details: {details}");
       }
-      Console.Error.WriteLine("This looks like a bug in gclo; please report it at https://github.com/KofTwentyTwo/gclo/issues.");
+      Terminal.Error("This looks like a bug in gclo; please report it at https://github.com/KofTwentyTwo/gclo/issues.");
       return ExitCodes.Unexpected;
    }
 
@@ -160,12 +160,12 @@ internal static class Program
          case "accounts":
             return Task.FromResult(AccountsCommand.Run(rest));
          case "--help" or "-h":
-            Console.Out.WriteLine(RootHelp);
+            Terminal.OutVerbatim(RootHelp);
             return Task.FromResult(ExitCodes.Success);
          case "help":
             if(rest.Length == 0)
             {
-               Console.Out.WriteLine(RootHelp);
+               Terminal.OutVerbatim(RootHelp);
                return Task.FromResult(ExitCodes.Success);
             }
             // 'gclo help sync' means 'gclo sync --help'; an unknown name is a usage error.
@@ -173,7 +173,7 @@ internal static class Program
                 ? RunAsync([rest[0], "--help"], cancellationToken)
                 : throw new CliUsageException($"Unknown command '{rest[0]}'.");
          case "--version":
-            Console.Out.WriteLine(Version());
+            Terminal.OutVerbatim(Version());
             return Task.FromResult(ExitCodes.Success);
          default:
             throw new CliUsageException($"Unknown command '{command}'.");
