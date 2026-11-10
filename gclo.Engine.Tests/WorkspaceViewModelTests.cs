@@ -30,6 +30,11 @@ public sealed class WorkspaceViewModelTests : IDisposable
 
 
 
+   /// <summary>Every temporary folder a test asked for; removed after it, whatever the test did with it.</summary>
+   private readonly List<string> _folders = new();
+
+
+
    public void Dispose()
    {
       foreach(WorkspaceViewModel vm in _created)
@@ -40,14 +45,45 @@ public sealed class WorkspaceViewModelTests : IDisposable
             TryDeleteDirectory(vm.TargetFolder);
          }
       }
+      foreach(string folder in _folders)
+      {
+         TryDeleteDirectory(folder);
+      }
    }
 
 
 
-   /// <summary>Synchronous progress: handler runs inline on the reporting thread.</summary>
+   /// <summary>
+   /// A folder name of this test's own under the temp folder. Remembered, so it is
+   /// removed afterwards also when the view model that synced into it was pointed
+   /// elsewhere later, or was never tracked.
+   /// </summary>
+   private string NewTempFolder()
+   {
+      string folder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      _folders.Add(folder);
+      return folder;
+   }
+
+
+
+   /// <summary>
+   /// Synchronous progress: the handler runs inline on the reporting thread, one
+   /// report at a time. The view model's handler belongs to the UI thread and is
+   /// never entered twice at once there; several workers reporting at the same
+   /// moment must not enter it together here either.
+   /// </summary>
    private sealed class SyncProgress(Action<RepoProgress> handler) : IProgress<RepoProgress>
    {
-      public void Report(RepoProgress value) => handler(value);
+      private readonly Lock _oneAtATime = new();
+
+      public void Report(RepoProgress value)
+      {
+         lock(_oneAtATime)
+         {
+            handler(value);
+         }
+      }
    }
 
 
@@ -100,7 +136,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
       vm.Organization = "acme";
       vm.Token = "token-1234567890";
       await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
-      vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      vm.TargetFolder = NewTempFolder();
       vm.MaxConcurrencyValue = 1; // serialize progress: the sync fake reports inline across threads
 
       await vm.LoadReposCommand.ExecuteAsync(null);
@@ -236,7 +272,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
       vm.Organization = "acme";
       vm.Token = "token-1234567890";
       await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
-      vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      vm.TargetFolder = NewTempFolder();
       vm.MaxConcurrencyValue = 1;
       Assert.True(vm.CanEditInputs);
 
@@ -1388,7 +1424,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
       vm.Organization = "acme";
       vm.Token = "token-1234567890";
       await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
-      vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      vm.TargetFolder = NewTempFolder();
       await vm.LoadReposCommand.ExecuteAsync(null);
       int reportingThread = -1;
       _git.CloneHandler = (_, _, _, _, _) =>
@@ -1854,7 +1890,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
          Id = Guid.NewGuid(),
          Name = "Work",
          Organization = "acme",
-         TargetRoot = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N")),
+         TargetRoot = NewTempFolder(),
       };
       var vault = new InMemoryVault();
       vault.Store(account.Id, "vault-token-1234567890");
@@ -2000,7 +2036,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
    [Fact]
    public async Task Sync_AccountWorkspace_RecordsTheResultOnTheStore()
    {
-      string root = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      string root = NewTempFolder();
       try
       {
          var vault = new InMemoryVault();
@@ -2033,7 +2069,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
    [Fact]
    public async Task Sync_QuickSync_DoesNotRecordOnTheStore()
    {
-      string root = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      string root = NewTempFolder();
       try
       {
          var vault = new InMemoryVault();
@@ -2068,7 +2104,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
    [Fact]
    public async Task Sync_RecordSyncResultFailure_StillCompletesTheRun()
    {
-      string root = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      string root = NewTempFolder();
       string storeDir = Path.Combine(root, "store");
       try
       {
@@ -2221,7 +2257,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
       vm.Organization = "acme";
       vm.Token = "token-1234567890";
       await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
-      vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      vm.TargetFolder = NewTempFolder();
 
       Task firstLoad = vm.LoadReposCommand.ExecuteAsync(null);
       first.SetResult([Repo("alpha")]);
@@ -2382,7 +2418,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
       vm.Organization = "acme";
       vm.Token = "token-1234567890";
       await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
-      vm.TargetFolder = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      vm.TargetFolder = NewTempFolder();
       await vm.LoadReposCommand.ExecuteAsync(null);
       await vm.SyncCommand.ExecuteAsync(null); // captures the handler
 
@@ -2401,8 +2437,8 @@ public sealed class WorkspaceViewModelTests : IDisposable
 
 
 
-   /// <summary>A folder of this test's own; the view model's target folder is removed when the test ends.</summary>
-   private static string NewTargetRoot() => Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+   /// <summary>A folder of this test's own, removed when the test ends.</summary>
+   private string NewTargetRoot() => NewTempFolder();
 
 
 

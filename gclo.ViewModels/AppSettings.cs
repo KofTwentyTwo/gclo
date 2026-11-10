@@ -54,7 +54,8 @@ public sealed class AppSettings
 
 
 
-   private static string SettingsPath => Path.Combine(GcloPaths.DataRoot, "settings.json");
+   /// <summary>The settings file in <paramref name="directory"/>, or in the data folder when none is named.</summary>
+   private static string SettingsPath(string? directory) => Path.Combine(directory ?? GcloPaths.DataRoot, "settings.json");
 
 
 
@@ -63,11 +64,13 @@ public sealed class AppSettings
    /// yields defaults, and loaded values are sanitized (concurrency clamped, theme validated).
    /// A file that is there but cannot be used is reported to <paramref name="log"/>.
    /// </summary>
-   public static AppSettings Load(IActivityLog? log = null)
+   /// <param name="log">Where a file that cannot be used is reported.</param>
+   /// <param name="directory">The folder that holds settings.json; the data folder (<see cref="GcloPaths.DataRoot"/>) when null.</param>
+   public static AppSettings Load(IActivityLog? log = null, string? directory = null)
    {
       try
       {
-         string path = SettingsPath;
+         string path = SettingsPath(directory);
          if(File.Exists(path))
          {
             AppSettings? loaded = JsonSerializer.Deserialize(
@@ -104,22 +107,24 @@ public sealed class AppSettings
    /// because losing a preference write must never crash the app; they are reported
    /// to <paramref name="log"/> and in the result.
    /// </summary>
+   /// <param name="log">Where a failure is reported.</param>
+   /// <param name="directory">The folder that holds settings.json; the data folder (<see cref="GcloPaths.DataRoot"/>) when null.</param>
    /// <returns>True when the settings are on disk.</returns>
-   public bool Save(IActivityLog? log = null) => Save(log, s_savePatience);
+   public bool Save(IActivityLog? log = null, string? directory = null) => Save(log, s_savePatience, directory);
 
 
 
    /// <summary>Saves with its own patience for a file that is in use, for tests.</summary>
-   internal bool Save(IActivityLog? log, TimeSpan patience)
+   internal bool Save(IActivityLog? log, TimeSpan patience, string? directory = null)
    {
       try
       {
          Sanitize();
-         string path = SettingsPath;
-         string? directory = Path.GetDirectoryName(path);
-         if(!string.IsNullOrEmpty(directory))
+         string path = SettingsPath(directory);
+         string? folder = Path.GetDirectoryName(path);
+         if(!string.IsNullOrEmpty(folder))
          {
-            Directory.CreateDirectory(directory);
+            Directory.CreateDirectory(folder);
          }
 
          // A name of its own: two processes saving at once do not write one file.

@@ -77,4 +77,29 @@ public sealed class GcloPathsTests
 
       Assert.Equal(Path.Combine(GcloPaths.DefaultDataRoot, "logs"), GcloPaths.LogDirectory);
    }
+
+
+
+   /// <summary>
+   /// Settings named no folder go to the data folder. Checked here, in the one class
+   /// that moves the data folder for the process, so no settings test has to.
+   /// </summary>
+   [Fact]
+   public void Settings_SavedAndLoadedWithoutAFolder_UseTheDataRoot()
+   {
+      string moved = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
+      Environment.SetEnvironmentVariable("GCLO_DATA_DIR", moved);
+      try
+      {
+         Assert.True(new AppSettings { Theme = "Dark" }.Save());
+
+         Assert.True(File.Exists(Path.Combine(moved, "settings.json")));
+         Assert.Equal("Dark", AppSettings.Load().Theme);
+      }
+      finally
+      {
+         Environment.SetEnvironmentVariable("GCLO_DATA_DIR", null);
+         GitTestHelpers.TryDeleteDirectory(moved);
+      }
+   }
 }

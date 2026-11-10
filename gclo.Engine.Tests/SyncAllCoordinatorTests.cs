@@ -43,10 +43,23 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
 
 
-   /// <summary>Synchronous progress: handler runs inline on the reporting thread.</summary>
+   /// <summary>
+   /// Synchronous progress: the handler runs inline on the reporting thread, one
+   /// report at a time. The view model's handler belongs to the UI thread and is
+   /// never entered twice at once there; several workers reporting at the same
+   /// moment must not enter it together here either.
+   /// </summary>
    private sealed class SyncProgress(Action<RepoProgress> handler) : IProgress<RepoProgress>
    {
-      public void Report(RepoProgress value) => handler(value);
+      private readonly Lock _oneAtATime = new();
+
+      public void Report(RepoProgress value)
+      {
+         lock(_oneAtATime)
+         {
+            handler(value);
+         }
+      }
    }
 
 
@@ -213,11 +226,11 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
       Task<SyncAllResult> run = _coordinator.RunAsync(new[] { alpha, beta }, CancellationToken.None);
 
-      await entered.Task; // alpha's sync is in flight...
+      await entered.Task.WaitAsync(TimeSpan.FromSeconds(30)); // alpha's sync is in flight...
       Assert.Equal(new[] { "org-alpha" }, _lister.Organizations); // ...and beta has not started
 
       gate.SetResult();
-      SyncAllResult result = await run;
+      SyncAllResult result = await run.WaitAsync(TimeSpan.FromSeconds(30));
 
       Assert.Equal(new SyncAllResult(Ran: 2, Skipped: 0, WasCanceled: false), result);
       Assert.Equal(new[] { "org-alpha", "org-beta" }, _lister.Organizations);
@@ -336,10 +349,10 @@ public sealed class SyncAllCoordinatorTests : IDisposable
       using var cts = new CancellationTokenSource();
 
       Task<SyncAllResult> run = _coordinator.RunAsync(new[] { alpha, beta }, cts.Token);
-      await entered.Task;
+      await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
       cts.Cancel(); // requested while alpha's sync is in flight...
       gate.SetResult(); // ...which must still run to completion
-      SyncAllResult result = await run;
+      SyncAllResult result = await run.WaitAsync(TimeSpan.FromSeconds(30));
 
       Assert.Equal(new SyncAllResult(Ran: 1, Skipped: 0, WasCanceled: true), result);
       Assert.Equal(SyncStatus.Done, alpha.Repos[0].Status); // finished, not canceled

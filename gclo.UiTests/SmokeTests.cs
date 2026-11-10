@@ -162,14 +162,16 @@ public sealed partial class SmokeTests : UiTestBase
 
 
 
-   // (7) Typing into the token box (which kicks the offline org-listing path) does
-   //     not crash the app, and the org combo stays present. No token validation
-   //     is asserted — these tests run without network access or credentials.
+   // (7) Typing into the token box does not crash the app, and the org combo
+   //     stays present. The text is too short to be taken for a token, so nothing
+   //     is looked up: these tests run without network access or credentials, and
+   //     a longer made-up token would be sent to the real API to be refused. The
+   //     listing itself is exercised offline, with the fixture token, in RepoTableTests.
    [Fact]
    public void ConnectTokenBox_TypingText_KeepsAppAliveAndOrgBoxPresent()
    {
       AutomationElement tokenBox = Session.WaitForElement("ConnectTokenBox");
-      Session.EnterText(tokenBox, "ghp_uitests_offline_dummy_token");
+      Session.EnterText(tokenBox, "ghp_short");
 
       Assert.NotNull(Session.WaitForElement("ConnectOrgBox"));
       Assert.False(Session.App.HasExited);

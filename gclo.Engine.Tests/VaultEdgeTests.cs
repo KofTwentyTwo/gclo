@@ -98,6 +98,28 @@ public sealed class VaultEdgeTests
 
 
 
+   /// <summary>A vault whose entries are named for this test run alone, never in the namespace the app uses.</summary>
+   private static CredentialManagerVault NewTestVault()
+       => new(isWindows: true, scope: "tests-" + Guid.NewGuid().ToString("N")[..12]);
+
+
+
+   [Fact]
+   public void DefaultConstructor_NamesItsEntriesForTheDataFolder_AndFindsNothingForAnAccountNobodySaved()
+   {
+      if(!OperatingSystem.IsWindows())
+      {
+         return;
+      }
+
+      // The one test that uses the namespace of the real data folder, and it only reads.
+      var vault = new CredentialManagerVault();
+
+      Assert.Null(vault.TryRetrieve(Guid.NewGuid()));
+   }
+
+
+
    [Fact]
    public void Store_TokenLargerThanCredManBlobLimit_SurfacesWin32Error()
    {
@@ -107,7 +129,7 @@ public sealed class VaultEdgeTests
       }
 
       // CRED_MAX_CREDENTIAL_BLOB_SIZE is 2560 bytes; UTF-16 doubles the length.
-      var vault = new CredentialManagerVault();
+      CredentialManagerVault vault = NewTestVault();
       string oversized = new('x', 4000);
 
       Win32Exception ex = Assert.Throws<Win32Exception>(() => vault.Store(Guid.NewGuid(), oversized));
@@ -125,7 +147,7 @@ public sealed class VaultEdgeTests
          return;
       }
 
-      var vault = new CredentialManagerVault();
+      CredentialManagerVault vault = NewTestVault();
       string invalidTarget = new('x', 40_000); // far past CRED_MAX_GENERIC_TARGET_NAME_LENGTH
 
       Win32Exception ex = Assert.Throws<Win32Exception>(() => vault.TryRetrieve(invalidTarget, Guid.NewGuid()));
@@ -143,7 +165,7 @@ public sealed class VaultEdgeTests
          return;
       }
 
-      var vault = new CredentialManagerVault();
+      CredentialManagerVault vault = NewTestVault();
       string invalidTarget = new('x', 40_000);
 
       Win32Exception ex = Assert.Throws<Win32Exception>(() => vault.Delete(invalidTarget, Guid.NewGuid()));

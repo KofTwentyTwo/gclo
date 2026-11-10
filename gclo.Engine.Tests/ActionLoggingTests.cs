@@ -37,9 +37,23 @@ public sealed class ActionLoggingTests : IDisposable
 
 
 
+   /// <summary>
+   /// Synchronous progress: the handler runs inline on the reporting thread, one
+   /// report at a time. The view model's handler belongs to the UI thread and is
+   /// never entered twice at once there; several workers reporting at the same
+   /// moment must not enter it together here either.
+   /// </summary>
    private sealed class SyncProgress(Action<RepoProgress> handler) : IProgress<RepoProgress>
    {
-      public void Report(RepoProgress value) => handler(value);
+      private readonly Lock _oneAtATime = new();
+
+      public void Report(RepoProgress value)
+      {
+         lock(_oneAtATime)
+         {
+            handler(value);
+         }
+      }
    }
 
 

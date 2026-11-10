@@ -14,7 +14,6 @@ namespace gclo.Engine.Tests;
 /// branches, settings failure fallbacks, store corruption handling, and the
 /// remaining status-text arms. Part of the 100%-coverage contract.
 /// </summary>
-[Collection("GCLO_DATA_DIR")] // sets a process-wide variable: never beside another class that does
 public sealed class CoverageResidueTests
 {
    // ------------------------------------------------- WindowsPathValidator
@@ -55,7 +54,6 @@ public sealed class CoverageResidueTests
    {
       string dir = Path.Combine(Path.GetTempPath(), "gclo-tests", Guid.NewGuid().ToString("N"));
       Directory.CreateDirectory(dir);
-      Environment.SetEnvironmentVariable("GCLO_DATA_DIR", dir);
       return (dir, new EnvScope(dir));
    }
 
@@ -65,7 +63,6 @@ public sealed class CoverageResidueTests
    {
       public void Dispose()
       {
-         Environment.SetEnvironmentVariable("GCLO_DATA_DIR", null);
          try
          {
             Directory.Delete(dir, recursive: true);
@@ -86,7 +83,7 @@ public sealed class CoverageResidueTests
       {
          File.WriteAllText(Path.Combine(dir, "settings.json"), "{ not json");
 
-         var settings = AppSettings.Load();
+         var settings = AppSettings.Load(directory: dir);
 
          Assert.Equal("System", settings.Theme);
          Assert.Equal(AppSettings.DefaultConcurrency, settings.DefaultMaxConcurrency);
@@ -103,7 +100,7 @@ public sealed class CoverageResidueTests
       {
          File.WriteAllText(Path.Combine(dir, "settings.json"), "null");
 
-         Assert.Equal("System", AppSettings.Load().Theme);
+         Assert.Equal("System", AppSettings.Load(directory: dir).Theme);
       }
    }
 
@@ -118,7 +115,7 @@ public sealed class CoverageResidueTests
          File.WriteAllText(
              Path.Combine(dir, "settings.json"), """{ "Theme": "Hotdog" }""");
 
-         Assert.Equal("System", AppSettings.Load().Theme);
+         Assert.Equal("System", AppSettings.Load(directory: dir).Theme);
       }
    }
 
@@ -134,7 +131,10 @@ public sealed class CoverageResidueTests
          using var exclusiveLock = new FileStream(
              path, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
 
-         new AppSettings().Save(); // must not throw
+         // Must not throw, and must say that nothing was written.
+         bool saved = new AppSettings().Save(log: null, TimeSpan.FromMilliseconds(50), dir);
+
+         Assert.False(saved);
       }
    }
 

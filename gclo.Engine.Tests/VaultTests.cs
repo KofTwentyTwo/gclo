@@ -69,6 +69,17 @@ public sealed class VaultTests
 
    // ---------------------------------------------------------------- CredentialManagerVault
 
+   /// <summary>
+   /// A vault over the real Credential Manager whose entries are named for this test
+   /// run alone ("gclo:tests-...:account:..."), never in the namespace the installed
+   /// app and the CLI use: whatever a test writes or leaves behind is not an account's token.
+   /// </summary>
+   [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+   private static CredentialManagerVault NewTestVault()
+       => new(isWindows: true, scope: "tests-" + Guid.NewGuid().ToString("N")[..12]);
+
+
+
    [Fact]
    public void CredentialManager_RoundTrips_AgainstTheRealStore()
    {
@@ -79,7 +90,7 @@ public sealed class VaultTests
          return;
       }
 
-      var vault = new CredentialManagerVault();
+      CredentialManagerVault vault = NewTestVault();
       var id = Guid.NewGuid();
       try
       {
