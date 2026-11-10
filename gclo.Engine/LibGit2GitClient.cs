@@ -269,7 +269,7 @@ public sealed class LibGit2GitClient : IGitClient
          // tip through the stored mapping. Freshly-invalid paths the mapping does
          // not cover surface as a typed failure listing the effective paths.
          AdvanceHeadToTrackedTip(repo);
-         RecoveryDocument stored = LoadRecoveryDocument(recoveryFile);
+         RecoveryDocument stored = LoadRecoveryDocument(recoveryFile, WorkingDirectoryOf(repo));
          if(stored.MaterializedTip is not null && string.Equals(stored.MaterializedTip, repo.Head.Tip?.Sha, StringComparison.Ordinal))
          {
             // The tree on disk already reflects this tip: nothing to rewrite. A
@@ -676,8 +676,9 @@ public sealed class LibGit2GitClient : IGitClient
          repo.Config.Set("core.longpaths", true, ConfigurationLevel.Local);
       }
 
+      string workdir = WorkingDirectoryOf(repo);
       string recoveryFile = GetRecoveryFilePath(repo);
-      RecoveryDocument? previous = File.Exists(recoveryFile) ? LoadRecoveryDocument(recoveryFile) : null;
+      RecoveryDocument? previous = File.Exists(recoveryFile) ? LoadRecoveryDocument(recoveryFile, workdir) : null;
       if(previous is not null)
       {
          recovery = MergeRecoveries(stored: ToRecovery(previous), incoming: recovery);
@@ -697,7 +698,6 @@ public sealed class LibGit2GitClient : IGitClient
          throw new InvalidRepositoryPathsException(stillInvalid);
       }
 
-      string workdir = repo.Info.WorkingDirectory;
 
       // A real checkout removes what left the tree; this materialization must too,
       // or a recovery-managed working tree accumulates every file upstream ever
@@ -707,59 +707,26 @@ public sealed class LibGit2GitClient : IGitClient
       {
          if(!effectiveNow.Contains(stale))
          {
-            DeleteMaterializedFile(workdir, stale);
+            WorkingTree.Delete(workdir, stale);
          }
       }
 
+      // Parent folders are shared by many files; each is checked for a link once.
+      var verifiedFolders = new HashSet<string>(StringComparer.Ordinal);
       foreach((string? originalPath, string? effectivePath, Blob? blob) in entries)
       {
          ct.ThrowIfCancellationRequested();
 
-         string fullPath = Path.Combine(workdir, effectivePath.Replace('/', Path.DirectorySeparatorChar));
-         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-         if(File.Exists(fullPath))
-         {
-            // Force semantics: overwrite whatever is there, read-only or not.
-            File.SetAttributes(fullPath, FileAttributes.Normal);
-         }
-
          // Filter through .gitattributes (CRLF etc.) under the ORIGINAL repo path,
-         // exactly as a checkout of that entry would.
+         // exactly as a checkout of that entry would. Force semantics: whatever is
+         // at the destination is replaced, read-only or not (see WorkingTree).
          using Stream content = blob.GetContentStream(new FilteringOptions(originalPath));
-         using var file = new FileStream(fullPath, FileMode.Create, FileAccess.Write);
+         using FileStream file = WorkingTree.Create(workdir, effectivePath, verifiedFolders);
          content.CopyTo(file);
       }
 
       SaveRecovery(repo, recovery, entries.Select(e => e.EffectivePath), tip.Sha);
       repo.Config.Set(CheckoutPendingKey, false, ConfigurationLevel.Local);
-   }
-
-
-
-   /// <summary>
-   /// Removes one file a previous materialization wrote (a user-deleted file is
-   /// fine) and prunes the directories it leaves empty, stopping at the working
-   /// directory root.
-   /// </summary>
-   private static void DeleteMaterializedFile(string workdir, string effectivePath)
-   {
-      string fullPath = Path.Combine(workdir, effectivePath.Replace('/', Path.DirectorySeparatorChar));
-      if(File.Exists(fullPath))
-      {
-         File.SetAttributes(fullPath, FileAttributes.Normal);
-         File.Delete(fullPath);
-      }
-
-      string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workdir));
-      string? directory = Path.GetDirectoryName(fullPath);
-      while(directory is not null
-          && !string.Equals(Path.TrimEndingDirectorySeparator(directory), root, StringComparison.OrdinalIgnoreCase)
-          && Directory.Exists(directory)
-          && !Directory.EnumerateFileSystemEntries(directory).Any())
-      {
-         Directory.Delete(directory);
-         directory = Path.GetDirectoryName(directory);
-      }
    }
 
 
@@ -947,11 +914,19 @@ public sealed class LibGit2GitClient : IGitClient
 
 
 
-   private static RecoveryDocument LoadRecoveryDocument(string filePath)
+   /// <summary>
+   /// Reads .git\gclo-recovery.json. The file sits on disk between syncs, where
+   /// anything can edit it, and its list of materialized paths decides what the next
+   /// apply deletes: every entry must be a path inside the working directory, or the
+   /// whole file is refused (#141). Renames and skips need no check here; they only
+   /// take effect through the effective paths, which are validated before any write.
+   /// </summary>
+   private static RecoveryDocument LoadRecoveryDocument(string filePath, string workdir)
    {
+      RecoveryDocument document;
       try
       {
-         return JsonSerializer.Deserialize<RecoveryDocument>(File.ReadAllText(filePath), s_recoveryJsonOptions)
+         document = JsonSerializer.Deserialize<RecoveryDocument>(File.ReadAllText(filePath), s_recoveryJsonOptions)
              ?? throw new JsonException("the document is empty");
       }
       catch(JsonException ex)
@@ -960,7 +935,46 @@ public sealed class LibGit2GitClient : IGitClient
              $"The path-recovery file '{filePath}' is corrupt ({ex.Message}). "
              + "Delete it and use Resolve on this repository again to rebuild it.", ex);
       }
+
+      foreach(string path in document.MaterializedPaths ?? [])
+      {
+         try
+         {
+            // Every path gclo ever recorded here had passed the validator and names a
+            // file in the tree; one that does not was not written by gclo.
+            if(string.IsNullOrEmpty(path) || WindowsPathValidator.ValidatePaths([path]).Count > 0)
+            {
+               throw new InvalidOperationException("not a path gclo could have written");
+            }
+            WorkingTree.Resolve(workdir, path);
+         }
+         catch(Exception ex) when(ex is InvalidOperationException or ArgumentException or IOException or NotSupportedException)
+         {
+            throw new InvalidOperationException(
+                $"The path-recovery file '{filePath}' lists a file that is not in this repository's working tree ('{DisplayPath(path)}'). "
+                + "Delete it and use Resolve on this repository again to rebuild it.", ex);
+         }
+      }
+
+      return document;
    }
+
+
+
+   /// <summary>A path from an untrusted file, cut to a length that fits a message.</summary>
+   private static string DisplayPath(string? path)
+       => path is null ? "" : path.Length <= 200 ? path : path[..200] + "...";
+
+
+
+   /// <summary>
+   /// The working directory path recovery writes into. A bare repository has none,
+   /// and nothing gclo clones is bare: one that carries a recovery file was put
+   /// together by hand.
+   /// </summary>
+   private static string WorkingDirectoryOf(Repository repo)
+       => repo.Info.WorkingDirectory
+           ?? throw new InvalidOperationException("This is a bare repository; it has no working tree to materialize.");
 
 
 
@@ -1019,12 +1033,10 @@ public sealed class LibGit2GitClient : IGitClient
          {
             return;
          }
-         // Pack files under .git are written read-only; clear attributes so delete succeeds.
-         foreach(string file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-         {
-            File.SetAttributes(file, FileAttributes.Normal);
-         }
-         Directory.Delete(path, recursive: true);
+         // Read-only pack files and all; never through a link inside the folder (a
+         // checked-out symlink to a directory would otherwise lead the delete
+         // elsewhere), see WorkingTree (#141).
+         WorkingTree.DeleteDirectory(path);
       }
       catch
       {

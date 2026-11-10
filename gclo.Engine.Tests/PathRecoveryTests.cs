@@ -4,6 +4,7 @@
  */
 
 using System.Text;
+using System.Text.Json.Nodes;
 using LibGit2Sharp;
 using static gclo.Engine.Tests.GitTestHelpers;
 
@@ -230,6 +231,130 @@ public sealed class PathRecoveryTests : IDisposable
       string json = File.ReadAllText(RecoveryFilePath(target));
       Assert.Contains("bad_file.txt", json);
       Assert.Contains("worse_new.txt", json);
+   }
+
+
+
+   // ---------------------------------------------------------------- inside the working tree only (#141)
+
+   [Theory]
+   [InlineData("absolute")]
+   [InlineData("relative")]
+   [InlineData("trailing-space-folder")]
+   [InlineData("empty")]
+   public async Task RecoveryFileListingAFileOutsideTheRepository_IsRefused_AndThatFileSurvives(string kind)
+   {
+      string source = CreateForgedRepo(_root, ("bad:file.txt", "bad"), ("keep.txt", "keep"));
+      string target = await CloneExpectingInvalidPathsAsync(source, "outside-" + kind);
+      await _client.ApplyRecoveryAsync(target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None);
+      string victim = NewPath("victim-" + kind + ".txt");
+      File.WriteAllText(victim, "untouched");
+      string listed = kind switch
+      {
+         "absolute" => victim,
+         "relative" => "../" + Path.GetFileName(victim),
+         // Inside the tree as written, but "docs " is a name a link can hide behind:
+         // whoever checks "docs" and whoever opens "docs " would not mean the same folder.
+         "trailing-space-folder" => "docs /victim.txt",
+         _ => "",
+      };
+      // .git\gclo-recovery.json sits on disk between syncs; this is it after someone
+      // (or something) added a path the recovery never wrote. The list of materialized
+      // paths is what the next apply deletes from.
+      string recoveryFile = RecoveryFilePath(target);
+      JsonNode document = JsonNode.Parse(File.ReadAllText(recoveryFile))!;
+      document["MaterializedPaths"]!.AsArray().Add(listed);
+      File.WriteAllText(recoveryFile, document.ToJsonString());
+      ReplaceForgedEntry(source, remove: "keep.txt", add: ("other.txt", "o"));
+
+      InvalidOperationException pull = await Assert.ThrowsAsync<InvalidOperationException>(
+          () => _client.PullAsync(target, Token, CancellationToken.None));
+      InvalidOperationException apply = await Assert.ThrowsAsync<InvalidOperationException>(
+          () => _client.ApplyRecoveryAsync(target, Recovery(skips: ["bad:file.txt"]), CancellationToken.None));
+
+      Assert.Contains("lists a file that is not in this repository's working tree", pull.Message);
+      Assert.Contains("Delete it and use Resolve", pull.Message);
+      Assert.Contains("lists a file that is not in this repository's working tree", apply.Message);
+      Assert.Equal("untouched", File.ReadAllText(victim));
+      // Nothing of the half-trusted file was acted on: the tree is as it was.
+      Assert.Equal("keep", File.ReadAllText(Path.Combine(target, "keep.txt")));
+      Assert.Equal("bad", File.ReadAllText(Path.Combine(target, "bad_file.txt")));
+   }
+
+
+
+   [Theory]
+   [InlineData(".git")]
+   [InlineData(".GIT")]
+   [InlineData("git~1")]
+   public async Task ApplyRecovery_RenameThatWouldLandInGitsFolder_IsStillInvalid_AndWritesNothingThere(string gitFolderName)
+   {
+      string source = CreateForgedRepo(_root, ("bad:dir/poc.txt", "payload"), ("keep.txt", "keep"));
+      string target = await CloneExpectingInvalidPathsAsync(source, "into-git-" + gitFolderName.Replace('~', '-').Trim('.'));
+
+      InvalidRepositoryPathsException ex = await Assert.ThrowsAsync<InvalidRepositoryPathsException>(
+          () => _client.ApplyRecoveryAsync(target, Recovery(renames: [("bad:dir", gitFolderName)]), CancellationToken.None));
+
+      InvalidPathInfo info = Assert.Single(ex.Paths);
+      Assert.Equal(gitFolderName, info.RepoPath);
+      Assert.Contains("git's own folder", info.Reason);
+      Assert.False(File.Exists(Path.Combine(target, ".git", "poc.txt")));
+      Assert.False(File.Exists(Path.Combine(target, "keep.txt"))); // validated before any write
+   }
+
+
+
+   [Fact]
+   public async Task ApplyRecovery_FolderInTheTreeIsALinkToElsewhere_IsRefused_AndNothingIsWrittenThere()
+   {
+      string source = CreateForgedRepo(_root, ("bad:file.txt", "bad"), ("vendor/lib.txt", "payload"));
+      string target = await CloneExpectingInvalidPathsAsync(source, "link-in-tree");
+      string elsewhere = NewPath("elsewhere");
+      Directory.CreateDirectory(elsewhere);
+      // The folder the tree is about to be written into already exists, as a link.
+      string link = Path.Combine(target, "vendor");
+      WorkingTreeTests.CreateDirectoryLink(link, elsewhere);
+      try
+      {
+         InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(
+             () => _client.ApplyRecoveryAsync(target, Recovery(renames: [("bad:file.txt", "bad_file.txt")]), CancellationToken.None));
+
+         Assert.Contains("is a link to another location", ex.Message);
+         Assert.Empty(Directory.EnumerateFileSystemEntries(elsewhere));
+      }
+      finally
+      {
+         WorkingTreeTests.RemoveLink(link);
+      }
+   }
+
+
+
+   [Fact]
+   public async Task FailedClone_CleanupNeverLeavesTheFolder_AndRemovesIt()
+   {
+      // A clone that fails after its fetch is removed again. What it leaves must be
+      // deleted without following a link out of the folder.
+      string source = CreateForgedRepo(_root, ("readme.txt", "hello"));
+      string target = NewPath("cleanup");
+      string elsewhere = NewPath("cleanup-elsewhere");
+      Directory.CreateDirectory(elsewhere);
+      string victim = Path.Combine(elsewhere, "victim.txt");
+      File.WriteAllText(victim, "untouched");
+      File.SetAttributes(victim, FileAttributes.ReadOnly);
+      _client.AfterFetchForTesting = () =>
+      {
+         WorkingTreeTests.CreateDirectoryLink(Path.Combine(target, "linked"), elsewhere);
+         throw new InvalidOperationException("fails between fetch and checkout");
+      };
+
+      await Assert.ThrowsAsync<InvalidOperationException>(
+          () => _client.CloneAsync(source, target, Token, null, CancellationToken.None));
+
+      Assert.False(Directory.Exists(target));
+      Assert.Equal("untouched", File.ReadAllText(victim));
+      Assert.True(File.GetAttributes(victim).HasFlag(FileAttributes.ReadOnly));
+      File.SetAttributes(victim, FileAttributes.Normal);
    }
 
 

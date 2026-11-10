@@ -60,6 +60,47 @@ public sealed class WindowsPathValidationTests : IDisposable
 
 
 
+   [Theory]
+   [InlineData(".git", "_git")]
+   [InlineData(".GIT", "_GIT")]
+   [InlineData(".Git", "_Git")]
+   [InlineData("git~1", "git_1")]
+   [InlineData("GIT~1", "GIT_1")]
+   [InlineData(".git.", "_git")]
+   [InlineData(".git ", "_git")]
+   [InlineData("git~1.", "git_1")]
+   [InlineData(".git:stream", "_git_stream")]
+   public void ValidatePaths_GitsOwnFolderName_IsInvalid_AsAnySegment(string segment, string expectedSuggestion)
+   {
+      // git refuses such a tree entry at checkout. The recovery materializes the tree
+      // itself, and a rename can produce the name too, so the validator refuses it (#141).
+      foreach(string path in new[] { segment, $"{segment}/config", $"vendor/lib/{segment}/hooks/pre-commit" })
+      {
+         InvalidPathInfo info = Assert.Single(WindowsPathValidator.ValidatePaths([path]));
+
+         Assert.EndsWith(segment, info.RepoPath, StringComparison.Ordinal);
+         Assert.Contains("git's own folder", info.Reason);
+         Assert.Equal(expectedSuggestion, info.SuggestedName);
+         // The suggestion is itself a valid name: accepting it settles the matter.
+         Assert.Empty(WindowsPathValidator.ValidatePaths([info.SuggestedName!]));
+      }
+   }
+
+
+
+   [Fact]
+   public void ValidatePaths_NamesThatOnlyResembleGitsFolder_AreFine()
+   {
+      // git~2 and up are ordinary names: git accepts them and GitHub can host them.
+      Assert.Empty(WindowsPathValidator.ValidatePaths(
+          [
+              ".github/workflows/ci.yml", ".gitignore", ".gitattributes", ".gitmodules", "git/readme.md",
+              "git~2/readme.md", "GIT~10/readme.md", "git~x/readme.md", "docs/.git-notes.md",
+          ]));
+   }
+
+
+
    [Fact]
    public void Validate_FlagsCaseOnlyCollision()
    {

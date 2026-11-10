@@ -254,6 +254,16 @@ public static class WindowsPathValidator
       {
          return ($"segment longer than {MaxSegmentLength} characters", segment[..MaxSegmentLength]);
       }
+      if(WorkingTree.IsGitDirectoryName(segment))
+      {
+         // git refuses such an entry at checkout; the recovery's own materialization
+         // must too, or a tree entry (or a rename) could write into .git (#141).
+         // Checked before the trailing-dot rule, whose suggestion for ".git." would
+         // be ".git" itself.
+         string plain = new string(segment.TrimEnd(' ', '.').Select(c => s_invalidChars.Contains(c) ? '_' : c).ToArray());
+         return ("this name is git's own folder ('.git', or its short name 'GIT~1')", plain.Replace('.', '_').Replace('~', '_'));
+      }
+
       if(segment.EndsWith(' ') || segment.EndsWith('.'))
       {
          string trimmed = segment.TrimEnd(' ', '.');
