@@ -53,14 +53,17 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
       IGitHubGateway gateway = _gatewayFactory(token);
 
       // Pages manually (instead of one GetAll* call) so cancellation is honored
-      // between round trips on owners with hundreds of repositories.
+      // between round trips on owners with hundreds of repositories. Each round
+      // trip is awaited with the token as well: the gateway cannot be canceled, so
+      // a request that hangs is abandoned (it ends on its own, at the HTTP timeout).
       async Task<List<GitHubRepo>> PageAsync(Func<int, Task<IReadOnlyList<GitHubRepo>>> fetchPage)
       {
          var all = new List<GitHubRepo>();
          for(int page = 1; ; page++)
          {
             cancellationToken.ThrowIfCancellationRequested();
-            IReadOnlyList<GitHubRepo> batch = await fetchPage(page).ConfigureAwait(false);
+            IReadOnlyList<GitHubRepo> batch = await GitHubFailures.WaitFor(fetchPage(page), cancellationToken)
+                .ConfigureAwait(false);
             all.AddRange(batch);
             if(batch.Count < IGitHubGateway.PageSize)
             {
@@ -87,7 +90,8 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
             // organization would list only its public repositories and report a
             // green sync that silently omitted the rest, so the account kind is
             // resolved first and an invisible organization is an error (#31).
-            GitHubAccountKind kind = await gateway.GetAccountKindAsync(organization).ConfigureAwait(false);
+            GitHubAccountKind kind = await GitHubFailures
+                .WaitFor(gateway.GetAccountKindAsync(organization), cancellationToken).ConfigureAwait(false);
             if(kind == GitHubAccountKind.Organization)
             {
                throw new GitHubAccessException(
@@ -106,7 +110,8 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
             // A user account: the token's own account gets its owned repos
             // (including private); any other user account yields the repos the
             // token can see there (public).
-            string currentUser = await gateway.GetCurrentUserLoginAsync().ConfigureAwait(false);
+            string currentUser = await GitHubFailures
+                .WaitFor(gateway.GetCurrentUserLoginAsync(), cancellationToken).ConfigureAwait(false);
             if(string.Equals(currentUser, organization, StringComparison.OrdinalIgnoreCase))
             {
                repositories = await PageAsync(gateway.GetOwnRepositoriesPageAsync)
@@ -129,30 +134,10 @@ public sealed class GitHubRepositoryLister : IRepositoryLister
             }
          }
       }
-      catch(AuthorizationException ex)
+      catch(Exception ex) when(GitHubFailures.Knows(ex, cancellationToken))
       {
-         throw new GitHubAccessException(
-             GitHubAccessKind.Unauthorized,
-             "GitHub rejected the token (401). Check the PAT and make sure it has 'repo' (classic) or repository read access (fine-grained).", ex);
-      }
-      catch(RateLimitExceededException ex)
-      {
-         throw new GitHubAccessException(
-             GitHubAccessKind.RateLimited, $"GitHub API rate limit exceeded; it resets at {ex.Reset:u}.", ex);
-      }
-      catch(SecondaryRateLimitExceededException ex)
-      {
-         // A burst of requests, not a scope problem; Octokit models it beside (not
-         // under) AbuseException, so both get the same translation.
-         throw new GitHubAccessException(
-             GitHubAccessKind.RateLimited,
-             "GitHub's secondary rate limit was hit (too many requests in a short time); retry in a minute.", ex);
-      }
-      catch(AbuseException ex)
-      {
-         throw new GitHubAccessException(
-             GitHubAccessKind.RateLimited,
-             $"GitHub's secondary rate limit was hit (too many requests in a short time); retry in {ex.RetryAfterSeconds ?? 60} seconds.", ex);
+         // What the failure means to a caller is decided in one place, for both listers.
+         throw GitHubFailures.Translate(ex);
       }
 
       cancellationToken.ThrowIfCancellationRequested();

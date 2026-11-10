@@ -33,8 +33,8 @@ internal static class OrgsCommand
           0  listed successfully (even when only the account login is visible)
           1  canceled (Ctrl+C)
           2  fatal: bad arguments, or missing token
-          3  the token was rejected (401)
-          4  rate limited; retry later
+          3  the token was rejected (401) or refused access (403)
+          4  rate limit, network failure, timeout, or an error on GitHub's side; retry later
 
         Security:
           There is deliberately no '--token <value>' option: process command lines

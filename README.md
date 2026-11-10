@@ -180,7 +180,10 @@ gclo sync --org contoso --target ~/src/contoso --json |
 | --- | --- |
 | 0 | Everything succeeded. |
 | 1 | The run completed, but some repositories failed or the run was canceled (Ctrl+C). |
-| 2 | Fatal: bad arguments, missing/empty/rejected token, or organization not found. |
+| 2 | Fatal: bad arguments, missing or empty token, or organization not found. |
+| 3 | GitHub rejected the token or refused it access: fix the token, do not retry as is. |
+| 4 | A rate limit, a network failure, a timeout, or an error on GitHub's side: retry later. |
+| 70 | An unexpected error inside gclo; details are in the activity log. |
 
 Full reference — all options, output streams, Ctrl+C behavior, and more examples: [docs/CLI.md](docs/CLI.md).
 

@@ -144,6 +144,14 @@ public sealed class OrgsCommandTests
       var throttled = new FakeOrgLister { Throw = new GitHubAccessException(GitHubAccessKind.RateLimited, "slow down") };
       ex = await Assert.ThrowsAsync<CliErrorException>(() => Run(throttled, "--token-env", EnvVar));
       Assert.Equal(ExitCodes.Transient, ex.ExitCode);
+
+      var unavailable = new FakeOrgLister { Throw = new GitHubAccessException(GitHubAccessKind.Unavailable, "no answer") };
+      ex = await Assert.ThrowsAsync<CliErrorException>(() => Run(unavailable, "--token-env", EnvVar));
+      Assert.Equal(ExitCodes.Transient, ex.ExitCode);
+
+      var refused = new FakeOrgLister { Throw = new GitHubAccessException(GitHubAccessKind.Forbidden, "refused") };
+      ex = await Assert.ThrowsAsync<CliErrorException>(() => Run(refused, "--token-env", EnvVar));
+      Assert.Equal(ExitCodes.Auth, ex.ExitCode);
    }
 
 

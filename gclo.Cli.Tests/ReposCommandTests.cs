@@ -158,6 +158,10 @@ public sealed class ReposCommandTests
 
       Assert.Equal(ExitCodes.Auth, ex.ExitCode);
       Assert.Contains("no access", ex.Message);
+
+      var unavailable = new FakeRepoLister { Throw = new GitHubAccessException(GitHubAccessKind.Unavailable, "no answer") };
+      ex = await Assert.ThrowsAsync<CliErrorException>(() => Run(unavailable, "--org", "acme", "--token-env", EnvVar));
+      Assert.Equal(ExitCodes.Transient, ex.ExitCode);
    }
 
 

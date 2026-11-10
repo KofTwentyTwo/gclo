@@ -71,6 +71,9 @@ public sealed class OrgSyncEngine
       ArgumentException.ThrowIfNullOrWhiteSpace(request.Token, nameof(request));
       ArgumentException.ThrowIfNullOrWhiteSpace(request.TargetRoot, nameof(request));
 
+      // Nothing is reported for a repository after its final state in this run.
+      progress = progress is null ? null : new RunProgress(progress);
+
       var repos = repositories
           // Names key the pending dictionary and the target folders; a duplicate
           // (possible from pagination shifts) must not crash the run or race two

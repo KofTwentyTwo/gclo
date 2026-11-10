@@ -125,9 +125,9 @@ public sealed class GitHubListerTests
 
 
    /// <summary>Octokit's Response type is internal; its IResponse is not.</summary>
-   private sealed class FakeResponse(HttpStatusCode status, RateLimit? rateLimit = null) : IResponse
+   private sealed class FakeResponse(HttpStatusCode status, RateLimit? rateLimit = null, string body = "") : IResponse
    {
-      public object? Body => "";
+      public object? Body => body;
 
 
 
@@ -503,5 +503,442 @@ public sealed class GitHubListerTests
       // no API call is made, so this stays offline.
       Assert.NotNull(new GitHubRepositoryLister());
       Assert.NotNull(new GitHubOrganizationLister());
+   }
+
+
+
+   // ---------------------------------------------------------------- failures that are not the request's fault (#153)
+
+   private static ApiException ServerError() => new("Bad Gateway", HttpStatusCode.BadGateway);
+
+
+
+   private static HttpRequestException NetworkFailure()
+       => new(HttpRequestError.NameResolutionError, "No such host is known. (api.github.com:443)");
+
+
+
+   /// <summary>A refusal the way the API sends it: a status and a reason in a JSON document.</summary>
+   private static ForbiddenException ForbiddenBecause(string reason)
+       => new(new FakeResponse(
+           HttpStatusCode.Forbidden,
+           body: System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>(StringComparer.Ordinal) { ["message"] = reason })));
+
+
+
+   /// <summary>What an HTTP client throws when a request runs into its timeout: a cancellation nobody asked for.</summary>
+   private static TaskCanceledException TimedOut() => new("The request was canceled due to the configured HttpClient.Timeout.");
+
+
+
+   [Fact]
+   public async Task Repos_AccessRefused_IsForbidden_WithGitHubsReason()
+   {
+      _gateway.OrgPages = (_, _) => throw ForbiddenBecause("Resource protected by organization SAML enforcement");
+
+      GitHubAccessException ex = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.Forbidden, ex.Kind);
+      Assert.Equal(
+          "GitHub refused access (403): Resource protected by organization SAML enforcement. "
+          + "If the organization uses SAML single sign-on, authorize the token for it; "
+          + "otherwise check what the token is allowed to access.",
+          ex.Message);
+      Assert.IsType<ForbiddenException>(ex.InnerException);
+   }
+
+
+
+   [Fact]
+   public async Task Repos_AccessRefused_WhileResolvingAUserAccount_IsForbiddenToo()
+   {
+      // The refusal can come from any of the requests, not only the first one.
+      _gateway.OrgPages = (_, _) => throw NotFound();
+      _gateway.AccountKind = _ => throw Forbidden();
+
+      GitHubAccessException ex = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.Forbidden, ex.Kind);
+   }
+
+
+
+   [Fact]
+   public async Task Repos_ErrorOnGitHubsSide_IsUnavailable()
+   {
+      _gateway.OrgPages = (_, _) => throw ServerError();
+
+      GitHubAccessException ex = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.Unavailable, ex.Kind);
+      Assert.Contains("HTTP 502", ex.Message);
+      Assert.Contains("retry later", ex.Message);
+   }
+
+
+
+   [Fact]
+   public async Task Repos_NetworkFailure_IsUnavailable_WithTheReason()
+   {
+      _gateway.OrgPages = (_, _) => throw NetworkFailure();
+
+      GitHubAccessException ex = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.Unavailable, ex.Kind);
+      Assert.Equal(
+          "GitHub could not be reached: its name could not be resolved (DNS). Check the network connection and retry.",
+          ex.Message);
+   }
+
+
+
+   [Fact]
+   public async Task Repos_RequestTimedOut_IsUnavailable_NotACancellation()
+   {
+      _gateway.OrgPages = (_, _) => throw TimedOut();
+
+      GitHubAccessException ex = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.Unavailable, ex.Kind);
+      Assert.Contains("did not answer in time", ex.Message);
+   }
+
+
+
+   [Fact]
+   public async Task Repos_AFailureWithNoKnownMeaning_StaysWhatItIs()
+   {
+      _gateway.OrgPages = (_, _) => throw new ApiException("Validation Failed", HttpStatusCode.UnprocessableEntity);
+
+      ApiException ex = await Assert.ThrowsAsync<ApiException>(
+          () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+      Assert.Equal(HttpStatusCode.UnprocessableEntity, ex.StatusCode);
+   }
+
+
+
+   [Fact]
+   public async Task Repos_CancellationDuringARequestThatHangs_DoesNotWaitForIt()
+   {
+      using var cts = new CancellationTokenSource();
+      var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var never = new TaskCompletionSource<IReadOnlyList<GitHubRepo>>(TaskCreationOptions.RunContinuationsAsynchronously);
+      _gateway.OrgPages = (_, _) =>
+      {
+         requested.SetResult();
+         return never.Task;
+      };
+
+      Task<IReadOnlyList<RepoDescriptor>> listing = RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890", cts.Token);
+      await requested.Task.WaitAsync(TimeSpan.FromSeconds(30));
+      cts.Cancel();
+
+      OperationCanceledException ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+          () => listing.WaitAsync(TimeSpan.FromSeconds(30)));
+      Assert.Equal(cts.Token, ex.CancellationToken); // the caller's cancellation, not a timeout
+   }
+
+
+
+   [Fact]
+   public async Task Repos_CancellationWhileTheAccountKindIsLookedUp_DoesNotWaitForIt()
+   {
+      using var cts = new CancellationTokenSource();
+      var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var never = new TaskCompletionSource<GitHubAccountKind>(TaskCreationOptions.RunContinuationsAsynchronously);
+      _gateway.OrgPages = (_, _) => throw NotFound();
+      _gateway.AccountKind = _ =>
+      {
+         requested.SetResult();
+         return never.Task;
+      };
+
+      Task<IReadOnlyList<RepoDescriptor>> listing = RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890", cts.Token);
+      await requested.Task.WaitAsync(TimeSpan.FromSeconds(30));
+      cts.Cancel();
+
+      await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listing.WaitAsync(TimeSpan.FromSeconds(30)));
+   }
+
+
+
+   [Fact]
+   public async Task Orgs_AccessRefusedForTheAccountItself_IsForbidden()
+   {
+      // Only a refusal of the organization list is the missing-scope case; this one is not.
+      _gateway.CurrentUser = () => throw Forbidden();
+
+      GitHubAccessException ex = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.Forbidden, ex.Kind);
+   }
+
+
+
+   [Fact]
+   public async Task Orgs_ErrorOnGitHubsSide_NetworkFailure_AndTimeout_AreUnavailable()
+   {
+      _gateway.OrgLogins = () => throw ServerError();
+      GitHubAccessException server = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
+
+      _gateway.OrgLogins = () => throw NetworkFailure();
+      GitHubAccessException network = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
+
+      _gateway.OrgLogins = () => throw TimedOut();
+      GitHubAccessException timeout = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => OrgLister().ListOrganizationsAsync("tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.Unavailable, server.Kind);
+      Assert.Equal(GitHubAccessKind.Unavailable, network.Kind);
+      Assert.Equal(GitHubAccessKind.Unavailable, timeout.Kind);
+   }
+
+
+
+   [Fact]
+   public async Task Orgs_CancellationDuringARequestThatHangs_DoesNotWaitForIt()
+   {
+      using var cts = new CancellationTokenSource();
+      var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var never = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+      _gateway.OrgLogins = () =>
+      {
+         requested.SetResult();
+         return never.Task;
+      };
+
+      Task<IReadOnlyList<string>> listing = OrgLister().ListOrganizationsAsync("tok-1234567890", cts.Token);
+      await requested.Task.WaitAsync(TimeSpan.FromSeconds(30));
+      cts.Cancel();
+
+      await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listing.WaitAsync(TimeSpan.FromSeconds(30)));
+   }
+
+
+
+   // ---------------------------------------------------------------- the shared mapping itself (#153)
+
+   [Fact]
+   public void Failures_EveryKnownFailure_HasItsKind()
+   {
+      (Exception Failure, GitHubAccessKind Kind)[] known =
+      [
+          (Unauthorized(), GitHubAccessKind.Unauthorized),
+          (RateLimited(), GitHubAccessKind.RateLimited),
+          (SecondaryRateLimited(), GitHubAccessKind.RateLimited),
+          (Abuse(), GitHubAccessKind.RateLimited),
+          (LoginAttemptsExceeded(), GitHubAccessKind.RateLimited),
+          (Forbidden(), GitHubAccessKind.Forbidden),
+          (new LegalRestrictionException("Repository access blocked", (HttpStatusCode)451), GitHubAccessKind.Forbidden),
+          (new ApiException("Too Many Requests", HttpStatusCode.TooManyRequests), GitHubAccessKind.RateLimited),
+          (new ApiException("Proxy Authentication Required", HttpStatusCode.ProxyAuthenticationRequired), GitHubAccessKind.Unavailable),
+          (ServerError(), GitHubAccessKind.Unavailable),
+          (new ApiException("Service Unavailable", HttpStatusCode.ServiceUnavailable), GitHubAccessKind.Unavailable),
+          (NetworkFailure(), GitHubAccessKind.Unavailable),
+          (TimedOut(), GitHubAccessKind.Unavailable),
+      ];
+
+      Assert.All(known, k =>
+      {
+         Assert.True(GitHubFailures.Knows(k.Failure, CancellationToken.None), k.Failure.GetType().Name);
+         GitHubAccessException translated = GitHubFailures.Translate(k.Failure);
+         Assert.Equal(k.Kind, translated.Kind);
+         Assert.Same(k.Failure, translated.InnerException);
+      });
+   }
+
+
+
+   [Fact]
+   public void Failures_ALegalRestriction_SaysItsStatusAndReason()
+   {
+      var blocked = new LegalRestrictionException(new FakeResponse(
+          (HttpStatusCode)451, body: "{\"message\":\"Repository access blocked\"}"));
+
+      GitHubAccessException translated = GitHubFailures.Translate(blocked);
+
+      Assert.StartsWith("GitHub refused access (451): Repository access blocked. If the organization", translated.Message);
+   }
+
+
+
+   [Fact]
+   public void Failures_WhatHasNoKnownMeaning_IsNotTranslated()
+   {
+      using var canceled = new CancellationTokenSource();
+      canceled.Cancel();
+      Exception[] unknown =
+      [
+          NotFound(), // each lister decides what "not found" means where it happens
+          new ApiException("Validation Failed", HttpStatusCode.UnprocessableEntity),
+          new InvalidOperationException("a bug"),
+          new GitHubAccessException(GitHubAccessKind.Forbidden, "already translated"),
+      ];
+
+      Assert.All(unknown, failure => Assert.False(GitHubFailures.Knows(failure, CancellationToken.None), failure.GetType().Name));
+      // A cancellation the caller asked for is a cancellation, not a timeout.
+      Assert.False(GitHubFailures.Knows(new OperationCanceledException(canceled.Token), canceled.Token));
+      Assert.Throws<ArgumentException>(() => GitHubFailures.Translate(new InvalidOperationException("a bug")));
+   }
+
+
+
+   [Fact]
+   public void Failures_ACancellationThatArrivesAfterTheDecision_DoesNotChangeIt()
+   {
+      // The request timed out while the caller had not canceled: that is decided once.
+      using var caller = new CancellationTokenSource();
+      TaskCanceledException timeout = TimedOut();
+
+      bool known = GitHubFailures.Knows(timeout, caller.Token);
+      caller.Cancel(); // lands between the decision and the translation
+      GitHubAccessException translated = GitHubFailures.Translate(timeout);
+
+      Assert.True(known);
+      Assert.Equal(GitHubAccessKind.Unavailable, translated.Kind);
+   }
+
+
+
+   [Fact]
+   public async Task Repos_AFailureThatArrivesWhenTheRequestEnds_IsTranslatedLikeOneThrownAtOnce()
+   {
+      // The real gateway fails the request it returned; it does not throw before returning one.
+      _gateway.OrgPages = (_, _) => Task.FromException<IReadOnlyList<GitHubRepo>>(ServerError());
+
+      GitHubAccessException ex = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.Unavailable, ex.Kind);
+   }
+
+
+
+   [Fact]
+   public async Task Repos_ARequestAbandonedOnCancellation_MayFailLater_WithoutAnyoneBeingTold()
+   {
+      using var cts = new CancellationTokenSource();
+      var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var request = new TaskCompletionSource<IReadOnlyList<GitHubRepo>>(TaskCreationOptions.RunContinuationsAsynchronously);
+      _gateway.OrgPages = (_, _) =>
+      {
+         requested.SetResult();
+         return request.Task;
+      };
+      Task<IReadOnlyList<RepoDescriptor>> listing = RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890", cts.Token);
+      await requested.Task.WaitAsync(TimeSpan.FromSeconds(30));
+      cts.Cancel();
+      await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listing.WaitAsync(TimeSpan.FromSeconds(30)));
+
+      request.SetException(NetworkFailure()); // the abandoned request ends on its own, badly
+
+      // The listing ended as a cancellation and stays one; the late failure belongs to nobody.
+      Assert.True(listing.IsCanceled);
+      await Assert.ThrowsAsync<HttpRequestException>(() => request.Task);
+   }
+
+
+
+   [Fact]
+   public async Task Repos_TooManyRequests_IsARateLimit_AlsoAsStatus429()
+   {
+      _gateway.OrgPages = (_, _) => throw new ApiException("Too Many Requests", HttpStatusCode.TooManyRequests);
+
+      GitHubAccessException ex = await Assert.ThrowsAsync<GitHubAccessException>(
+          () => RepoLister().ListOrganizationRepositoriesAsync("acme", "tok-1234567890"));
+
+      Assert.Equal(GitHubAccessKind.RateLimited, ex.Kind);
+      Assert.Contains("429", ex.Message);
+   }
+
+
+
+   [Theory]
+   [InlineData(HttpRequestError.NameResolutionError, "its name could not be resolved (DNS)")]
+   [InlineData(HttpRequestError.ConnectionError, "the connection could not be made")]
+   [InlineData(HttpRequestError.SecureConnectionError, "a secure (TLS) connection could not be established")]
+   [InlineData(HttpRequestError.ProxyTunnelError, "the proxy on the way refused the connection")]
+   [InlineData(HttpRequestError.Unknown, "the request failed on the way.")]
+   [InlineData(HttpRequestError.ResponseEnded, "the request failed on the way (ResponseEnded)")]
+   public void Failures_ANetworkFailure_IsDescribedByItsKind(HttpRequestError error, string expected)
+   {
+      GitHubAccessException translated = GitHubFailures.Translate(new HttpRequestException(error, "whatever the platform says"));
+
+      Assert.StartsWith("GitHub could not be reached: ", translated.Message);
+      Assert.Contains(expected, translated.Message);
+      Assert.EndsWith(" Check the network connection and retry.", translated.Message);
+   }
+
+
+
+   [Fact]
+   public void Failures_ANetworkFailure_NeverCopiesThePlatformsText_WhichCanNameAProxyWithItsPassword()
+   {
+      var failure = new HttpRequestException(
+          HttpRequestError.ProxyTunnelError,
+          "The proxy tunnel request to proxy 'http://proxyuser:PROXYPASSWORD@10.0.0.1:8080/' failed with status code '407'.");
+
+      GitHubAccessException translated = GitHubFailures.Translate(failure);
+
+      Assert.DoesNotContain("PROXYPASSWORD", translated.Message);
+      Assert.DoesNotContain("proxyuser", translated.Message);
+      Assert.Same(failure, translated.InnerException); // the full text stays with the cause, for the log
+   }
+
+
+
+   [Fact]
+   public void Failures_ARefusalWithoutAReasonFromTheApi_SaysNone_AndCopiesNoPage()
+   {
+      // A web filter or a proxy answers 403 with a page of its own; that is not GitHub's reason.
+      var blockPage = new ForbiddenException(new FakeResponse(
+          HttpStatusCode.Forbidden, body: "<html><body><h1>Blocked by policy</h1>" + new string('x', 3000) + "</body></html>"));
+
+      GitHubAccessException translated = GitHubFailures.Translate(blockPage);
+
+      Assert.Equal(
+          "GitHub refused access (403). If the organization uses SAML single sign-on, authorize the token for it; "
+          + "otherwise check what the token is allowed to access.",
+          translated.Message);
+   }
+
+
+
+   [Theory]
+   [InlineData("")]
+   [InlineData("[]")]
+   [InlineData("{\"other\":1}")]
+   [InlineData("{\"message\":42}")]
+   [InlineData("{\"message\":\"   \"}")]
+   public void Failures_ARefusalWhoseAnswerHasNoReasonInIt_SaysNone(string body)
+   {
+      GitHubAccessException translated = GitHubFailures.Translate(
+          new ForbiddenException(new FakeResponse(HttpStatusCode.Forbidden, body: body)));
+
+      Assert.StartsWith("GitHub refused access (403). If the organization", translated.Message);
+   }
+
+
+
+   [Fact]
+   public void Failures_AReasonFromTheApi_IsPutOnOneLine_AndCut()
+   {
+      string emoji = char.ConvertFromUtf32(0x1F600);
+      GitHubAccessException lines = GitHubFailures.Translate(ForbiddenBecause("  first line\r\n   second\tline?  "));
+      GitHubAccessException longReason = GitHubFailures.Translate(ForbiddenBecause(new string('r', 400)));
+      GitHubAccessException cutAtAPair = GitHubFailures.Translate(ForbiddenBecause(new string('r', 299) + emoji + "tail"));
+
+      Assert.StartsWith("GitHub refused access (403): first line second line? If the organization", lines.Message);
+      Assert.StartsWith("GitHub refused access (403): " + new string('r', 300) + "... If the organization", longReason.Message);
+      Assert.StartsWith("GitHub refused access (403): " + new string('r', 299) + "... If the organization", cutAtAPair.Message);
    }
 }

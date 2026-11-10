@@ -403,12 +403,16 @@ its offset from UTC (`2026-11-10 14:03:22.123 -06:00 [INFO] ...`). Text that cam
 | 0 | Everything succeeded (or `--dry-run` / a listing completed). | — |
 | 1 | The run completed, but some repositories failed or the run was canceled (Ctrl+C). `--json`'s `wasCanceled` tells the two apart. | Inspect the failures; retry them. |
 | 2 | Fatal: bad arguments, missing/empty token, organization not found, unknown account, missing account token, unusable target folder, or an account command on a non-Windows OS. | Fix the invocation. |
-| 3 | GitHub rejected the token (401) or the token may not see the organization (403). | Fix the token or its access; do not retry as is. |
-| 4 | GitHub's primary or secondary rate limit, or a temporary throttle. | Retry later (the message says when). |
+| 3 | GitHub rejected the token (401), or refused it access (403: the token may not see the organization, or the organization requires SAML single sign-on and the token is not authorized for it). The message carries GitHub's reason when it gave one. | Fix the token or its access; do not retry as is. |
+| 4 | Not your doing: GitHub's primary or secondary rate limit (403 or 429), a temporary throttle, a network failure (DNS, connection, TLS, proxy), a request that timed out, or an error on GitHub's side (HTTP 5xx). | Retry later (for a rate limit, the message says when). |
 | 70 | An unexpected error inside gclo. The exception type is printed and the full details are in the activity log. | Please report it. |
 
 Codes 3 and 4 were part of code 2 before version 1.1; a script that tested
 `-eq 2` for "usage error" should treat `3` and `4` as distinct outcomes.
+Before version 1.1.1, a refusal of access other than an invisible organization
+(403), a rate limit answered with 429, a network failure, a timeout, and an
+error on GitHub's side ended with code 70; they now end with `3` (the refusal)
+or `4` (the rest).
 
 A repository recovered by `--sanitize-paths` counts as a success: if every other
 repository also succeeds, the exit code is `0`. With `--json` or `--json-lines`,
@@ -452,7 +456,7 @@ gclo sync --org contoso --target D:\mirror\contoso --parallel 16 --quiet
 switch ($LASTEXITCODE) {
   0 { }
   1 { Write-Warning "some repositories failed" }
-  4 { Write-Warning "rate limited; will retry next run" }
+  4 { Write-Warning "rate limit, network or GitHub-side failure; will retry next run" }
   default { Write-Error "sync ended with code $LASTEXITCODE" }
 }
 
@@ -507,7 +511,7 @@ gclo sync --org contoso --target /srv/mirror/contoso --parallel 16 --quiet
 case $? in
   0) ;;
   1) echo "some repositories failed" ;;
-  4) echo "rate limited; retrying next run" ;;
+  4) echo "rate limit, network or GitHub-side failure; retrying next run" ;;
   *) echo "sync ended with code $?" >&2 ;;
 esac
 

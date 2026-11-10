@@ -20,4 +20,10 @@ public enum GitHubAccessKind
 
    /// <summary>No organization or user account with that login is visible to the token.</summary>
    NotFound,
+
+   /// <summary>
+   /// GitHub could not be reached, did not answer in time, or failed on its side
+   /// (a network error, a timeout, HTTP 5xx): nothing is wrong with the request, retry later.
+   /// </summary>
+   Unavailable,
 }

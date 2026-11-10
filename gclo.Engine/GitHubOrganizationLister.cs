@@ -43,12 +43,16 @@ public sealed class GitHubOrganizationLister : IOrganizationLister
       try
       {
          // The token's own account is a valid sync target too (personal repos
-         // live under /users, not /orgs), so it heads the list.
-         userLogin = await gateway.GetCurrentUserLoginAsync().ConfigureAwait(false);
+         // live under /users, not /orgs), so it heads the list. The gateway cannot
+         // be canceled, so each request is awaited with the token: one that hangs
+         // is abandoned and ends on its own, at the HTTP timeout.
+         userLogin = await GitHubFailures.WaitFor(gateway.GetCurrentUserLoginAsync(), cancellationToken)
+             .ConfigureAwait(false);
 
          try
          {
-            organizations = await gateway.GetOrganizationLoginsAsync().ConfigureAwait(false);
+            organizations = await GitHubFailures.WaitFor(gateway.GetOrganizationLoginsAsync(), cancellationToken)
+                .ConfigureAwait(false);
          }
          catch(ForbiddenException ex)
              when(ex is not RateLimitExceededException
@@ -65,32 +69,10 @@ public sealed class GitHubOrganizationLister : IOrganizationLister
             return [userLogin];
          }
       }
-      catch(AuthorizationException ex)
+      catch(Exception ex) when(GitHubFailures.Knows(ex, cancellationToken))
       {
-         throw new GitHubAccessException(GitHubAccessKind.Unauthorized, "GitHub rejected the token (401). Check the PAT.", ex);
-      }
-      catch(RateLimitExceededException ex)
-      {
-         throw new GitHubAccessException(
-             GitHubAccessKind.RateLimited, $"GitHub API rate limit exceeded; it resets at {ex.Reset:u}.", ex);
-      }
-      catch(SecondaryRateLimitExceededException ex)
-      {
-         throw new GitHubAccessException(
-             GitHubAccessKind.RateLimited,
-             "GitHub's secondary rate limit was hit (too many requests in a short time); retry in a minute.", ex);
-      }
-      catch(AbuseException ex)
-      {
-         throw new GitHubAccessException(
-             GitHubAccessKind.RateLimited,
-             $"GitHub's secondary rate limit was hit (too many requests in a short time); retry in {ex.RetryAfterSeconds ?? 60} seconds.", ex);
-      }
-      catch(LoginAttemptsExceededException ex)
-      {
-         throw new GitHubAccessException(
-             GitHubAccessKind.RateLimited,
-             "GitHub temporarily blocked this token after too many failed attempts; wait a few minutes and retry.", ex);
+         // What the failure means to a caller is decided in one place, for both listers.
+         throw GitHubFailures.Translate(ex);
       }
 
       cancellationToken.ThrowIfCancellationRequested();

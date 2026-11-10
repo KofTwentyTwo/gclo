@@ -42,7 +42,7 @@ internal static class ReposCommand
           1  canceled (Ctrl+C)
           2  fatal: bad arguments, missing token, organization not found
           3  the token was rejected or may not see the organization
-          4  rate limited; retry later
+          4  rate limit, network failure, timeout, or an error on GitHub's side; retry later
         """;
 
 

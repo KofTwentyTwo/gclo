@@ -92,7 +92,8 @@ internal static class SyncCommand
               account or missing account token, unusable target folder
           3   the token was rejected (401) or may not see the organization (403):
               fix the token, do not retry as is
-          4   rate limited or temporarily throttled: retry later
+          4   not your doing (rate limit, network failure, timeout, or an error on
+              GitHub's side): retry later
           70  an unexpected error inside gclo; see the activity log
           With --json or --json-lines, exits 2-70 print no document on stdout.
 

@@ -594,4 +594,52 @@ public sealed class OrgSyncEngineTests : IDisposable
       Assert.True(cts.IsCancellationRequested);
       Assert.Equal(new SyncSummary(Total: 1, Cloned: 1, Updated: 0, Failed: 0, Canceled: 0, WasCanceled: false), summary);
    }
+
+
+
+   // ---------------------------------------------------------------- nothing after a final state (#153)
+
+   [Fact]
+   public async Task Sync_ProgressFromAnAbandonedClone_IsNotReportedAfterTheRepositoryWasCanceled()
+   {
+      _lister.Repositories = Repos("stuck");
+      var neverDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      Action<double>? transfer = null;
+      _git.CloneHandler = (_, _, _, onProgress, _) =>
+      {
+         transfer = onProgress;
+         return neverDone.Task; // ignores cancellation, as a wedged transport does
+      };
+      using var cts = new CancellationTokenSource();
+      Task<SyncSummary> syncTask = CreateEngine().SyncAsync(CreateRequest(), _progress, cts.Token);
+      await WaitUntilAsync(() => transfer is not null, "the clone to start");
+      transfer!(0.25);
+
+      cts.Cancel();
+      await syncTask.WaitAsync(TimeSpan.FromSeconds(10));
+      transfer(0.5); // the abandoned operation is still running
+      neverDone.SetResult();
+
+      Assert.Equal(
+          [SyncStatus.Queued, SyncStatus.Cloning, SyncStatus.Cloning, SyncStatus.Canceled],
+          _progress.StatusesFor("stuck"));
+      Assert.Equal(0.25, _progress.Reports.Last(r => r.Status == SyncStatus.Cloning).Percent);
+   }
+
+
+
+   [Fact]
+   public async Task Sync_ASecondRun_ReportsTheSameRepositoryAgain()
+   {
+      // The rule is per run: what a repository reported last time holds nothing back now.
+      _lister.Repositories = Repos("solo");
+      OrgSyncEngine engine = CreateEngine();
+
+      await engine.SyncAsync(CreateRequest(), _progress);
+      await engine.SyncAsync(CreateRequest(), _progress);
+
+      Assert.Equal(
+          [SyncStatus.Queued, SyncStatus.Cloning, SyncStatus.Done, SyncStatus.Queued, SyncStatus.Cloning, SyncStatus.Done],
+          _progress.StatusesFor("solo"));
+   }
 }

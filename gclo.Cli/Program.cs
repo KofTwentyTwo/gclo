@@ -60,7 +60,8 @@ internal static class Program
 
         Exit codes:
           0 success, 1 completed with failures or canceled, 2 usage or fatal error,
-          3 token rejected or access denied, 4 rate limited (retry later),
+          3 token rejected or access denied, 4 rate limit, network or GitHub-side
+          failure (retry later),
           70 unexpected error (details in the activity log).
         """;
 

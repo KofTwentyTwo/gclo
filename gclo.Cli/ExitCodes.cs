@@ -29,7 +29,10 @@ internal static class ExitCodes
    /// <summary>GitHub rejected the token or refused access (401/403): fix the token; never retry as is.</summary>
    public const int Auth = 3;
 
-   /// <summary>A rate limit or temporary throttle: retry later.</summary>
+   /// <summary>
+   /// Not the caller's doing: a rate limit or temporary throttle, a network failure,
+   /// a timeout, or an error on GitHub's side. Retry later.
+   /// </summary>
    public const int Transient = 4;
 
    /// <summary>An unexpected exception inside gclo; details are in the activity log.</summary>
@@ -41,7 +44,7 @@ internal static class ExitCodes
    public static int ForAccess(GitHubAccessKind kind) => kind switch
    {
       GitHubAccessKind.Unauthorized or GitHubAccessKind.Forbidden => Auth,
-      GitHubAccessKind.RateLimited => Transient,
+      GitHubAccessKind.RateLimited or GitHubAccessKind.Unavailable => Transient,
       _ => Fatal,
    };
 }

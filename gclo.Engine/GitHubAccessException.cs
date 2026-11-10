@@ -7,7 +7,7 @@ namespace gclo.Engine;
 
 
 /// <summary>
-/// A GitHub API refusal translated into an actionable message. Derives from
+/// A failed GitHub API request (a refusal, or GitHub not answering) translated into an actionable message. Derives from
 /// <see cref="InvalidOperationException"/> so every existing catch keeps working;
 /// <see cref="Kind"/> lets a caller tell "fix your token" from "wait and retry"
 /// without parsing the message — the CLI maps it to distinct exit codes.

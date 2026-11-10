@@ -335,6 +335,16 @@ public sealed class SyncCommandTests : IDisposable
       ex = await Assert.ThrowsAsync<CliErrorException>(
           () => Run(missing, new FakeGit(), "--org", "ghost", "--target", Target, "--token-env", EnvVar));
       Assert.Equal(ExitCodes.Fatal, ex.ExitCode);
+
+      // Not the caller's doing (network, timeout, an error on GitHub's side): retry later.
+      var unavailable = new FakeRepoLister
+      {
+         Throw = new GitHubAccessException(GitHubAccessKind.Unavailable, "GitHub did not answer in time; retry later."),
+      };
+      ex = await Assert.ThrowsAsync<CliErrorException>(
+          () => Run(unavailable, new FakeGit(), "--org", "acme", "--target", Target, "--token-env", EnvVar));
+      Assert.Equal(ExitCodes.Transient, ex.ExitCode);
+      Assert.Equal("GitHub did not answer in time; retry later.", ex.Message);
    }
 
 
