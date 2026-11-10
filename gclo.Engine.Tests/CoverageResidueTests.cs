@@ -14,6 +14,7 @@ namespace gclo.Engine.Tests;
 /// branches, settings failure fallbacks, store corruption handling, and the
 /// remaining status-text arms. Part of the 100%-coverage contract.
 /// </summary>
+[Collection("GCLO_DATA_DIR")] // sets a process-wide variable: never beside another class that does
 public sealed class CoverageResidueTests
 {
    // ------------------------------------------------- WindowsPathValidator
@@ -220,7 +221,7 @@ public sealed class CoverageResidueTests
             Assert.Empty(store.GetAll());
          }
 
-         Assert.Contains(log.Errors, e => e.Contains("Failed to load accounts"));
+         Assert.Contains(log.Errors, e => e.Contains("not a valid list of accounts"));
          Assert.Contains(log.Errors, e => e.Contains("Could not preserve"));
       }
       finally

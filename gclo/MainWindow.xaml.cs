@@ -142,7 +142,7 @@ public sealed partial class MainWindow : Window
       }
       UpdateSyncAllEnabled();
 
-      _settings = AppSettings.Load();
+      _settings = AppSettings.Load(_log);
 
       // Create and show Quick Sync before selecting it, so NavigationView.Content
       // is never empty regardless of when SelectionChanged fires.

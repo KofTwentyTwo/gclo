@@ -15,6 +15,7 @@ namespace gclo.Engine.Tests;
 /// first and deletes that folder, which destroyed accounts.json and settings.json
 /// in 1.0.2-beta.1 (#91).
 /// </summary>
+[Collection("GCLO_DATA_DIR")] // sets a process-wide variable: never beside another class that does
 public sealed class GcloPathsTests
 {
    /// <summary>The default root is %LOCALAPPDATA%\KofTwentyTwo\gclo.</summary>

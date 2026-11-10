@@ -4,6 +4,7 @@
  */
 
 using System.Text.Json;
+using gclo.Engine;
 
 
 namespace gclo.ViewModels;
@@ -60,8 +61,9 @@ public sealed class AppSettings
    /// <summary>
    /// Loads settings from disk. Never throws: a missing, corrupt, or unreadable file
    /// yields defaults, and loaded values are sanitized (concurrency clamped, theme validated).
+   /// A file that is there but cannot be used is reported to <paramref name="log"/>.
    /// </summary>
-   public static AppSettings Load()
+   public static AppSettings Load(IActivityLog? log = null)
    {
       try
       {
@@ -77,9 +79,10 @@ public sealed class AppSettings
             }
          }
       }
-      catch
+      catch(Exception ex)
       {
          // Settings must never prevent startup; fall through to defaults.
+         log?.Error($"Settings could not be loaded ({ex.Message}); the defaults are used.", ex);
       }
 
       return new AppSettings();
@@ -87,12 +90,27 @@ public sealed class AppSettings
 
 
 
+   /// <summary>How long a save tries to put the new file in place while something has the old one open.</summary>
+   private static readonly TimeSpan s_savePatience = TimeSpan.FromSeconds(1);
+
+
+
    /// <summary>
-   /// Persists settings to disk, creating the directory if needed. Failures (locked file,
-   /// read-only profile, full disk, ...) are swallowed: losing a preference write must
-   /// never crash the app.
+   /// Persists settings to disk, creating the directory if needed. The new content is
+   /// written beside the file and then put in its place in one step, so a crash or a
+   /// full disk in the middle leaves the previous settings, never half a file. The
+   /// step is refused while anything has the file open, so it is tried again for a
+   /// moment. Failures (locked file, read-only profile, full disk, ...) do not throw,
+   /// because losing a preference write must never crash the app; they are reported
+   /// to <paramref name="log"/> and in the result.
    /// </summary>
-   public void Save()
+   /// <returns>True when the settings are on disk.</returns>
+   public bool Save(IActivityLog? log = null) => Save(log, s_savePatience);
+
+
+
+   /// <summary>Saves with its own patience for a file that is in use, for tests.</summary>
+   internal bool Save(IActivityLog? log, TimeSpan patience)
    {
       try
       {
@@ -103,11 +121,45 @@ public sealed class AppSettings
          {
             Directory.CreateDirectory(directory);
          }
-         File.WriteAllText(path, JsonSerializer.Serialize(this, AppSettingsJsonContext.Default.AppSettings));
+
+         // A name of its own: two processes saving at once do not write one file.
+         string temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+         try
+         {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(this, AppSettingsJsonContext.Default.AppSettings));
+            MoveIntoPlace(temporary, path, patience);
+         }
+         finally
+         {
+            // Gone already when the move succeeded; otherwise nothing is left behind.
+            File.Delete(temporary);
+         }
+         return true;
       }
-      catch
+      catch(Exception ex)
       {
-         // Best effort only.
+         log?.Error($"Settings could not be saved ({ex.Message}); the change is lost when the app closes.", ex);
+         return false;
+      }
+   }
+
+
+
+   private static void MoveIntoPlace(string temporary, string path, TimeSpan patience)
+   {
+      long started = System.Diagnostics.Stopwatch.GetTimestamp();
+      while(true)
+      {
+         try
+         {
+            File.Move(temporary, path, overwrite: true);
+            return;
+         }
+         catch(Exception ex) when(ex is IOException or UnauthorizedAccessException
+                                      && System.Diagnostics.Stopwatch.GetElapsedTime(started) < patience)
+         {
+            Thread.Sleep(15);
+         }
       }
    }
 
@@ -118,11 +170,9 @@ public sealed class AppSettings
       // The JSON deserializer can assign null despite the non-nullable annotation.
       DefaultTargetFolder ??= "";
       DefaultMaxConcurrency = Math.Clamp(DefaultMaxConcurrency, MinConcurrency, MaxConcurrency);
-      // 0 means the field was absent (settings.json written by an older version):
-      // migrate to the default rather than clamping an unset value to the minimum.
-      SplashMilliseconds = SplashMilliseconds == 0
-          ? DefaultSplashMilliseconds
-          : Math.Clamp(SplashMilliseconds, MinSplashMilliseconds, MaxSplashMilliseconds);
+      // A file written before this setting existed has no such field, and the
+      // property then keeps its default; whatever a file does say is brought into range.
+      SplashMilliseconds = Math.Clamp(SplashMilliseconds, MinSplashMilliseconds, MaxSplashMilliseconds);
       if(Theme is not ("System" or "Light" or "Dark"))
       {
          Theme = "System";

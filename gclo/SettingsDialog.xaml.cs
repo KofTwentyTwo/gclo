@@ -154,7 +154,7 @@ public sealed partial class SettingsDialog : ContentDialog
          }
       }
 
-      _settings.Save();
+      bool written = _settings.Save(_log);
 
       string typed = DefaultTokenBox.Password;
       switch(_tokenState.Plan(typed))
@@ -173,9 +173,10 @@ public sealed partial class SettingsDialog : ContentDialog
             break;
       }
 
+      string outcome = written ? "Settings saved" : "Settings apply until the app closes (they could not be written, see above)";
       _log.Info(changes.Count == 0
-          ? "Settings saved (no changes)."
-          : "Settings saved: " + string.Join("; ", changes) + ".");
+          ? outcome + " (no changes)."
+          : outcome + ": " + string.Join("; ", changes) + ".");
    }
 
 

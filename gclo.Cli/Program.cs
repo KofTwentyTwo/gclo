@@ -103,6 +103,12 @@ internal static class Program
          Terminal.Error("Canceled.");
          return ExitCodes.Partial;
       }
+      catch(gclo.ViewModels.AccountsFileBusyException ex)
+      {
+         // Another gclo process is changing the accounts: nothing is wrong, try again.
+         Terminal.Error(ex.Message);
+         return ExitCodes.Transient;
+      }
       catch(Exception ex)
       {
          return ReportUnexpected(ex);

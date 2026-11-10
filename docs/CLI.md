@@ -237,10 +237,21 @@ throttle is reported as such (exit code 4) rather than shrinking the list.
 An *account* is a saved sync profile: a name, an organization, a target root
 folder, a parallelism setting, an org-subfolder preference, an optional
 description, and a token stored in **Windows Credential Manager** (under
-`gclo:account:<id>`; the metadata file, `%LOCALAPPDATA%\gclo\accounts.json`,
-never contains the token). Accounts are shared between the CLI and the desktop
-app: create them with `gclo accounts add` on a headless mirror server, or in
-the app's account wizard, and use them from either.
+`gclo:account:<id>`; the metadata file,
+`%LOCALAPPDATA%\KofTwentyTwo\gclo\accounts.json`, never contains the token).
+Accounts are shared between the CLI and the desktop app: create them with
+`gclo accounts add` on a headless mirror server, or in the app's account
+wizard, and use them from either.
+
+The CLI and the app can run at the same time, and so can several CLI runs:
+each change (adding, editing, or removing an account, recording a sync
+result) is applied to what the file holds at that moment. An account one of
+them added or removed stays added or removed, and a recorded sync result is
+kept; when two of them edit the same account, the later edit wins, and an
+edit of an account that was removed in the meantime is refused. The app lists
+an account that was added from the CLI the next time it starts. If another
+gclo process is changing the accounts at that very moment, a command waits a
+few seconds and then exits with code 4; run it again.
 
 > **Windows-only.** Because the token lives in Windows Credential Manager,
 > `gclo accounts` and `gclo sync --account` exit with code 2 on Linux/macOS.
@@ -404,7 +415,7 @@ its offset from UTC (`2026-11-10 14:03:22.123 -06:00 [INFO] ...`). Text that cam
 | 1 | The run completed, but some repositories failed or the run was canceled (Ctrl+C). `--json`'s `wasCanceled` tells the two apart. | Inspect the failures; retry them. |
 | 2 | Fatal: bad arguments, missing/empty token, organization not found, unknown account, missing account token, unusable target folder, or an account command on a non-Windows OS. | Fix the invocation. |
 | 3 | GitHub rejected the token (401), or refused it access (403: the token may not see the organization, or the organization requires SAML single sign-on and the token is not authorized for it). The message carries GitHub's reason when it gave one. | Fix the token or its access; do not retry as is. |
-| 4 | Not your doing: GitHub's primary or secondary rate limit (403 or 429), a temporary throttle, a network failure (DNS, connection, TLS, proxy), a request that timed out, or an error on GitHub's side (HTTP 5xx). | Retry later (for a rate limit, the message says when). |
+| 4 | Not your doing: GitHub's primary or secondary rate limit (403 or 429), a temporary throttle, a network failure (DNS, connection, TLS, proxy), a request that timed out, an error on GitHub's side (HTTP 5xx), or the accounts file being changed by another gclo process at that moment. | Retry later (for a rate limit, the message says when). |
 | 70 | An unexpected error inside gclo. The exception type is printed and the full details are in the activity log. | Please report it. |
 
 Codes 3 and 4 were part of code 2 before version 1.1; a script that tested
