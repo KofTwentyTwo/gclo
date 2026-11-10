@@ -152,7 +152,10 @@ jobs:
           labels: |
             dependencies
             .NET
+          # Versions live in Directory.Packages.props (central package management);
+          # without it the pull request carries lock files that no longer match.
           add-paths: |
+            Directory.Packages.props
             **/*.csproj
             **/packages.lock.json
 

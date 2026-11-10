@@ -1,0 +1,25 @@
+<Project>
+
+  <!-- Keeps packages.lock.json independent of the installed SDK patch (#137).
+
+       The single-file analyzer (EnableSingleFileAnalyzer in gclo.Engine, gclo.ViewModels
+       and gclo.Cli) makes the SDK add an implicit PackageReference to
+       Microsoft.NET.ILLink.Tasks at the version of its own bundled runtime. global.json
+       rolls forward to the newest 10.0 SDK (the KofTwentyTwo standard), so every SDK
+       patch resolved a different version: a locked restore failed with NU1004, and an
+       unlocked one rewrote three lock files.
+
+       The implicit version comes from the SDK's KnownILLinkPack item; fixing it here
+       pins the analyzer package like any other dependency. Keep it at the version
+       bundled with the SDK named in global.json (the oldest SDK allowed to build this
+       repository), never newer: analyzers built for an older compiler load in a newer
+       SDK, not the reverse. After changing it, refresh the lock files (the restore
+       command with force-evaluate, in CONTRIBUTING.md).
+
+       This lives in Directory.Build.targets, not Directory.Build.props: the item is
+       defined by the SDK's props, which are imported after Directory.Build.props. -->
+  <ItemGroup>
+    <KnownILLinkPack Update="Microsoft.NET.ILLink.Tasks" ILLinkPackVersion="10.0.12" />
+  </ItemGroup>
+
+</Project>

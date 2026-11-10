@@ -53,9 +53,9 @@
        built-in SourceLink appends the git commit as "+<sha>" build metadata on
        AssemblyInformationalVersion, which the About dialog and the CLI's
        version output surface as the short hash. Prefix tracks the next expected
-       release after the last stable tag (v1.0.0). -->
+       release after the last stable tag (v1.1.0). -->
   <PropertyGroup>
-    <VersionPrefix>1.0.1</VersionPrefix>
+    <VersionPrefix>1.1.1</VersionPrefix>
     <VersionSuffix>dev</VersionSuffix>
   </PropertyGroup>
 
