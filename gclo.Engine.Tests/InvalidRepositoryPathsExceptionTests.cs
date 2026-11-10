@@ -17,7 +17,7 @@ public sealed class InvalidRepositoryPathsExceptionTests
 
       Assert.StartsWith("1 path in this repository cannot be created on Windows:", ex.Message);
       Assert.Contains("'aux' ('aux' is a reserved Windows device name)", ex.Message);
-      Assert.EndsWith("Nothing was checked out.", ex.Message);
+      Assert.EndsWith("Nothing was written to the working tree.", ex.Message);
    }
 
 
@@ -35,6 +35,6 @@ public sealed class InvalidRepositoryPathsExceptionTests
       Assert.StartsWith("5 paths in this repository cannot be created on Windows:", ex.Message);
       Assert.Contains(" and 2 more", ex.Message); // examples cap at three
       Assert.DoesNotContain("bad:4", ex.Message);
-      Assert.EndsWith("Nothing was checked out.", ex.Message);
+      Assert.EndsWith("Nothing was written to the working tree.", ex.Message);
    }
 }

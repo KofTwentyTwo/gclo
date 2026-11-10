@@ -20,7 +20,7 @@ public static class WindowsPathValidator
 {
    private const int MaxSegmentLength = 255;
 
-   private static readonly char[] s_invalidChars = Path.GetInvalidFileNameChars();
+   private static readonly char[] s_invalidChars = InvalidNameCharacters();
 
    private static readonly HashSet<string> s_reservedNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -28,6 +28,17 @@ public static class WindowsPathValidator
         "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     };
+
+
+
+   /// <summary>
+   /// The characters Windows refuses in a file or folder name: the control characters
+   /// U+0000 to U+001F, and <c>" &lt; &gt; | : * ? \ /</c>. Written out here and not
+   /// asked of the running platform, so these rules give the same answer wherever
+   /// they run.
+   /// </summary>
+   internal static char[] InvalidNameCharacters()
+       => [.. Enumerable.Range(0, 32).Select(i => (char)i), '"', '<', '>', '|', ':', '*', '?', '\\', '/'];
 
 
 

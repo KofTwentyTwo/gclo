@@ -533,4 +533,65 @@ public sealed class OrgSyncEngineTests : IDisposable
       Assert.Equal(1, summary.Total);
       Assert.Single(_git.CloneCalls);
    }
+
+
+
+   // ---------------------------------------------------------------- concurrency bounds, cancellation at the end (#151)
+
+   [Theory]
+   [InlineData(0)]
+   [InlineData(-3)]
+   public async Task Sync_AConcurrencyBelowOne_RunsOneRepositoryAtATime(int maxConcurrency)
+   {
+      _lister.Repositories = Repos("alpha", "bravo", "charlie", "delta");
+      var gate = new Lock();
+      int running = 0;
+      int mostAtOnce = 0;
+      _git.CloneHandler = async (_, _, _, _, _) =>
+      {
+         lock(gate)
+         {
+            running++;
+            mostAtOnce = Math.Max(mostAtOnce, running);
+         }
+         await Task.Delay(20, CancellationToken.None);
+         lock(gate)
+         {
+            running--;
+         }
+      };
+
+      SyncSummary summary = await CreateEngine().SyncAsync(CreateRequest(maxConcurrency), _progress);
+
+      Assert.Equal(new SyncSummary(Total: 4, Cloned: 4, Updated: 0, Failed: 0, Canceled: 0, WasCanceled: false), summary);
+      Assert.Equal(1, mostAtOnce);
+   }
+
+
+
+   /// <summary>Cancels as soon as a repository reports that it is done.</summary>
+   private sealed class CancelWhenDone(CancellationTokenSource source) : IProgress<RepoProgress>
+   {
+      public void Report(RepoProgress value)
+      {
+         if(value.Status == SyncStatus.Done)
+         {
+            source.Cancel();
+         }
+      }
+   }
+
+
+
+   [Fact]
+   public async Task Sync_CancellationThatArrivesAfterTheLastRepositoryFinished_LeavesACompleteRun()
+   {
+      _lister.Repositories = Repos("solo");
+      using var cts = new CancellationTokenSource();
+
+      SyncSummary summary = await CreateEngine().SyncAsync(CreateRequest(), new CancelWhenDone(cts), cts.Token);
+
+      Assert.True(cts.IsCancellationRequested);
+      Assert.Equal(new SyncSummary(Total: 1, Cloned: 1, Updated: 0, Failed: 0, Canceled: 0, WasCanceled: false), summary);
+   }
 }

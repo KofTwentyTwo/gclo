@@ -37,8 +37,15 @@ public sealed record Account
    /// <summary>Display name; unique across accounts (case-insensitive).</summary>
    public required string Name { get; init; }
 
-   /// <summary>Optional free-form note about what the account is for.</summary>
-   public string Description { get; init; } = "";
+   /// <summary>
+   /// Optional free-form note about what the account is for. Never null: a file
+   /// that has no such field is read as an empty note.
+   /// </summary>
+   public string Description
+   {
+      get;
+      init => field = value ?? "";
+   } = "";
 
    /// <summary>GitHub organization (or user) whose repositories are synced.</summary>
    public required string Organization { get; init; }
@@ -52,8 +59,21 @@ public sealed record Account
    /// </summary>
    public bool CreateOrgSubfolder { get; init; }
 
-   /// <summary>Parallel clone/pull count used when syncing this account.</summary>
-   public int MaxConcurrency { get; init; } = AppSettings.DefaultConcurrency;
+   /// <summary>
+   /// Parallel clone/pull count used when syncing this account. Always between
+   /// <see cref="AppSettings.MinConcurrency"/> and <see cref="AppSettings.MaxConcurrency"/>,
+   /// so every user of the account gets a usable number. A value below the minimum
+   /// is not a setting anyone chose (an accounts.json edited by hand, or one without
+   /// the field, which is read as zero): it becomes the default. A value above the
+   /// maximum becomes the maximum.
+   /// </summary>
+   public int MaxConcurrency
+   {
+      get;
+      init => field = value < AppSettings.MinConcurrency
+          ? AppSettings.DefaultConcurrency
+          : Math.Min(value, AppSettings.MaxConcurrency);
+   } = AppSettings.DefaultConcurrency;
 
    /// <summary>When the account's last sync finished, or null if it never ran.</summary>
    public DateTimeOffset? LastSyncUtc { get; init; }

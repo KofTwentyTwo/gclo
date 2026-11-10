@@ -18,7 +18,9 @@ public static class RepositoryPathResolver
 {
    private static readonly char[] s_separatorChars = ['/', '\\'];
 
-   private static readonly char[] s_invalidNameChars = Path.GetInvalidFileNameChars();
+   // The Windows set on every platform, so a name's validity does not depend on
+   // where it is checked.
+   private static readonly char[] s_invalidNameChars = WindowsPathValidator.InvalidNameCharacters();
 
    // Windows paths compare case-insensitively; everywhere else the file system is
    // (by default) case-sensitive and so is the containment check.
@@ -50,7 +52,14 @@ public static class RepositoryPathResolver
       // level below the root. GetFullPath collapses '.'/'..' segments and, on
       // Windows, trims trailing dots and spaces — so a name that survived the
       // textual checks but still lands on or outside the root is caught here.
-      string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetRoot)) + Path.DirectorySeparatorChar;
+      // The root ends in exactly one separator. A drive root ('C:\', or '/') keeps
+      // the one it has: trimming leaves it in place, and a second one would put every
+      // candidate outside the root.
+      string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetRoot));
+      if(!Path.EndsInDirectorySeparator(root))
+      {
+         root += Path.DirectorySeparatorChar;
+      }
       string candidate = Path.GetFullPath(Path.Combine(root, repoName));
 
       if(!candidate.StartsWith(root, s_pathComparison) || candidate.Length <= root.Length)
@@ -68,7 +77,8 @@ public static class RepositoryPathResolver
    /// <summary>
    /// True when <paramref name="repoName"/> is a single, safe folder-name segment:
    /// not blank, not <c>.</c> or <c>..</c>, no directory separators (so never rooted
-   /// or UNC), no drive or stream colon, and no characters a file system rejects in a name.
+   /// or UNC), no drive or stream colon, and no characters Windows rejects in a name
+   /// (the same answer on every platform).
    /// </summary>
    /// <param name="repoName">The candidate name.</param>
    /// <param name="reason">Why the name was rejected; null when it is valid.</param>

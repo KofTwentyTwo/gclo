@@ -381,13 +381,20 @@ still wins for that run (the stored token is left untouched).
 ## Activity log
 
 Every invocation appends to a daily activity log file, `gclo-yyyy-MM-dd.log`,
-under `%LOCALAPPDATA%\gclo\logs` (on Linux/macOS: the platform's local
-application data folder). It records the run's parameters, per-repository
+under `%LOCALAPPDATA%\KofTwentyTwo\gclo\logs` (on Linux/macOS: the platform's
+local application data folder). It records the run's parameters, per-repository
 failures, and path-sanitization notes — the same log the desktop app shows
 under **View > Activity log**. Tokens are never written to the log, or anywhere
 else on disk; see [SECURITY.md](../SECURITY.md).
 
-Each entry is one line that starts with its timestamp. Text that came from a repository, such as a file path, is written with control characters shown as `\uXXXX`, and the lines of an exception are indented under their entry, so nothing in a repository can add or imitate an entry. Everything the CLI prints as text shows such characters the same way, and on a console whose code page cannot represent a character (code page 437 or 850, for example) that character is shown in the same form too; the JSON modes use JSON's own escaping.
+Daily files are kept for 30 days, today included; older ones are removed the
+first time something is logged on a given day. When the desktop app and the
+CLI log to the same file (they do unless `GCLO_DATA_DIR` moves the app's data),
+an entry that finds the file in use is tried again for a moment rather than
+dropped; if the file stays in use, entries are dropped until it is free again.
+
+Each entry is one line that starts with its timestamp: local time, followed by
+its offset from UTC (`2026-11-10 14:03:22.123 -06:00 [INFO] ...`). Text that came from a repository, such as a file path, is written with control characters shown as `\uXXXX`, and the lines of an exception are indented under their entry, so nothing in a repository can add or imitate an entry. Everything the CLI prints as text shows such characters the same way, and on a console whose code page cannot represent a character (code page 437 or 850, for example) that character is shown in the same form too; the JSON modes use JSON's own escaping.
 
 ## Exit codes
 

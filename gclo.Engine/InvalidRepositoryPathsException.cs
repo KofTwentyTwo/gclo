@@ -33,6 +33,6 @@ public sealed class InvalidRepositoryPathsException : Exception
       string suffix = paths.Count > 3 ? $" and {paths.Count - 3} more" : "";
       string subject = paths.Count == 1 ? "1 path" : $"{paths.Count} paths";
       return $"{subject} in this repository cannot be created on Windows: {examples}{suffix}. " +
-             "Nothing was checked out.";
+             "Nothing was written to the working tree.";
    }
 }

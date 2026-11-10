@@ -295,6 +295,8 @@ public sealed class SyncCommandTests : IDisposable
 
       Assert.Equal(1, code);
       Assert.Empty(git.RecoveredRepoNames); // recovery was never attempted
+      // The engine finished its one repository; what was cut short is the recovery, and the run says so.
+      Assert.Contains("Canceled: 0 cloned, 0 updated, 1 failed, 0 canceled of 1.", console.Out);
    }
 
 

@@ -363,4 +363,63 @@ public sealed class AccountsStoreTests : IDisposable
       Assert.False(File.Exists(Path.Combine(_root, "accounts.json.tmp")));
       Assert.Equal(2, NewStore().GetAll().Count);
    }
+
+
+
+   // ---------------------------------------------------------------- a concurrency read from disk (#151)
+
+   [Theory]
+   [InlineData(0, AppSettings.DefaultConcurrency)]
+   [InlineData(-7, AppSettings.DefaultConcurrency)]
+   [InlineData(5000, AppSettings.MaxConcurrency)]
+   [InlineData(1, 1)]
+   [InlineData(12, 12)]
+   public void Load_AConcurrencyOutsideTheSupportedRange_IsBroughtBackIntoIt(int stored, int expected)
+   {
+      Directory.CreateDirectory(_root);
+      File.WriteAllText(
+          Path.Combine(_root, "accounts.json"),
+          $$"""[{"Id":"{{Guid.NewGuid()}}","Name":"Edited","Organization":"acme","TargetRoot":"C:\\repos","MaxConcurrency":{{stored}}}]""");
+
+      Account loaded = Assert.Single(NewStore().GetAll());
+
+      Assert.Equal(expected, loaded.MaxConcurrency);
+   }
+
+
+
+   [Fact]
+   public void Load_AnAccountWithoutTheOptionalFields_GetsTheirDefaults_AndKeepsThemWhenSaved()
+   {
+      // The reader hands an absent field over as zero or null; neither is a setting.
+      Directory.CreateDirectory(_root);
+      var id = Guid.NewGuid();
+      File.WriteAllText(
+          Path.Combine(_root, "accounts.json"),
+          $$"""[{"Id":"{{id}}","Name":"Bare","Organization":"acme","TargetRoot":"C:\\repos"}]""");
+      AccountsStore store = NewStore();
+
+      Account loaded = Assert.Single(store.GetAll());
+      store.RecordSyncResult(id, DateTimeOffset.UtcNow, "done");
+      Account saved = Assert.Single(NewStore().GetAll());
+
+      Assert.Equal(AppSettings.DefaultConcurrency, loaded.MaxConcurrency);
+      Assert.Equal("", loaded.Description);
+      Assert.Equal(AppSettings.DefaultConcurrency, saved.MaxConcurrency);
+      Assert.Equal("", saved.Description);
+   }
+
+
+
+   [Fact]
+   public void Account_AConcurrencyOutsideTheSupportedRange_IsBroughtBackIntoIt_HoweverItIsSet()
+   {
+      Account account = MakeAccount("Bounds") with { MaxConcurrency = 0 };
+
+      Assert.Equal(AppSettings.DefaultConcurrency, account.MaxConcurrency);
+      Assert.Equal(AppSettings.MaxConcurrency, (account with { MaxConcurrency = int.MaxValue }).MaxConcurrency);
+      Assert.Equal(AppSettings.MinConcurrency, (account with { MaxConcurrency = AppSettings.MinConcurrency }).MaxConcurrency);
+      Assert.Equal(AppSettings.DefaultConcurrency, MakeAccount("Default").MaxConcurrency);
+      Assert.Equal("", (account with { Description = null! }).Description);
+   }
 }

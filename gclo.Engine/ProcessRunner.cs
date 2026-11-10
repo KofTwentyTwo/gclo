@@ -48,32 +48,63 @@ public sealed class ProcessRunner : IProcessRunner
       }
 
       using var process = new Process { StartInfo = start };
-      process.Start();
-
+      // Declared before the child is started, so they are released after it has been
+      // ended: what still copies into them on a failure is not cut off under it.
       using var stdout = new MemoryStream();
       using var stderr = new MemoryStream();
-      Task copyOut = process.StandardOutput.BaseStream.CopyToAsync(stdout, cancellationToken);
-      Task copyErr = process.StandardError.BaseStream.CopyToAsync(stderr, cancellationToken);
-      if(standardInput is not null)
-      {
-         await process.StandardInput.WriteAsync(standardInput.AsMemory(), cancellationToken).ConfigureAwait(false);
-      }
-      process.StandardInput.Close();
+      process.Start();
 
+      ///////////////////////////////////////////////////////////////////////////////
+      // From here on the child exists, so every way out of this method, not only  //
+      // cancellation, goes through the finally that ends it if it is still alive. //
+      ///////////////////////////////////////////////////////////////////////////////
       try
       {
+         Task copyOut = process.StandardOutput.BaseStream.CopyToAsync(stdout, cancellationToken);
+         Task copyErr = process.StandardError.BaseStream.CopyToAsync(stderr, cancellationToken);
+         try
+         {
+            if(standardInput is not null)
+            {
+               await process.StandardInput.WriteAsync(standardInput.AsMemory(), cancellationToken).ConfigureAwait(false);
+            }
+            process.StandardInput.Close();
+         }
+         catch(IOException)
+         {
+            ////////////////////////////////////////////////////////////////////////
+            // The child closed its input, or exited, before it had read all of   //
+            // it. That is its answer, not a failure to run it: its exit code and  //
+            // what it printed say why, and they are what the caller gets.         //
+            ////////////////////////////////////////////////////////////////////////
+         }
+
          await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
          await Task.WhenAll(copyOut, copyErr).ConfigureAwait(false);
+         return new ProcessResult(process.ExitCode, Decode(stdout.ToArray()), Decode(stderr.ToArray()));
       }
-      catch(OperationCanceledException)
+      finally
       {
-         try
-         { process.Kill(entireProcessTree: true); }
-         catch(InvalidOperationException) { /* already exited */ }
-         throw;
+         EndIfStillRunning(process);
       }
+   }
 
-      return new ProcessResult(process.ExitCode, Decode(stdout.ToArray()), Decode(stderr.ToArray()));
+
+
+   private static void EndIfStillRunning(Process process)
+   {
+      try
+      {
+         if(!process.HasExited)
+         {
+            process.Kill(entireProcessTree: true);
+         }
+      }
+      catch(Exception ex) when(ex is InvalidOperationException or System.ComponentModel.Win32Exception
+                                   or NotSupportedException or AggregateException)
+      {
+         // It exited in between, or it (or one of its children) cannot be ended from here.
+      }
    }
 
 

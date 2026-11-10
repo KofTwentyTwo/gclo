@@ -473,4 +473,24 @@ public sealed class WindowsPathValidationTests : IDisposable
       repo.Commit("long path commit", signature, signature);
       return path;
    }
+
+
+
+   // ---------------------------------------------------------------- the fixed character set (#151)
+
+   [Fact]
+   public void InvalidNameCharacters_AreTheWindowsSet_WhereverTheRulesRun()
+   {
+      char[] characters = WindowsPathValidator.InvalidNameCharacters();
+
+      // The 32 control characters and nine more; no duplicates.
+      Assert.Equal(41, characters.Length);
+      Assert.Equal(41, characters.Distinct().Count());
+      Assert.All(Enumerable.Range(0, 32), i => Assert.Contains((char)i, characters));
+      Assert.All("\"<>|:*?\\/", c => Assert.Contains(c, characters));
+      if(OperatingSystem.IsWindows())
+      {
+         Assert.Equal(Path.GetInvalidFileNameChars().Order(), characters.Order());
+      }
+   }
 }

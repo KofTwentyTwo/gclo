@@ -184,6 +184,10 @@ public sealed class OrgSyncEngine
          }
       }
 
-      return new SyncSummary(repos.Count, cloned, updated, failed, canceled, cancellationToken.IsCancellationRequested);
+      ///////////////////////////////////////////////////////////////////////////////
+      // Cut short means a repository did not get its turn or did not finish. A     //
+      // cancellation that arrives after the last one finished cut nothing short.   //
+      ///////////////////////////////////////////////////////////////////////////////
+      return new SyncSummary(repos.Count, cloned, updated, failed, canceled, WasCanceled: canceled > 0);
    }
 }

@@ -389,18 +389,19 @@ internal static class SyncCommand
          // --sanitize-paths: repositories whose only problem was Windows-invalid
          // paths were held back by the progress handler; retry each with an
          // automatic recovery. A recovered repository counts as cloned.
-         int sanitized = 0;
-         foreach(PendingRecovery pending in progress.DrainPendingRecoveries())
-         {
-            if(await TrySanitizeAsync(git, progress, printer, log, targetRoot, pending, announce: !machineReadable, cancellationToken)
-                .ConfigureAwait(false))
-            {
-               sanitized++;
-            }
-         }
+         (int sanitized, bool sanitizationCutShort) = await SanitizeHeldBackAsync(
+             git, progress, printer, log, targetRoot, announce: !machineReadable, cancellationToken).ConfigureAwait(false);
          if(sanitized > 0)
          {
             summary = summary with { Cloned = summary.Cloned + sanitized, Failed = summary.Failed - sanitized };
+         }
+         if(sanitizationCutShort)
+         {
+            ////////////////////////////////////////////////////////////////////////
+            // The engine had finished every repository, so its summary says the  //
+            // run was complete; the recovery that was asked for was not.          //
+            ////////////////////////////////////////////////////////////////////////
+            summary = summary with { WasCanceled = true };
          }
 
          log.Info(
@@ -514,6 +515,39 @@ internal static class SyncCommand
           ? "No accounts exist yet; create one with 'gclo accounts add' or in the gclo desktop app."
           : "Available accounts: " + string.Join(", ", all.Select(a => a.Name)) + ".";
       return new CliErrorException($"No account named '{name}'. {available}");
+   }
+
+
+
+   /// <summary>
+   /// Sanitizes every repository the progress handler held back, one after the other.
+   /// Says how many now count as cloned, and whether cancellation kept one of them
+   /// from being sanitized.
+   /// </summary>
+   private static async Task<(int Sanitized, bool CutShort)> SanitizeHeldBackAsync(
+       IGitClient git,
+       SyncProgressHandler progress,
+       ProgressPrinter printer,
+       IActivityLog log,
+       string targetRoot,
+       bool announce,
+       CancellationToken cancellationToken)
+   {
+      int sanitized = 0;
+      bool cutShort = false;
+      foreach(PendingRecovery pending in progress.DrainPendingRecoveries())
+      {
+         if(await TrySanitizeAsync(git, progress, printer, log, targetRoot, pending, announce, cancellationToken)
+             .ConfigureAwait(false))
+         {
+            sanitized++;
+         }
+         else if(cancellationToken.IsCancellationRequested)
+         {
+            cutShort = true;
+         }
+      }
+      return (sanitized, cutShort);
    }
 
 

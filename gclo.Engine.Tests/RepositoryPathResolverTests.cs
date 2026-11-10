@@ -187,4 +187,47 @@ public sealed class RepositoryPathResolverTests
 
       Assert.EndsWith(Path.DirectorySeparatorChar + "alpha", resolved);
    }
+
+
+
+   // ---------------------------------------------------------------- a drive root as the target (#151)
+
+   [Fact]
+   public void Resolve_TargetIsTheRootOfADrive_ReturnsTheFolderDirectlyUnderIt()
+   {
+      // 'C:\' on Windows, '/' elsewhere: a root keeps its separator when it is trimmed.
+      string driveRoot = Path.GetPathRoot(Path.GetFullPath(s_root))!;
+
+      string resolved = RepositoryPathResolver.Resolve(driveRoot, "gclo");
+
+      Assert.Equal(driveRoot + "gclo", resolved);
+      Assert.Equal(driveRoot, Path.GetDirectoryName(resolved));
+   }
+
+
+
+   [Fact]
+   public void Resolve_TargetIsTheRootOfADrive_StillRefusesANameThatLeavesIt()
+   {
+      string driveRoot = Path.GetPathRoot(Path.GetFullPath(s_root))!;
+
+      Assert.Throws<ArgumentException>(() => RepositoryPathResolver.Resolve(driveRoot, ".."));
+      Assert.Throws<ArgumentException>(() => RepositoryPathResolver.Resolve(driveRoot, "a/b"));
+   }
+
+
+
+   [Theory]
+   [InlineData("a?b")]
+   [InlineData("a*b")]
+   [InlineData("a|b")]
+   [InlineData("a<b")]
+   [InlineData("a>b")]
+   [InlineData("a\"b")]
+   [InlineData("a\tb")]
+   public void TryValidateName_ACharacterWindowsRefuses_IsRefusedOnEveryPlatform(string name)
+   {
+      Assert.False(RepositoryPathResolver.TryValidateName(name, out string? reason));
+      Assert.Equal("it contains characters that are not allowed in a folder name", reason);
+   }
 }
