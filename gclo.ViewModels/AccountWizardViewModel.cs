@@ -102,7 +102,6 @@ public sealed partial class AccountWizardViewModel : ObservableObject
          TargetRoot = existing.TargetRoot;
          CreateOrgSubfolder = existing.CreateOrgSubfolder;
          MaxConcurrency = existing.MaxConcurrency;
-         Server = existing.Server ?? "";
       }
    }
 
@@ -260,8 +259,9 @@ public sealed partial class AccountWizardViewModel : ObservableObject
 
    /// <summary>
    /// The address of the Gitea server as typed; after step 1 accepted it, as it was
-   /// normalized, which is the address the token is sent to. For an edit, the
-   /// account's stored address.
+   /// normalized, which is the address the token is sent to. Empty for an edit:
+   /// where the account is, <see cref="PlaceNote"/> says, and what is stored is not
+   /// put into a box (an address that cannot be used may hold a password).
    /// </summary>
    [ObservableProperty]
    public partial string Server { get; set; }
@@ -301,8 +301,13 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// <summary>The page a token is made on; null when the account's place is not known.</summary>
    public Uri? TokenPage => ForgeTexts.TokenPage(Place);
 
-   /// <summary>Step 2's note on what Next does, naming the place the token is sent to.</summary>
-   public string TokenStepNote => $"Next checks the token with {PlaceName} and lists the organizations it can see.";
+   /// <summary>
+   /// Step 2's note on what Next does, naming the place the token is sent to: for a
+   /// server its whole address as it was normalized, not the host alone, since two
+   /// servers can share a host.
+   /// </summary>
+   public string TokenStepNote
+       => $"Next checks the token with {Place?.Server?.AbsoluteUri ?? PlaceName} and lists the organizations it can see.";
 
    /// <summary>Organization (or user) to sync; picked from <see cref="Organizations"/> or typed.</summary>
    [ObservableProperty]
@@ -449,6 +454,10 @@ public sealed partial class AccountWizardViewModel : ObservableObject
 
 
 
+   partial void OnServerChanged(string value) => ServerError = "";
+
+
+
    partial void OnMaxConcurrencyChanged(int value)
    {
       int clamped = Math.Clamp(value, AppSettings.MinConcurrency, AppSettings.MaxConcurrency);
@@ -469,6 +478,16 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// </summary>
    public async Task<bool> TryAdvanceAsync()
    {
+      if(IsValidatingToken)
+      {
+         ///////////////////////////////////////////////////////////////////////////
+         // A token is being checked with the place the wizard is on. Until the   //
+         // answer is there the wizard stays as it is (GoBack too): the answer is //
+         // then the answer for the place and the token the wizard still holds.   //
+         ///////////////////////////////////////////////////////////////////////////
+         return false;
+      }
+
       switch(Step)
       {
          case 1:
@@ -632,8 +651,8 @@ public sealed partial class AccountWizardViewModel : ObservableObject
          // sent to another, and an organization of one is not one of the other. The //
          // default token is a GitHub token, so it is not the choice anywhere else.  //
          //////////////////////////////////////////////////////////////////////////////
+         _orgLister = listerOf(place); // first: if there is no lister for the place, the wizard stays on the one it has
          _chosen = place;
-         _orgLister = listerOf(place);
          Token = "";
          TokenError = "";
          Organizations.Clear();
@@ -657,10 +676,10 @@ public sealed partial class AccountWizardViewModel : ObservableObject
 
 
 
-   /// <summary>Returns to the previous step; a no-op on the first step.</summary>
+   /// <summary>Returns to the previous step; a no-op on the first step, and while step 2 is checking a token.</summary>
    public void GoBack()
    {
-      if(!IsFirstStep)
+      if(!IsFirstStep && !IsValidatingToken)
       {
          Step--;
       }

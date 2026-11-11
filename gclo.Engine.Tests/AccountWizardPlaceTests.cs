@@ -169,7 +169,8 @@ public sealed class AccountWizardPlaceTests : IDisposable
           "Stored in Windows Credential Manager, never in a file; needs read access to repositories, organizations and the user",
           wizard.TokenAdvice);
       Assert.Equal(new Uri("https://git.example.test/user/settings/applications"), wizard.TokenPage);
-      Assert.Equal("Next checks the token with git.example.test and lists the organizations it can see.", wizard.TokenStepNote);
+      // The whole address, not the host alone: it is what the token is about to be sent to.
+      Assert.Equal("Next checks the token with https://git.example.test/ and lists the organizations it can see.", wizard.TokenStepNote);
       Assert.Empty(_sent); // nothing was sent anywhere to get here
 
       wizard.Token = "gitea_token";
@@ -354,6 +355,165 @@ public sealed class AccountWizardPlaceTests : IDisposable
 
 
 
+   [Fact]
+   public async Task TwoServersOnOneHost_AreToldApart_WhereTheTokenIsAskedFor()
+   {
+      AccountWizardViewModel wizard = ChoosingWizard();
+      wizard.Name = "Forge";
+      wizard.IsOnGitea = true;
+      wizard.Server = "git.example.test/team-a";
+
+      await AdvanceToStepAsync(wizard, 2);
+
+      Assert.Equal("Next checks the token with https://git.example.test/team-a/ and lists the organizations it can see.", wizard.TokenStepNote);
+      Assert.Equal(new Uri("https://git.example.test/team-a/user/settings/applications"), wizard.TokenPage);
+   }
+
+
+
+   [Fact]
+   public async Task WhatStepTwoSays_FollowsThePlace_WhenItIsChosenAgain()
+   {
+      AccountWizardViewModel wizard = ChoosingWizard();
+      wizard.Name = "Forge";
+      wizard.Token = "";
+      await AdvanceToStepAsync(wizard, 2);
+      Assert.False(await wizard.TryAdvanceAsync());
+      Assert.Equal("Enter a token to continue.", wizard.TokenError); // said about the other place
+      var changed = new List<string?>();
+      wizard.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+      wizard.GoBack();
+      wizard.IsOnGitea = true;
+      wizard.Server = Server;
+      await AdvanceToStepAsync(wizard, 2);
+
+      // Step 2 is bound to these: without the notifications it would go on naming GitHub and linking GitHub's page.
+      Assert.All(
+          (string[])
+          [
+              nameof(AccountWizardViewModel.PlaceName), nameof(AccountWizardViewModel.TokenStepNote), nameof(AccountWizardViewModel.TokenPage),
+              nameof(AccountWizardViewModel.TokenHeader), nameof(AccountWizardViewModel.TokenPlaceholder), nameof(AccountWizardViewModel.TokenAdvice),
+          ],
+          name => Assert.Contains(name, changed, StringComparer.Ordinal));
+      Assert.Equal("", wizard.TokenError);
+   }
+
+
+
+   [Fact]
+   public async Task TheAccountIsSavedAtThePlaceStepOneAccepted_WhateverTheChoiceIsSetToAfterwards()
+   {
+      AccountWizardViewModel wizard = ChoosingWizard();
+      wizard.Name = "Forge";
+      wizard.IsOnGitea = true;
+      wizard.Server = Server;
+      await AdvanceToStepAsync(wizard, 2);
+
+      // As a binding could set them while step 1 is not on screen: no place is taken without step 1.
+      wizard.IsOnGitea = false;
+      wizard.Server = "https://elsewhere.example.test";
+      wizard.Token = "gitea_token";
+      await AdvanceToStepAsync(wizard, 3);
+      wizard.Organization = "platform";
+      await AdvanceToStepAsync(wizard, 4);
+      await wizard.SaveAsync();
+
+      Assert.Equal([("git.example.test", "gitea_token")], _sent);
+      Account saved = Assert.Single(new AccountsStore(_vault, _root).GetAll());
+      Assert.Equal(ForgeKind.Gitea, saved.Forge);
+      Assert.Equal(Server, saved.Server);
+   }
+
+
+
+   [Fact]
+   public async Task APlaceThatNoListerCanBeMadeFor_IsNotTaken()
+   {
+      var wizard = new AccountWizardViewModel(
+          _store,
+          place => place.Server is null ? ListerOf(place) : throw new InvalidOperationException("no lister for that place"),
+          _defaults);
+      wizard.Name = "Forge";
+      wizard.Token = "ghp_typed_for_github";
+      wizard.IsOnGitea = true;
+      wizard.Server = Server;
+
+      await Assert.ThrowsAsync<InvalidOperationException>(wizard.TryAdvanceAsync);
+
+      // The wizard is where it was: on GitHub, with GitHub's lister and the token typed for GitHub.
+      Assert.Equal(1, wizard.Step);
+      Assert.Equal("GitHub", wizard.PlaceName);
+      Assert.Equal("ghp_typed_for_github", wizard.Token);
+
+      wizard.IsOnGitea = false;
+      await AdvanceToStepAsync(wizard, 3);
+
+      Assert.Equal([("GitHub", "ghp_typed_for_github")], _sent);
+   }
+
+
+
+   [Fact]
+   public async Task WhileATokenIsBeingChecked_TheWizardDoesNotMove()
+   {
+      var answer = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+      var wizard = new AccountWizardViewModel(
+          _store,
+          place => new FakeOrganizationLister
+          {
+             Handler = (token, _) =>
+             {
+                _sent.Enqueue((place.DisplayName, token));
+                return answer.Task;
+             },
+          },
+          _defaults);
+      wizard.Name = "Work";
+      wizard.Token = "ghp_token";
+      await AdvanceToStepAsync(wizard, 2);
+
+      Task<bool> checking = wizard.TryAdvanceAsync();
+      Assert.True(wizard.IsValidatingToken);
+
+      // Neither back, nor on: the answer that is on its way is for this place and this token.
+      wizard.GoBack();
+      Assert.Equal(2, wizard.Step);
+      Task<bool> again = wizard.TryAdvanceAsync();
+      Assert.True(again.IsCompleted, "a second Next started another check instead of being refused");
+      Assert.False(await again);
+      Assert.Equal(2, wizard.Step);
+      Assert.Single(_sent);
+
+      answer.SetResult(["me", "acme"]);
+
+      Assert.True(await checking);
+      Assert.Equal(3, wizard.Step);
+      Assert.Equal(["me", "acme"], wizard.Organizations);
+
+      wizard.GoBack(); // and it moves again
+      Assert.Equal(2, wizard.Step);
+   }
+
+
+
+   [Fact]
+   public async Task TheMessageAboutTheServer_GoesAway_WhenTheAddressIsCorrected()
+   {
+      AccountWizardViewModel wizard = ChoosingWizard();
+      wizard.Name = "Forge";
+      wizard.IsOnGitea = true;
+      wizard.Server = "http://git.example.test";
+      Assert.False(await wizard.TryAdvanceAsync());
+      Assert.Equal("The server address cannot be used: it has to begin with https://.", wizard.ServerError);
+
+      wizard.Server = "https://git.example.test";
+
+      Assert.Equal("", wizard.ServerError);
+   }
+
+
+
    // ---------------------------------------------------------------- the default token is a GitHub token
 
    [Fact]
@@ -451,10 +611,11 @@ public sealed class AccountWizardPlaceTests : IDisposable
 
       Assert.False(wizard.CanChoosePlace);
       Assert.False(wizard.AsksForServer);
-      Assert.Equal(Server, wizard.Server);
+      Assert.Equal("", wizard.Server); // what is stored is not put into a box
       Assert.Equal(
           "This account is on git.example.test. That cannot be changed: its token was saved for that place.",
           wizard.PlaceNote);
+      Assert.Equal("Next checks the token with https://git.example.test/ and lists the organizations it can see.", wizard.TokenStepNote);
       Assert.Equal("git.example.test", wizard.PlaceName);
       Assert.Equal("Access token", wizard.TokenHeader);
       Assert.Equal("Leave empty to keep the stored token", wizard.TokenPlaceholder);
@@ -539,9 +700,11 @@ public sealed class AccountWizardPlaceTests : IDisposable
 
       Assert.Equal("Connect to GitHub", quickSync.ConnectTitle);
       Assert.Equal(new Uri("https://github.com/settings/tokens"), quickSync.TokenPage);
+      Assert.Equal("Personal access token", quickSync.TokenHeader);
 
       Assert.Equal("Connect to git.example.test", onGitea.ConnectTitle);
       Assert.Equal(new Uri("https://git.example.test/user/settings/applications"), onGitea.TokenPage);
+      Assert.Equal("Access token", onGitea.TokenHeader);
 
       Assert.Equal("Connect to GitHub", onGitHub.ConnectTitle);
       Assert.Equal(new Uri("https://github.com/settings/tokens"), onGitHub.TokenPage);

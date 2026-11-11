@@ -261,7 +261,7 @@ public sealed partial class SmokeTests : UiTestBase
          Session.ClickButton("Next");
 
          Session.WaitForText("Step 2 of 4: Access token");
-         Session.WaitForText("Next checks the token with git.example.test and lists the organizations it can see.");
+         Session.WaitForText("Next checks the token with https://git.example.test/ and lists the organizations it can see.");
          Session.EnterText(Session.WaitForElement("WizardTokenBox"), "gclo-uitest-fixture-token");
          Session.ClickButton("Next");
 

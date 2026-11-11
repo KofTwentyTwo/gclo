@@ -100,6 +100,7 @@ public sealed partial class ConnectionFormControl : UserControl
       // The page of the place this workspace connects to (#206); none when that place is not known.
       if(ViewModel is not null)
       {
+         TokenBox.Header = ViewModel.TokenHeader;
          TokenPageLink.NavigateUri = ViewModel.TokenPage;
          TokenPageLink.Visibility = StatusFormat.VisibleIfNotNull(ViewModel.TokenPage);
       }

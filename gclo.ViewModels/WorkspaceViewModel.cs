@@ -180,6 +180,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// </summary>
    public string PlaceName => _account is null ? ForgeEndpoint.GitHub.DisplayName : _account.DescribePlace();
 
+   /// <summary>What the token of this workspace's forge is called: the header of its token box.</summary>
+   public string TokenHeader => ForgeTexts.TokenName(_account?.Forge ?? ForgeKind.GitHub);
+
    /// <summary>The title of the connect card: where this workspace connects to.</summary>
    public string ConnectTitle => $"Connect to {PlaceName}";
 
