@@ -18,7 +18,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://git.kof22.com/KofTwentyTwo/gclo</RepositoryUrl>
     <PackageProjectUrl>https://git.kof22.com/KofTwentyTwo/gclo</PackageProjectUrl>
-    <PackageTags>github;git;clone;mirror;organization;libgit2sharp;octokit</PackageTags>
+    <PackageTags>github;gitea;forgejo;git;clone;mirror;organization;libgit2sharp;octokit</PackageTags>
     <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
     <!-- Publish-quality package: SourceLink to the public repo, symbols in a
          .snupkg, untracked (generated) sources embedded so step-through works. -->

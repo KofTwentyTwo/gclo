@@ -20,11 +20,6 @@ namespace gclo.Engine;
 /// </summary>
 internal static class GitHubFailures
 {
-   /// <summary>The longest reason from GitHub that is put into a message.</summary>
-   private const int MaxReasonLength = 300;
-
-
-
    /// <summary>
    /// Waits for one gateway request, or for the caller's cancellation, whichever
    /// comes first. The gateway cannot cancel a request, so a canceled one is left
@@ -126,7 +121,7 @@ internal static class GitHubFailures
              exception),
 
          HttpRequestException network => new GitHubAccessException(
-             GitHubAccessKind.Unavailable, Unreachable(network.HttpRequestError), exception),
+             GitHubAccessKind.Unavailable, ForgeFailures.Unreachable("GitHub", network.HttpRequestError), exception),
 
          OperationCanceledException when !canceledByCaller => new GitHubAccessException(
              GitHubAccessKind.Unavailable, "GitHub did not answer in time; retry later.", exception),
@@ -172,56 +167,12 @@ internal static class GitHubFailures
          return document.RootElement.ValueKind == JsonValueKind.Object
                 && document.RootElement.TryGetProperty("message", out JsonElement message)
                 && message.ValueKind == JsonValueKind.String
-             ? OneLine(message.GetString())
+             ? ForgeFailures.OneLine(message.GetString())
              : "";
       }
       catch(JsonException)
       {
          return "";
       }
-   }
-
-
-
-   /// <summary>
-   /// The words for a request that never got an answer. Chosen by the kind of failure,
-   /// never copied from the failure's own text: that text can name a proxy together
-   /// with the user name and password used for it.
-   /// </summary>
-   private static string Unreachable(HttpRequestError error)
-   {
-      string what = error switch
-      {
-         HttpRequestError.NameResolutionError => "its name could not be resolved (DNS)",
-         HttpRequestError.ConnectionError => "the connection could not be made",
-         HttpRequestError.SecureConnectionError
-             => "a secure (TLS) connection could not be established; a proxy or a security product that inspects traffic is a common cause",
-         HttpRequestError.ProxyTunnelError => "the proxy on the way refused the connection",
-         HttpRequestError.Unknown => "the request failed on the way",
-         _ => $"the request failed on the way ({error})",
-      };
-      return $"GitHub could not be reached: {what}. Check the network connection and retry.";
-   }
-
-
-
-   /// <summary>
-   /// A reason from GitHub as one line of bounded length that ends a sentence; empty
-   /// when there is none.
-   /// </summary>
-   private static string OneLine(string? text)
-   {
-      string line = string.Join(' ', (text ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-      if(line.Length == 0)
-      {
-         return "";
-      }
-      if(line.Length > MaxReasonLength)
-      {
-         // Cut between characters, never through a pair of code units.
-         int keep = char.IsHighSurrogate(line[MaxReasonLength - 1]) ? MaxReasonLength - 1 : MaxReasonLength;
-         return line[..keep] + "...";
-      }
-      return line[^1] is '.' or '!' or '?' ? line : line + ".";
    }
 }

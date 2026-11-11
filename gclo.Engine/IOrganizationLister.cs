@@ -6,14 +6,16 @@
 namespace gclo.Engine;
 
 
-/// <summary>Lists the GitHub organizations a token can see.</summary>
+/// <summary>Lists the organizations a token can see on a forge (GitHub, a Gitea server).</summary>
 public interface IOrganizationLister
 {
    /// <summary>
-   /// Returns the login names of organizations the token's user belongs to.
-   /// May legitimately be empty for tokens without organization read access
-   /// (fine-grained PATs, classic PATs missing read:org) — callers should still
-   /// allow manual organization entry.
+   /// Returns the token's own account, then the names of the organizations its
+   /// user belongs to. May hold the account alone for tokens without organization
+   /// read access (GitHub: fine-grained PATs, classic PATs missing read:org; Gitea:
+   /// a token without read:organization) — callers should still allow manual
+   /// organization entry.
    /// </summary>
+   /// <exception cref="ForgeAccessException">The forge refused the request, or could not be reached.</exception>
    Task<IReadOnlyList<string>> ListOrganizationsAsync(string token, CancellationToken cancellationToken = default);
 }
