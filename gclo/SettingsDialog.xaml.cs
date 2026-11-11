@@ -77,7 +77,8 @@ public sealed partial class SettingsDialog : ContentDialog
       _giteaState = new SettingsGiteaState(
           giteaPlace,
           hasSavedToken: giteaPlace is not null && DefaultTokens.For(vault, giteaPlace) is not null,
-          dependentAccounts: giteaPlace is null ? [] : accounts.UsingDefaultTokenOf(giteaPlace).Select(a => a.Name).ToList());
+          dependentAccounts: giteaPlace is null ? [] : accounts.UsingDefaultTokenOf(giteaPlace).Select(a => a.Name).ToList(),
+          holdsATokenFor: place => DefaultTokens.For(vault, place) is not null);
       ArgumentNullException.ThrowIfNull(windowHandleProvider);
       _settings = settings;
       _vault = vault;
@@ -213,7 +214,26 @@ public sealed partial class SettingsDialog : ContentDialog
 
 
    private void DefaultTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
-       => UpdateTokenCaption();
+   {
+      DropTheMaskFromWhatWasTyped(DefaultTokenBox);
+      UpdateTokenCaption();
+   }
+
+
+
+   /// <summary>
+   /// A box that shows the mask and is typed into without being emptied first holds
+   /// the mask and then the typing: the mask is taken out, so that what is stored is
+   /// the token alone.
+   /// </summary>
+   private static void DropTheMaskFromWhatWasTyped(PasswordBox box)
+   {
+      string typed = SettingsTokenState.WithoutTheMask(box.Password);
+      if(!string.Equals(typed, box.Password, StringComparison.Ordinal))
+      {
+         box.Password = typed;
+      }
+   }
 
 
 
@@ -223,7 +243,10 @@ public sealed partial class SettingsDialog : ContentDialog
 
 
    private void GiteaTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
-       => UpdateGiteaCaption();
+   {
+      DropTheMaskFromWhatWasTyped(GiteaTokenBox);
+      UpdateGiteaCaption();
+   }
 
 
 

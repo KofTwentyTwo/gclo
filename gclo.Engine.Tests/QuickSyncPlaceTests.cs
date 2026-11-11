@@ -561,11 +561,70 @@ public sealed class QuickSyncPlaceTests : IDisposable
       Task asking = workspace.FindOrganizationsCommand.ExecuteAsync(null);
 
       workspace.ServerIsBeingEdited();
-      await asking;
+      await asking.WaitAsync(TimeSpan.FromSeconds(10)); // a lookup that is not ended fails here, and does not wait for ever
 
       Assert.True(answer.Task.IsCanceled);
       Assert.Empty(workspace.Organizations);
       Assert.False(workspace.IsLoadingOrgs);
+   }
+
+
+
+   [Fact]
+   public async Task ARowWhosePathsAreToBeResolved_IsNotResolved_WhileTheAddressIsNoPlace()
+   {
+      WorkspaceViewModel workspace = QuickSync();
+      workspace.IsOnGitea = true;
+      workspace.Server = Server;
+      await TypeTokenAsync(workspace, "gitea-token-0123456789");
+      workspace.Organization = "org-at-git.example.test";
+      workspace.TargetFolder = _root;
+      await workspace.LoadReposCommand.ExecuteAsync(null);
+      _git.CloneHandler = (_, path, _, _, _) => string.Equals(Path.GetFileName(path), "alpha", StringComparison.Ordinal)
+          ? Task.FromException(new InvalidRepositoryPathsException([new InvalidPathInfo("aux", "'aux' is a reserved Windows device name", "aux_")]))
+          : Task.CompletedTask;
+      await workspace.SyncCommand.ExecuteAsync(null);
+      RepoItemViewModel alpha = Assert.Single(workspace.Repos, row => row.HasPathIssue);
+      int asked = 0;
+      workspace.RecoveryInteraction = _ =>
+      {
+         asked++;
+         return Task.FromResult<PathRecoveryDecision?>(null);
+      };
+      Assert.True(workspace.ResolvePathsCommand.CanExecute(alpha));
+
+      // The address on the card is being typed over: the row is of a server the card no longer names.
+      workspace.ServerIsBeingEdited();
+
+      Assert.False(workspace.ResolvePathsCommand.CanExecute(alpha));
+      await workspace.ResolvePathsCommand.ExecuteAsync(alpha);
+      Assert.Equal(0, asked);
+
+      // The same address after all: the row can be resolved again.
+      workspace.Server = Server;
+
+      Assert.True(workspace.ResolvePathsCommand.CanExecute(alpha));
+      await workspace.ResolvePathsCommand.ExecuteAsync(alpha);
+      Assert.Equal(1, asked);
+   }
+
+
+
+   [Fact]
+   public async Task OnGitHub_ThereIsNoAddressToBeEdited_AndSayingSoChangesNothing()
+   {
+      WorkspaceViewModel workspace = QuickSyncOnGitHub();
+      await TypeTokenAsync(workspace, "ghp_token_0123456789");
+      workspace.Organization = "org-at-GitHub";
+      workspace.TargetFolder = @"C:\mirror";
+      Assert.True(workspace.LoadReposCommand.CanExecute(null));
+
+      workspace.ServerIsBeingEdited();
+
+      Assert.True(workspace.LoadReposCommand.CanExecute(null));
+      Assert.True(workspace.FindOrganizationsCommand.CanExecute(null));
+      Assert.NotNull(workspace.ToAccountSeed());
+      Assert.Equal("Connect to GitHub", workspace.ConnectTitle);
    }
 
 
@@ -756,7 +815,7 @@ public sealed class QuickSyncPlaceTests : IDisposable
 
 
    [Fact]
-   public void AChangeOfTheDefaultTokenInSettings_ReachesQuickSync_OnlyWhileItIsOnGitHub()
+   public void AChangeOfGitHubsDefaultToken_ReachesQuickSync_OnlyWhileItIsOnGitHub()
    {
       WorkspaceViewModel workspace = QuickSync();
 
@@ -878,7 +937,8 @@ public sealed class QuickSyncPlaceTests : IDisposable
 
       // Had the connection run on the default token of its server, the account would use that one.
       Assert.True(new AccountWizardViewModel(
-          store, ListersOf(s_gitea).Organizations, seed, defaultToken: () => "gitea-token-0123456789").UseDefaultToken);
+          store, ListersOf(s_gitea).Organizations, seed,
+          defaultTokenOf: place => place.Equals(s_gitea) ? "gitea-token-0123456789" : null).UseDefaultToken);
 
       wizard.Name = "Platform";
       while(wizard.Step < 4)
@@ -1045,7 +1105,7 @@ public sealed class QuickSyncPlaceTests : IDisposable
    // ---------------------------------------------------------------- the default token saved for a place
 
    [Fact]
-   public void TheDefaultTokenInSettings_IsGitHubs_AndNoneForAnotherPlace()
+   public void GitHubsDefaultToken_IsNoneForAnotherPlace()
    {
       var vault = new InMemoryVault();
 

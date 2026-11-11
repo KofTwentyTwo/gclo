@@ -205,10 +205,8 @@ public sealed partial class MainWindow : Window
 
       Closed += (_, _) =>
       {
-         if(_settings.LastWorkspace != workspaceAtStart)
-         {
-            _settings.SaveWhatWasRemembered(_log);
-         }
+         // The workspace that is open now is where the next start opens: written here, whatever was written before.
+         _settings.SaveWhatWasRemembered(_log);
          responsiveness.Dispose();
          _logWindow?.Close(); // a log-only process would linger otherwise
          DisposeWorkspaces();
@@ -833,7 +831,7 @@ public sealed partial class MainWindow : Window
              existing,
              () => _tokenVault.TryRetrieve(existing.TokenEntryId),
              _log,
-             () => PlaceOf(existing) is { } place ? DefaultTokens.For(_tokenVault, place) : null);
+             defaultTokenOf: place => DefaultTokens.For(_tokenVault, place));
       }
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
@@ -887,7 +885,7 @@ public sealed partial class MainWindow : Window
       ForgeEndpoint place = seed.Place ?? ForgeEndpoint.GitHub;
       var viewModel = new AccountWizardViewModel(
           _accountsStore, UiTestFixture.WrapOrganizationLister(place.CreateOrganizationLister(), place), seed, _log,
-          defaultToken: () => DefaultTokens.For(_tokenVault, place));
+          defaultTokenOf: where => DefaultTokens.For(_tokenVault, where));
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
       {

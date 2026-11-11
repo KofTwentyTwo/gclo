@@ -194,9 +194,12 @@ place and is never used for another.**
   token of the new server and removes the old one's; a refused address disables
   Save. One default Gitea server: more servers are what accounts are for.
 - The address is in `settings.json` (`DefaultGiteaServer`); the token is in the
-  vault. An older gclo that rewrites `settings.json` drops the address: the token
-  stays in the vault under its entry and is found again once the address is
-  entered in Settings.
+  vault. The two can come apart (an older gclo rewrites `settings.json` without
+  the address; the file cannot be written or read): the token is then still
+  found by whatever asks for the default of that server, while Settings shows
+  none. An address entered in Settings that already has a default token in the
+  vault is therefore taken up as the default it is, so the token can be seen,
+  replaced and removed again.
 
 ## Alternatives considered
 

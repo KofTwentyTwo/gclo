@@ -139,4 +139,24 @@ public sealed class SettingsTokenStateTests
          Assert.DoesNotContain(SettingsTokenState.Mask, caption);
       }
    }
+
+
+
+   [Fact]
+   public void WhatWasTypedAfterTheMask_IsTheTokenWithoutTheMask()
+   {
+      // Untouched, or typed into an empty box: as it is.
+      Assert.Equal(SettingsTokenState.Mask, SettingsTokenState.WithoutTheMask(SettingsTokenState.Mask));
+      Assert.Equal("", SettingsTokenState.WithoutTheMask(""));
+      Assert.Equal("ghp_typed", SettingsTokenState.WithoutTheMask("ghp_typed"));
+
+      // Typed behind, before or into the mask without emptying the box first: the typing alone.
+      Assert.Equal("ghp_typed", SettingsTokenState.WithoutTheMask(SettingsTokenState.Mask + "ghp_typed"));
+      Assert.Equal("ghp_typed", SettingsTokenState.WithoutTheMask("ghp_" + SettingsTokenState.Mask + "typed"));
+
+      // A part of the mask deleted: nothing was typed, and the rest of the mask is no token.
+      Assert.Equal("", SettingsTokenState.WithoutTheMask(SettingsTokenState.Mask[1..]));
+
+      Assert.Throws<ArgumentNullException>(() => SettingsTokenState.WithoutTheMask(null!));
+   }
 }

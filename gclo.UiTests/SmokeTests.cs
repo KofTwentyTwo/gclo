@@ -118,7 +118,7 @@ public sealed partial class SmokeTests : UiTestBase
 
          Session.EnterText(Session.WaitForElement("SettingsGiteaServerBox"), "git.example.test");
 
-         Session.WaitForText("The default token for git.example.test will be saved on Save; Quick Sync fills it in when it is on that server.");
+         Session.WaitForText("The default token for https://git.example.test/ will be saved on Save; Quick Sync fills it in when it is on that server.");
          Session.WaitFor(
              () => Session.FindInApp(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.Button).And(cf.ByName("Save")).And(cf.ByClassName("Button")))
                    is { IsEnabled: true } save ? save : null,
@@ -367,6 +367,18 @@ public sealed partial class SmokeTests : UiTestBase
              },
              "the fixture's Gitea organization in the organization list");
          orgBox.Collapse();
+
+         // The address typed over names no place, so Find is withheld; typed back, without
+         // the box being left, it is the server again and Find is offered.
+         AutomationElement serverBox = Session.WaitForElement("ConnectServerBox");
+         Session.EnterText(serverBox, "https://git.example.test/x");
+         Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByAutomationId("ConnectFindOrgsButton")) is { IsEnabled: false } button ? button : null,
+             "Find to be withheld while the address is typed over");
+         Session.EnterText(serverBox, "https://git.example.test/");
+         Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByAutomationId("ConnectFindOrgsButton")) is { IsEnabled: true } button ? button : null,
+             "Find to be offered again for the address that was typed back");
          Assert.False(Session.App.HasExited);
       }
       finally

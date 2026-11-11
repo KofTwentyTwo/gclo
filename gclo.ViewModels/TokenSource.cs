@@ -7,11 +7,11 @@ namespace gclo.ViewModels;
 
 
 /// <summary>
-/// Where an account's GitHub token comes from. <see cref="Own"/> is the account's
-/// own vault entry (keyed by its id); <see cref="Default"/> is the default token
-/// saved in Settings (<see cref="AppSettings.DefaultTokenVaultId"/>), read at use
-/// time, so replacing the default token in Settings rotates every such account
-/// at once (docs/plans/default-token-ux.md).
+/// Where an account's token comes from. <see cref="Own"/> is the account's own
+/// vault entry (<see cref="Account.TokenEntryId"/>); <see cref="Default"/> is the
+/// default token saved in Settings for the place the account is on
+/// (<see cref="DefaultTokens"/>), read at use time, so replacing that default token
+/// in Settings rotates every such account at once (docs/plans/default-token-ux.md).
 /// </summary>
 public enum TokenSource
 {

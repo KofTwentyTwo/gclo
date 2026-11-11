@@ -17,8 +17,19 @@ namespace gclo.ViewModels;
 /// are saved, replaced and removed together.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The saved token is never carried to another address. Changing the address
 /// asks for the token of the new server; the token of the old one is removed.
+/// </para>
+/// <para>
+/// Which server has the default is written in settings.json, the token is in the
+/// vault under an entry named after that server. The two can come apart: the
+/// settings file could not be written, or read, or an older gclo wrote it back
+/// without the address. The token is then still found by everything that asks for
+/// the default of that server, while this dialog shows none. So that it can be
+/// seen and removed again, an address that is entered here and already has a
+/// default token in the vault is taken up as the default it is.
+/// </para>
 /// </remarks>
 public sealed class SettingsGiteaState
 {
@@ -26,18 +37,29 @@ public sealed class SettingsGiteaState
 
    private readonly SettingsTokenState _token;
 
+   private readonly Func<ForgeEndpoint, bool> _holdsATokenFor;
+
 
 
    /// <summary>
    /// <paramref name="savedPlace"/>: the server a default token is saved for, or
    /// null; <paramref name="hasSavedToken"/>: whether the vault holds that token;
    /// <paramref name="dependentAccounts"/>: the names of the accounts on that
-   /// server that use the default token, which a removal would break.
+   /// server that use the default token, which a removal would break;
+   /// <paramref name="holdsATokenFor"/>: whether the vault holds a default token for
+   /// a server (see the remarks), none when it is not given.
    /// </summary>
-   public SettingsGiteaState(ForgeEndpoint? savedPlace, bool hasSavedToken, IReadOnlyList<string> dependentAccounts)
+   public SettingsGiteaState(
+       ForgeEndpoint? savedPlace, bool hasSavedToken, IReadOnlyList<string> dependentAccounts, Func<ForgeEndpoint, bool>? holdsATokenFor = null)
    {
+      if(hasSavedToken && savedPlace is null)
+      {
+         throw new ArgumentException("A token that is saved is saved for a server.", nameof(savedPlace));
+      }
+
       _savedPlace = savedPlace;
-      _token = new SettingsTokenState(hasSavedToken && savedPlace is not null, dependentAccounts);
+      _token = new SettingsTokenState(hasSavedToken, dependentAccounts);
+      _holdsATokenFor = holdsATokenFor ?? (_ => false);
    }
 
 
@@ -81,7 +103,13 @@ public sealed class SettingsGiteaState
 
       if(!HasSavedToken)
       {
-         return typed ? new SettingsGiteaPlan(SettingsTokenAction.Store, place, "") : Nothing;
+         if(typed)
+         {
+            return new SettingsGiteaPlan(SettingsTokenAction.Store, place, "");
+         }
+
+         // Nothing typed: nothing to do, unless the vault holds a default token for this very server already.
+         return _holdsATokenFor(place) ? new SettingsGiteaPlan(SettingsTokenAction.Keep, place, "", TakesUp: true) : Nothing;
       }
 
       if(place.Equals(_savedPlace))
@@ -96,8 +124,16 @@ public sealed class SettingsGiteaState
       ///////////////////////////////////////////////////////////////////////////////
       return typed
           ? new SettingsGiteaPlan(SettingsTokenAction.Store, place, "")
-          : Refused($"The saved token is for {_savedPlace!.DisplayName}. Enter the token for {place.DisplayName}, or put the address back.");
+          : Refused($"The saved token is for {Address(_savedPlace!)}. Enter the token for {Address(place)}, or put the address back.");
    }
+
+
+
+   /// <summary>
+   /// A server as these captions name it: by its whole address, not its host
+   /// alone. Two servers can share a host, and the captions tell one from the other.
+   /// </summary>
+   private static string Address(ForgeEndpoint place) => place.Server?.AbsoluteUri ?? place.DisplayName;
 
 
 
@@ -113,17 +149,20 @@ public sealed class SettingsGiteaState
       switch(plan.Action)
       {
          case SettingsTokenAction.Store when !HasSavedToken:
-            return $"The default token for {plan.Place!.DisplayName} will be saved on Save; Quick Sync fills it in when it is on that server.";
+            return $"The default token for {Address(plan.Place!)} will be saved on Save; Quick Sync fills it in when it is on that server.";
          case SettingsTokenAction.Store when plan.Place!.Equals(_savedPlace):
             return "The default token will be replaced on Save." + _token.RotationNote();
          case SettingsTokenAction.Store:
-            return $"The default token for {plan.Place!.DisplayName} will be saved on Save, and the one for {_savedPlace!.DisplayName} removed."
+            return $"The default token for {Address(plan.Place!)} will be saved on Save, and the one for {Address(_savedPlace!)} removed."
                 + _token.RemovalWarning();
          case SettingsTokenAction.Remove:
             return "The default token will be removed on Save." + _token.RemovalWarning();
+         case SettingsTokenAction.Keep when plan.TakesUp:
+            return $"A default token is already saved for {Address(plan.Place!)}. Save makes this server the Gitea default again; "
+                + "open Settings afterwards to replace or remove the token.";
          default:
             return HasSavedToken
-                ? $"A default token is saved for {_savedPlace!.DisplayName}" + _token.UsedBy() + ". Type to replace it; clear the box to remove it."
+                ? $"A default token is saved for {Address(_savedPlace!)}" + _token.UsedBy() + ". Type to replace it; clear the box to remove it."
                 : "No default token saved for a Gitea server.";
       }
    }
@@ -165,12 +204,13 @@ public sealed class SettingsGiteaState
       switch(plan.Action)
       {
          case SettingsTokenAction.Store:
-            if(HasSavedToken && !plan.Place!.Equals(_savedPlace))
+            // The new one first: if it cannot be stored, the old server keeps its token and stays the default.
+            vault.Store(DefaultTokens.EntryFor(plan.Place!), boxValue);
+            settings.DefaultGiteaServer = plan.Place!.Server!.AbsoluteUri;
+            if(HasSavedToken && !plan.Place.Equals(_savedPlace))
             {
                vault.Delete(DefaultTokens.EntryFor(_savedPlace!));
             }
-            vault.Store(DefaultTokens.EntryFor(plan.Place!), boxValue);
-            settings.DefaultGiteaServer = plan.Place!.Server!.AbsoluteUri;
             return HasSavedToken && plan.Place.Equals(_savedPlace)
                 ? $"default token for {plan.Place.DisplayName} replaced"
                 : $"default token for {plan.Place.DisplayName} stored";
@@ -180,6 +220,9 @@ public sealed class SettingsGiteaState
             return _token.DependentCount == 0
                 ? $"default token for {_savedPlace!.DisplayName} removed"
                 : $"default token for {_savedPlace!.DisplayName} removed ({_token.DependentCount} account(s) depend on it)";
+         case SettingsTokenAction.Keep when plan.TakesUp:
+            settings.DefaultGiteaServer = plan.Place!.Server!.AbsoluteUri;
+            return $"default token for {plan.Place.DisplayName} taken up again (it was already saved)";
          default:
             return null;
       }

@@ -36,6 +36,22 @@ public sealed class SettingsTokenState
 
 
 
+   /// <summary>
+   /// What was typed, without the mask. A token box that shows the mask and is
+   /// typed into without being emptied first holds the mask and then the typing;
+   /// stored like that, the token would begin with the mask's dots. The mask alone
+   /// stays the mask (it means "unchanged"); a box that holds none of it is as it is.
+   /// </summary>
+   public static string WithoutTheMask(string boxValue)
+   {
+      ArgumentNullException.ThrowIfNull(boxValue);
+      return string.Equals(boxValue, Mask, StringComparison.Ordinal) || !boxValue.Contains(Mask[0], StringComparison.Ordinal)
+          ? boxValue
+          : boxValue.Replace(Mask[0].ToString(), "", StringComparison.Ordinal);
+   }
+
+
+
    /// <summary>True when the vault held a default token when the dialog opened.</summary>
    public bool HasSavedToken { get; }
 

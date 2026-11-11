@@ -546,7 +546,7 @@ internal static class AccountsCommand
       if(tokenOptions.UseDefault && !new AccountTokenResolver(vault).HasDefaultTokenFor(place))
       {
          throw new CliErrorException(
-             $"No default token is saved for {place}, so the account could not sync. Save one in the desktop app "
+             $"No default token is saved for {place.Server?.AbsoluteUri ?? place.DisplayName}, so the account could not sync. Save one in the desktop app "
              + "(File > Settings), or give the account a token of its own with --token-env, "
              + "--token-file, or --token-stdin.");
       }

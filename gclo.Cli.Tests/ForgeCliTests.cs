@@ -314,7 +314,7 @@ public sealed class ForgeCliTests : IDisposable
           () => Accounts("add", "--name", "forge", "--org", "acme", "--target", _dir, "--server", Server, "--use-default-token"));
 
       Assert.Equal(
-          "No default token is saved for git.example.test, so the account could not sync. Save one in the desktop app "
+          "No default token is saved for https://git.example.test/, so the account could not sync. Save one in the desktop app "
           + "(File > Settings), or give the account a token of its own with --token-env, --token-file, or --token-stdin.",
           error.Message);
       Assert.Empty(Store.GetAll());
@@ -378,7 +378,7 @@ public sealed class ForgeCliTests : IDisposable
       try
       {
          CliErrorException error = Assert.Throws<CliErrorException>(() => Accounts("edit", "--name", "forge", "--use-default-token"));
-         Assert.StartsWith("No default token is saved for git.example.test, so the account could not sync.", error.Message, StringComparison.Ordinal);
+         Assert.StartsWith("No default token is saved for https://git.example.test/, so the account could not sync.", error.Message, StringComparison.Ordinal);
          Assert.Equal(TokenSource.Own, Store.FindByName("forge")!.TokenSource);
 
          Assert.Equal(0, Accounts("edit", "--name", "forge", "--token-env", "GCLO_FORGE_TEST_TOKEN"));

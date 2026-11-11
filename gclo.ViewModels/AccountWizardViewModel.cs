@@ -72,8 +72,11 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// <paramref name="existing"/> is given — an edit wizard seeded from that account.
    /// <paramref name="storedToken"/> fetches the vault's current token on demand for
    /// an edit (null, or returning null, when the vault has no entry);
-   /// <paramref name="defaultToken"/> fetches the default token from Settings the
-   /// same way and, when it returns one, offers "Use the default token" on step 2.
+   /// <paramref name="defaultToken"/> fetches GitHub's default token from Settings
+   /// the same way and, when it returns one, offers "Use the default token" on step
+   /// 2 of a GitHub account; <paramref name="defaultTokenOf"/> fetches the default
+   /// token of a place, and is what a caller that knows of other places gives. The
+   /// wizard only ever asks for the default token of the place its account is on.
    /// </summary>
    public AccountWizardViewModel(
        AccountsStore store,
@@ -82,8 +85,9 @@ public sealed partial class AccountWizardViewModel : ObservableObject
        Account? existing = null,
        Func<string?>? storedToken = null,
        IActivityLog? log = null,
-       Func<string?>? defaultToken = null)
-       : this(store, orgLister, listerOf: null, existing, storedToken, OfTheOnePlace(defaultToken), log)
+       Func<string?>? defaultToken = null,
+       Func<ForgeEndpoint, string?>? defaultTokenOf = null)
+       : this(store, orgLister, listerOf: null, existing, storedToken, defaultTokenOf ?? OfGitHubOnly(defaultToken), log)
    {
       ArgumentNullException.ThrowIfNull(defaults);
 
@@ -139,8 +143,9 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// </summary>
    public AccountWizardViewModel(
        AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed, IActivityLog? log = null,
-       Func<string?>? defaultToken = null)
-       : this(store, orgLister, listerOf: null, existing: null, storedToken: null, OfTheOnePlace(defaultToken), log)
+       Func<string?>? defaultToken = null,
+       Func<ForgeEndpoint, string?>? defaultTokenOf = null)
+       : this(store, orgLister, listerOf: null, existing: null, storedToken: null, defaultTokenOf ?? OfGitHubOnly(defaultToken), log)
    {
       ArgumentNullException.ThrowIfNull(seed);
       Name = "";
@@ -173,12 +178,13 @@ public sealed partial class AccountWizardViewModel : ObservableObject
 
 
    /// <summary>
-   /// The default token of a wizard that is on one place for good (an edit, a saved
-   /// Quick Sync connection): what the caller gives is the default token of that
-   /// place.
+   /// A source that knows one default token only knows GitHub's, which is what
+   /// "the default token" was before a server could have one: it is given for
+   /// GitHub and for no other place. A wizard for an account on a Gitea server is
+   /// given a source per place (<c>defaultTokenOf</c>) instead.
    /// </summary>
-   private static Func<ForgeEndpoint, string?>? OfTheOnePlace(Func<string?>? defaultToken)
-       => defaultToken is null ? null : _ => defaultToken();
+   private static Func<ForgeEndpoint, string?>? OfGitHubOnly(Func<string?>? defaultToken)
+       => defaultToken is null ? null : place => place.Server is null ? defaultToken() : null;
 
 
 
@@ -243,7 +249,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// <summary>
    /// Whether step 1 asks where the account lives. Only for a new account in a
    /// wizard that was given a lister per place; an account being edited stays where
-   /// it is, and a Quick Sync connection saved as an account is a GitHub connection.
+   /// it is, and a Quick Sync connection saved as an account is on the place of that connection.
    /// </summary>
    public bool CanChoosePlace => _listerOf is not null;
 
