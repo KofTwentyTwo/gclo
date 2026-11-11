@@ -138,6 +138,12 @@ public static class StatusFormat
 
 
 
+   /// <summary>Visible only when there is a <paramref name="value"/>; hides a link that has nowhere to go.</summary>
+   public static Visibility VisibleIfNotNull(object? value)
+       => value is null ? Visibility.Collapsed : Visibility.Visible;
+
+
+
    /// <summary>InfoBar severity for a run outcome (None and Canceled read as informational).</summary>
    public static InfoBarSeverity SeverityFor(RunResultKind kind) => kind switch
    {

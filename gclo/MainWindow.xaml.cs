@@ -563,10 +563,11 @@ public sealed partial class MainWindow : Window
          return null;
       }
       // The listers are the account's own: its token goes to the forge and server it was added for.
+      ForgeEndpoint? place = PlaceOf(account);
       return new WorkspaceViewModel(
-          UiTestFixture.WrapRepositoryLister(AccountListers.RepositoryListerFor(account)),
+          UiTestFixture.WrapRepositoryLister(AccountListers.RepositoryListerFor(account), place),
           UiTestFixture.WrapGitClient(new LibGit2GitClient()),
-          UiTestFixture.WrapOrganizationLister(AccountListers.OrganizationListerFor(account)),
+          UiTestFixture.WrapOrganizationLister(AccountListers.OrganizationListerFor(account), place),
           account: account,
           tokenVault: _tokenVault,
           accountsStore: _accountsStore,
@@ -770,6 +771,12 @@ public sealed partial class MainWindow : Window
 
 
 
+   /// <summary>The place an account is on; null when its stored forge and server cannot be used.</summary>
+   private static ForgeEndpoint? PlaceOf(Account account)
+       => account.TryGetEndpoint(out ForgeEndpoint? place, out _) ? place : null;
+
+
+
    /// <summary>
    /// Runs the account wizard: adding when <paramref name="existing"/> is null,
    /// editing (seeded from the account and its vault token) otherwise. On save,
@@ -777,14 +784,33 @@ public sealed partial class MainWindow : Window
    /// </summary>
    private async Task ShowAccountWizardAsync(Account? existing)
    {
-      // The vault is consulted only if step 2 needs the stored token for a
-      // validation call; the wizard never displays or retains it.
-      // Its token is checked against the place the account is on, never against another forge.
-      Func<string?>? storedToken = existing is null ? null : () => _tokenVault.TryRetrieve(existing.TokenEntryId);
-      IOrganizationLister organizations = existing is null ? new GitHubOrganizationLister() : AccountListers.OrganizationListerFor(existing);
-      var viewModel = new AccountWizardViewModel(
-          _accountsStore, organizations, _settings, existing, storedToken, _log,
-          defaultToken: () => _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId));
+      Func<string?> defaultToken = () => _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId);
+      AccountWizardViewModel viewModel;
+      if(existing is null)
+      {
+         // A new account: step 1 chooses the place, and the token of step 2 goes to
+         // the lister of that place and to no other (#206).
+         viewModel = new AccountWizardViewModel(
+             _accountsStore,
+             place => UiTestFixture.WrapOrganizationLister(place.CreateOrganizationLister(), place),
+             _settings,
+             _log,
+             defaultToken);
+      }
+      else
+      {
+         // The vault is consulted only if step 2 needs the stored token for a
+         // validation call; the wizard never displays or retains it.
+         // Its token is checked against the place the account is on, never against another forge.
+         viewModel = new AccountWizardViewModel(
+             _accountsStore,
+             UiTestFixture.WrapOrganizationLister(AccountListers.OrganizationListerFor(existing), PlaceOf(existing)),
+             _settings,
+             existing,
+             () => _tokenVault.TryRetrieve(existing.TokenEntryId),
+             _log,
+             defaultToken);
+      }
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
       {
@@ -833,8 +859,9 @@ public sealed partial class MainWindow : Window
    /// </summary>
    private async Task ShowSeededAccountWizardAsync(AccountWizardSeed seed)
    {
+      // A Quick Sync connection is a GitHub connection, and so is the account it is saved as.
       var viewModel = new AccountWizardViewModel(
-          _accountsStore, new GitHubOrganizationLister(), seed, _log,
+          _accountsStore, UiTestFixture.WrapOrganizationLister(new GitHubOrganizationLister()), seed, _log,
           defaultToken: () => _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId));
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))

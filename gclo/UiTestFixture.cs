@@ -16,8 +16,9 @@ namespace gclo;
 /// <summary>
 /// Offline seam for the FlaUI suite (#54, #33): when the process runs with
 /// <c>GCLO_UITEST_FIXTURE=1</c> <b>and</b> a workspace's token is exactly
-/// <see cref="Token"/>, GitHub and git are answered by this fixture instead of the
-/// network - a fixed organization with three repositories, and a git client that
+/// <see cref="Token"/>, the forge and git are answered by this fixture instead of the
+/// network - a fixed organization with three repositories (another one for a Gitea
+/// server, with clone addresses on that server), and a git client that
 /// succeeds without touching disk. Any other token (even with the variable set) goes
 /// to the real services, so the existing offline-input tests keep their meaning
 /// (a dummy token still gets GitHub's 401). Production never sets the variable, and an
@@ -31,6 +32,9 @@ internal static class UiTestFixture
 
    /// <summary>The organization the fixture lists.</summary>
    public const string Organization = "fixture-org";
+
+   /// <summary>The organization the fixture lists for a Gitea server (#206).</summary>
+   public const string GiteaOrganization = "fixture-gitea-org";
 
    /// <summary>
    /// True when the process was started for the UI suite with the fixture enabled, and
@@ -68,13 +72,36 @@ internal static class UiTestFixture
 
 
 
-   public static IRepositoryLister WrapRepositoryLister(IRepositoryLister real)
-       => IsEnabled ? new RepositoryLister(real) : real;
+   /// <summary>
+   /// The lister the shell uses for <paramref name="place"/> (null: GitHub): the real
+   /// one, answered by the fixture for the fixture token when the fixture is enabled.
+   /// </summary>
+   public static IRepositoryLister WrapRepositoryLister(IRepositoryLister real, ForgeEndpoint? place = null)
+       => IsEnabled ? new RepositoryLister(real, RepositoriesAt(place)) : real;
 
 
 
-   public static IOrganizationLister WrapOrganizationLister(IOrganizationLister real)
-       => IsEnabled ? new OrganizationLister(real) : real;
+   /// <summary>The organization lister for <paramref name="place"/>, wrapped the same way.</summary>
+   public static IOrganizationLister WrapOrganizationLister(IOrganizationLister real, ForgeEndpoint? place = null)
+       => IsEnabled ? new OrganizationLister(real, place?.Server is null ? Organization : GiteaOrganization) : real;
+
+
+
+   /// <summary>The fixture's repositories as the place would list them: on a Gitea server, with clone addresses on that server.</summary>
+   private static IReadOnlyList<RepoDescriptor> RepositoriesAt(ForgeEndpoint? place)
+   {
+      if(place?.Server is not Uri server)
+      {
+         return s_repositories;
+      }
+
+      List<RepoDescriptor> onTheServer = [];
+      foreach(RepoDescriptor repository in s_repositories)
+      {
+         onTheServer.Add(repository with { CloneUrl = new Uri(server, $"{GiteaOrganization}/{repository.Name}.git").AbsoluteUri });
+      }
+      return onTheServer;
+   }
 
 
 
@@ -83,22 +110,22 @@ internal static class UiTestFixture
 
 
 
-   private sealed class RepositoryLister(IRepositoryLister real) : IRepositoryLister
+   private sealed class RepositoryLister(IRepositoryLister real, IReadOnlyList<RepoDescriptor> repositories) : IRepositoryLister
    {
       public Task<IReadOnlyList<RepoDescriptor>> ListOrganizationRepositoriesAsync(
           string organization, string token, CancellationToken cancellationToken = default)
-          => string.Equals(token, Token
-, StringComparison.Ordinal) ? Task.FromResult(s_repositories)
+          => string.Equals(token, Token, StringComparison.Ordinal)
+              ? Task.FromResult(repositories)
               : real.ListOrganizationRepositoriesAsync(organization, token, cancellationToken);
    }
 
 
 
-   private sealed class OrganizationLister(IOrganizationLister real) : IOrganizationLister
+   private sealed class OrganizationLister(IOrganizationLister real, string organization) : IOrganizationLister
    {
       public Task<IReadOnlyList<string>> ListOrganizationsAsync(string token, CancellationToken cancellationToken = default)
-          => string.Equals(token, Token
-, StringComparison.Ordinal) ? Task.FromResult<IReadOnlyList<string>>([Organization])
+          => string.Equals(token, Token, StringComparison.Ordinal)
+              ? Task.FromResult<IReadOnlyList<string>>([organization])
               : real.ListOrganizationsAsync(token, cancellationToken);
    }
 
