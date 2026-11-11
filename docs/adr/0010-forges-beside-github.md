@@ -69,6 +69,59 @@ were the two lister implementations and the failure type they throw.
   whatever the name is; the account path is tried then as well, so such a token
   still lists its own account.
 
+### Accounts and the command line (#204)
+
+- **An account names its forge and, for Gitea, its server.** Both are left out
+  when they are the default, so a GitHub account is written as it always was.
+- **Accounts on another forge are kept in a file of their own**
+  (`accounts-forges.json`, beside `accounts.json`, under the same lock). A version
+  from before forges reads every account in `accounts.json` as a GitHub account
+  and writes the file back with the fields it knows. It would drop the forge and
+  the server of a Gitea account, and from then on that account would read as a
+  GitHub account in every version: its token would be asked for again and sent to
+  GitHub. Two versions on one data folder are ordinary (the app updates itself,
+  the command line is a separate download), so such accounts are kept where the
+  older version neither reads nor writes. A GitHub account is the one that names
+  no forge, and only that one; a record in the second file that names none is not
+  read as a GitHub account (gclo writes no such record; one that is found is
+  given an empty forge name, which no version knows, and is written back so). The cost is two files where there was one. A change
+  itself writes only the file of the account it changes; a file that has to be put
+  back, or an account that is in the wrong file, is written before the change, so
+  that when it cannot be written the change fails with nothing changed and the
+  vault untouched. A name is unique across both files, but an older version does
+  not see the second and can add a GitHub account with the name of a Gitea
+  account: the command line then refuses the name instead of choosing one of the
+  two, until one is renamed in the app.
+- **What this version does not know is kept.** The kind of forge is stored as
+  text; a name this version does not know (a later version's forge) makes that
+  one account unusable here, not the file unreadable, and is written back as it
+  was. Fields this version does not know are written back as they were read,
+  whoever built the record that is saved. So this version does not do to a later
+  one what an older one would do to it. The limits a later version has to keep
+  to: a field this version knows keeps its JSON type (text where text is, as for
+  `Forge`; another type makes the file unreadable here), and a new field is not
+  named like one of this version's computed properties.
+- **A token stays with the place it was saved for.** The forge and the server of
+  an account are set when it is added and cannot be changed by an edit, in the
+  app or on the command line: to move an account, it is removed and added again,
+  and its token is entered for the new place. `gclo sync --account` takes no
+  `--forge` or `--server`.
+- **A token is found only by the account and the place it was saved for.** The
+  vault entry of a GitHub account is its id, as ever. For another forge it is made
+  from the id, the forge and the server address exactly as the file states them
+  (a hash). `AccountsStore.Save` refuses a change of place; this makes the same
+  hold for a file changed by hand: at another address the account has no token.
+  The price: a token whose account was edited that way stays in Credential Manager
+  under a name gclo no longer derives, until the address is put back.
+- **Tokens do not cross forges by default.** The default token saved in Settings
+  is a GitHub token: an account on another forge has a token of its own, and is
+  never handed the default one, whatever its record says. On the command line
+  each forge has its own default variable (`GITHUB_TOKEN`, `GITEA_TOKEN`).
+- **One place pairs an account with its listers** (`AccountListers`, over
+  `ForgeEndpoint`), used by the app and the command line. An account whose stored
+  forge or server cannot be used (a file edited by hand) gets listers that ask no
+  server anything and fail with the reason.
+
 ## Alternatives considered
 
 - **A Gitea client package.** One more dependency to track and to trust with the
@@ -79,6 +132,9 @@ were the two lister implementations and the failure type they throw.
   address also makes such a server work.
 - **Following redirects on the same host.** Simpler to refuse them all than to
   decide which are the same host.
+- **Letting an edit change an account's server**, with the token entered again.
+  The rule "the token is asked for again" would have to hold in the wizard, the
+  command line and the store; "it cannot be changed" holds in the store alone.
 - **Allowing `http://` for a server on a local network, or a switch to accept any
   certificate.** Both put the token on the wire, or in the hands of whoever answers,
   in exactly the setups where nobody is watching. The supported route for a private

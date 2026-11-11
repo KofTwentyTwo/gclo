@@ -18,12 +18,18 @@ internal static class OrgsCommand
 
         Lists the logins the token can sync, one per line: the token's own account
         first, then its organizations alphabetically. A token that cannot list
-        organizations (fine-grained PAT, or a classic PAT without read:org) still
-        prints its own account login.
+        organizations (GitHub: a fine-grained PAT, or a classic PAT without read:org;
+        Gitea: a token without read:organization) still prints its own account login.
 
         Options:
+          --forge <kind>       Where the organization lives: github (the default) or
+                               gitea (a Gitea or Forgejo server; needs --server).
+          --server <address>   The address of the Gitea server, for example
+                               https://git.example.com. HTTPS only: it is where the
+                               token is sent. Implies --forge gitea.
           --token-env <VAR>    Read the token from environment variable VAR
-                               (default: GITHUB_TOKEN when no token option is given).
+                               (default when no token option is given: GITHUB_TOKEN,
+                               or GITEA_TOKEN for a Gitea server; never the other's).
           --token-file <path>  Read the token from the first non-blank line of a file.
           --token-stdin        Read the token as one line from standard input.
           --json               Print a single-line JSON array instead.
@@ -34,7 +40,7 @@ internal static class OrgsCommand
           1  canceled (Ctrl+C)
           2  fatal: bad arguments, or missing token
           3  the token was rejected (401) or refused access (403)
-          4  rate limit, network failure, timeout, or an error on GitHub's side; retry later
+          4  rate limit, network failure, timeout, or an error on the server's side; retry later
 
         Security:
           There is deliberately no '--token <value>' option: process command lines
@@ -44,24 +50,33 @@ internal static class OrgsCommand
 
 
 
-   /// <summary>Composition root: wires the real GitHub lister and file log.</summary>
+   /// <summary>Composition root: wires the real listers of the forge the options name, and the file log.</summary>
    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
        Justification = "Wires the real network lister and file log; delegates to the covered core.")]
    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
-       => RunAsync(args, new GitHubOrganizationLister(), new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory), cancellationToken);
+       => RunAsync(
+           args, endpoint => endpoint.CreateOrganizationLister(), new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory), cancellationToken);
+
+
+
+   /// <summary>The command with one lister, whatever forge the options name.</summary>
+   internal static Task<int> RunAsync(
+       string[] args, IOrganizationLister lister, IActivityLog log, CancellationToken cancellationToken)
+       => RunAsync(args, _ => lister, log, cancellationToken);
 
 
 
    internal static async Task<int> RunAsync(
-       string[] args, IOrganizationLister lister, IActivityLog log, CancellationToken cancellationToken)
+       string[] args, Func<ForgeEndpoint, IOrganizationLister> listers, IActivityLog log, CancellationToken cancellationToken)
    {
       bool json = false;
       var tokenOptions = new TokenOptions();
+      var forgeOptions = new ForgeOptions();
 
       var reader = new OptionReader(args);
       while(reader.MoveNext())
       {
-         if(tokenOptions.TryConsume(reader))
+         if(tokenOptions.TryConsume(reader) || forgeOptions.TryConsume(reader))
          {
             continue;
          }
@@ -79,16 +94,17 @@ internal static class OrgsCommand
          }
       }
 
-      log.Info($"orgs started: json={json}");
+      ForgeEndpoint endpoint = forgeOptions.Resolve();
+      log.Info($"orgs started: forge={endpoint}, json={json}");
 
       try
       {
-         string token = tokenOptions.Resolve();
+         string token = tokenOptions.Resolve(endpoint.Kind);
 
          IReadOnlyList<string> logins;
          try
          {
-            logins = await lister
+            logins = await listers(endpoint)
                 .ListOrganizationsAsync(token, cancellationToken)
                 .ConfigureAwait(false);
          }

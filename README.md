@@ -183,9 +183,23 @@ gclo sync --org contoso --target ~/src/contoso --json |
 | 0 | Everything succeeded. |
 | 1 | The run completed, but some repositories failed or the run was canceled (Ctrl+C). |
 | 2 | Fatal: bad arguments, missing or empty token, or organization not found. |
-| 3 | GitHub rejected the token or refused it access: fix the token, do not retry as is. |
-| 4 | A rate limit, a network failure, a timeout, or an error on GitHub's side: retry later. |
+| 3 | GitHub (or the Gitea server) rejected the token or refused it access: fix the token, do not retry as is. |
+| 4 | A rate limit, a network failure, a timeout, or an error on the server's side: retry later. |
 | 70 | An unexpected error inside gclo; details are in the activity log. |
+
+**A Gitea server instead of GitHub** (also Forgejo, which speaks the same API): name the server with `--server`. The token comes from `GITEA_TOKEN` then, never from `GITHUB_TOKEN`, and it is sent to that server only (HTTPS; redirects are not followed).
+
+```powershell
+$env:GITEA_TOKEN = (Get-Secret -Name GiteaToken -AsPlainText)
+gclo orgs --server https://git.example.com
+gclo sync --server https://git.example.com --org platform --target D:\mirror\platform
+
+# As a saved account; the desktop app syncs it too
+Get-Secret -Name GiteaToken -AsPlainText | gclo accounts add --name platform --org platform --target D:\mirror\platform --server https://git.example.com --token-stdin
+gclo sync --account platform
+```
+
+An account's forge and server are fixed once it is added (its token was saved for that place); the app's wizard adds GitHub accounts, a Gitea account is added from the command line for now.
 
 Full reference — all options, output streams, Ctrl+C behavior, and more examples: [docs/CLI.md](docs/CLI.md).
 

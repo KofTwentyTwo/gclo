@@ -562,10 +562,11 @@ public sealed partial class MainWindow : Window
          _log.Error($"No account with id {id:N}; cannot open its workspace.");
          return null;
       }
+      // The listers are the account's own: its token goes to the forge and server it was added for.
       return new WorkspaceViewModel(
-          UiTestFixture.WrapRepositoryLister(new GitHubRepositoryLister()),
+          UiTestFixture.WrapRepositoryLister(AccountListers.RepositoryListerFor(account)),
           UiTestFixture.WrapGitClient(new LibGit2GitClient()),
-          UiTestFixture.WrapOrganizationLister(new GitHubOrganizationLister()),
+          UiTestFixture.WrapOrganizationLister(AccountListers.OrganizationListerFor(account)),
           account: account,
           tokenVault: _tokenVault,
           accountsStore: _accountsStore,
@@ -778,9 +779,11 @@ public sealed partial class MainWindow : Window
    {
       // The vault is consulted only if step 2 needs the stored token for a
       // validation call; the wizard never displays or retains it.
-      Func<string?>? storedToken = existing is null ? null : () => _tokenVault.TryRetrieve(existing.Id);
+      // Its token is checked against the place the account is on, never against another forge.
+      Func<string?>? storedToken = existing is null ? null : () => _tokenVault.TryRetrieve(existing.TokenEntryId);
+      IOrganizationLister organizations = existing is null ? new GitHubOrganizationLister() : AccountListers.OrganizationListerFor(existing);
       var viewModel = new AccountWizardViewModel(
-          _accountsStore, new GitHubOrganizationLister(), _settings, existing, storedToken, _log,
+          _accountsStore, organizations, _settings, existing, storedToken, _log,
           defaultToken: () => _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId));
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))

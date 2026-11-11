@@ -126,10 +126,11 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
        AccountsStore? accountsStore = null,
        IWslCloner? wsl = null)
    {
-      _lister = lister ?? new GitHubRepositoryLister();
+      // Without listers of its own, a workspace gets those of its account's forge: Quick Sync is GitHub.
+      _lister = lister ?? (account is null ? new GitHubRepositoryLister() : AccountListers.RepositoryListerFor(account));
       _git = git ?? new LibGit2GitClient();
       _wsl = wsl ?? new WslCloner();
-      _orgLister = orgLister ?? new GitHubOrganizationLister();
+      _orgLister = orgLister ?? (account is null ? new GitHubOrganizationLister() : AccountListers.OrganizationListerFor(account));
       _progressFactory = progressFactory ?? DefaultProgress;
       _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
       _log = log ?? new FileActivityLog(GcloPaths.LogDirectory);
@@ -587,8 +588,16 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// was opened. The record the workspace was opened with when the store no longer
    /// has the account, or when there is no store.
    /// </summary>
+   /// <remarks>
+   /// The place is always the one the workspace was opened for. Its listers were
+   /// made for that place and stay; a record that names another place by now (the
+   /// file was changed) must not bring the token of that other place to them.
+   /// </remarks>
    private Account AccountAsItIsNow()
-       => _accountsStore?.GetAll().FirstOrDefault(a => a.Id == _account!.Id) ?? _account!;
+   {
+      Account now = _accountsStore?.GetAll().FirstOrDefault(a => a.Id == _account!.Id) ?? _account!;
+      return now with { ForgeName = _account!.ForgeName, Server = _account.Server };
+   }
 
 
 

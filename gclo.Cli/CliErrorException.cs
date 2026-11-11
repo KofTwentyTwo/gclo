@@ -31,12 +31,12 @@ internal sealed class CliErrorException : Exception
 
 
    /// <summary>
-   /// Wraps an engine failure: the listers translate GitHub refusals into
-   /// <see cref="GitHubAccessException"/>, whose kind picks the exit code; any other
+   /// Wraps an engine failure: the listers of every forge translate refusals into
+   /// <see cref="ForgeAccessException"/>, whose kind picks the exit code; any other
    /// <see cref="InvalidOperationException"/> stays fatal (2).
    /// </summary>
    public static CliErrorException FromEngine(InvalidOperationException ex)
-       => new(ex.Message, ex, ex is GitHubAccessException access ? ExitCodes.ForAccess(access.Kind) : ExitCodes.Fatal);
+       => new(ex.Message, ex, ex is ForgeAccessException access ? ExitCodes.ForAccess(access.Kind) : ExitCodes.Fatal);
 
 
 

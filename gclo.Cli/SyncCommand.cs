@@ -23,15 +23,23 @@ internal static class SyncCommand
         fail independently; one failure never stops the rest.
 
         Options:
-          --org <name>         GitHub organization or user account to sync
+          --org <name>         Organization or user account to sync
                                (required unless --account provides it).
+          --forge <kind>       Where the organization lives: github (the default) or
+                               gitea (a Gitea or Forgejo server; needs --server).
+          --server <address>   The address of the Gitea server, for example
+                               https://git.example.com. HTTPS only: it is where the
+                               token is sent. Implies --forge gitea.
+                               Not with --account: the account says where it
+                               lives.
           --target <folder>    Local root folder; each repository becomes a subfolder
                                (required unless --account provides it; created if
                                missing).
           --account <name>     Use a saved account (see 'gclo accounts'; Windows
                                only): seeds --org, --target, and --parallel from
-                               the account and reads the token from Windows
-                               Credential Manager. When the account opts into an
+                               the account, syncs from the forge and server the
+                               account was added for, and reads the token from
+                               Windows Credential Manager. When the account opts into an
                                organization subfolder the target becomes
                                <targetRoot>\<org>. Explicit options override the
                                account's values; a token option overrides the
@@ -55,7 +63,8 @@ internal static class SyncCommand
                                listed on stderr and in the activity log, and the
                                repository counts as cloned.
           --token-env <VAR>    Read the token from environment variable VAR
-                               (default: GITHUB_TOKEN when no token option is given).
+                               (default when no token option is given: GITHUB_TOKEN,
+                               or GITEA_TOKEN for a Gitea server; never the other's).
           --token-file <path>  Read the token from the first non-blank line of a file.
           --token-stdin        Read the token as one line from standard input.
           --json               Print no progress lines; end with one line of JSON:
@@ -93,7 +102,7 @@ internal static class SyncCommand
           3   the token was rejected (401) or may not see the organization (403):
               fix the token, do not retry as is
           4   not your doing (rate limit, network failure, timeout, or an error on
-              GitHub's side): retry later
+              the server's side): retry later
           70  an unexpected error inside gclo; see the activity log
           With --json or --json-lines, exits 2-70 print no document on stdout.
 
@@ -129,6 +138,8 @@ internal static class SyncCommand
       public RepoFilterSpec Filter { get; } = new();
 
       public TokenOptions TokenOptions { get; } = new();
+
+      public ForgeOptions Forge { get; } = new();
    }
 
 
@@ -143,7 +154,7 @@ internal static class SyncCommand
       var reader = new OptionReader(args);
       while(reader.MoveNext())
       {
-         if(options.TokenOptions.TryConsume(reader))
+         if(options.TokenOptions.TryConsume(reader) || options.Forge.TryConsume(reader))
          {
             continue;
          }
@@ -250,20 +261,33 @@ internal static class SyncCommand
 
 
 
-   /// <summary>Composition root: wires the real GitHub lister, LibGit2 client, and file log.</summary>
+   /// <summary>Composition root: wires the real listers of the forge the run names, the LibGit2 client, and the file log.</summary>
    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
        Justification = "Wires the real network/native collaborators; delegates to the covered core.")]
    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
        => RunAsync(
            args,
-           new GitHubRepositoryLister(), new LibGit2GitClient(), AccountsCommand.Open, new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory),
+           endpoint => endpoint.CreateRepositoryLister(), new LibGit2GitClient(), AccountsCommand.Open,
+           new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory),
            cancellationToken);
+
+
+
+   /// <summary>The command with one lister, whatever forge the run names.</summary>
+   internal static Task<int> RunAsync(
+       string[] args,
+       IRepositoryLister lister,
+       IGitClient git,
+       Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> openAccounts,
+       IActivityLog log,
+       CancellationToken cancellationToken)
+       => RunAsync(args, _ => lister, git, openAccounts, log, cancellationToken);
 
 
 
    internal static async Task<int> RunAsync(
        string[] args,
-       IRepositoryLister lister,
+       Func<ForgeEndpoint, IRepositoryLister> listers,
        IGitClient git,
        Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> openAccounts,
        IActivityLog log,
@@ -291,16 +315,14 @@ internal static class SyncCommand
       {
          // --account: seed org/target/parallel from the saved account. Explicit
          // options given alongside win because ??= only fills what is still unset.
-         Account? account = null;
-         AccountsStore? store = null;
-         ITokenVault? vault = null;
-         if(accountName is not null)
+         (Account? account, AccountsStore? store, ITokenVault? vault, ForgeEndpoint endpoint) = WhereFrom(options, openAccounts, log);
+         if(account is not null)
          {
-            (account, store, vault) = OpenAccount(openAccounts, accountName, log);
             org ??= account.Organization;
             target ??= account.CreateOrgSubfolder ? Path.Combine(account.TargetRoot, org) : account.TargetRoot;
             parallel ??= account.MaxConcurrency;
          }
+         IRepositoryLister lister = listers(endpoint);
 
          if(string.IsNullOrWhiteSpace(org))
          {
@@ -314,11 +336,11 @@ internal static class SyncCommand
          string organization = org.Trim();
          string targetRoot = target.Trim();
 
-         log.Info($"sync started: org='{organization}', target='{targetRoot}', parallel={effectiveParallel}, "
+         log.Info($"sync started: org='{organization}', forge={endpoint}, target='{targetRoot}', parallel={effectiveParallel}, "
              + $"filters={filter}, dryRun={dryRun}, sanitizePaths={sanitizePaths}, json={json}, jsonLines={jsonLines}, quiet={quiet}"
              + (account is null ? "" : $", account='{account.Name}'"));
 
-         string token = ResolveToken(tokenOptions, account, vault);
+         string token = ResolveToken(tokenOptions, account, vault, endpoint.Kind);
 
          // List first (the desktop app's list-select-sync shape): filters and
          // --dry-run need the descriptors before anything runs, and the engine's
@@ -481,6 +503,37 @@ internal static class SyncCommand
 
 
    /// <summary>
+   /// The account a run is for, when it is for one, and the place it syncs from: the
+   /// forge and server the account was added for, or what <c>--forge</c> and
+   /// <c>--server</c> name.
+   /// </summary>
+   private static (Account? Account, AccountsStore? Store, ITokenVault? Vault, ForgeEndpoint Endpoint) WhereFrom(
+       SyncOptions options, Func<IActivityLog, (AccountsStore Store, ITokenVault Vault)> openAccounts, IActivityLog log)
+   {
+      if(options.AccountName is null)
+      {
+         return (null, null, null, options.Forge.Resolve());
+      }
+
+      ///////////////////////////////////////////////////////////////////////////
+      // An account's token belongs to the forge and server the account was    //
+      // added for. Nothing on the command line sends it elsewhere.            //
+      ///////////////////////////////////////////////////////////////////////////
+      if(options.Forge.WasGiven)
+      {
+         throw new CliUsageException("--forge and --server cannot be used with --account: the account says where it lives.");
+      }
+
+      (Account account, AccountsStore store, ITokenVault vault) = OpenAccount(openAccounts, options.AccountName, log);
+      return account.TryGetEndpoint(out ForgeEndpoint? endpoint, out string? unusable)
+          ? (account, store, vault, endpoint)
+          : throw new CliErrorException(
+              $"Account '{account.Name}' cannot be used as it is saved: {unusable}. {account.AdviceWhenUnusable("Remove")}");
+   }
+
+
+
+   /// <summary>
    /// Opens the accounts and finds the one named. A failure of the accounts file or
    /// of the credential store is a fatal error with its reason (or "retry later"
    /// when another gclo process holds the file), as it is for 'gclo accounts'.
@@ -492,6 +545,7 @@ internal static class SyncCommand
       {
          (AccountsStore store, ITokenVault vault) = openAccounts(log);
          Account account = store.FindByName(accountName) ?? throw UnknownAccount(accountName, store);
+         AccountsCommand.RefuseASharedName(store, account.Name);
          return (account, store, vault);
       }
       catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
@@ -505,13 +559,13 @@ internal static class SyncCommand
    /// <summary>
    /// The token for this run. Any explicit token option wins; otherwise a saved
    /// account's token comes from Windows Credential Manager; plain runs fall back
-   /// to the default environment variable.
+   /// to the default environment variable of the forge.
    /// </summary>
-   private static string ResolveToken(TokenOptions tokenOptions, Account? account, ITokenVault? vault)
+   private static string ResolveToken(TokenOptions tokenOptions, Account? account, ITokenVault? vault, ForgeKind forge)
    {
       if(account is null || tokenOptions.HasExplicitSource)
       {
-         return tokenOptions.Resolve();
+         return tokenOptions.Resolve(forge);
       }
 
       // vault is non-null whenever account is: both come from AccountsCommand.Open.

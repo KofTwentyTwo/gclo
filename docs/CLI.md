@@ -2,8 +2,8 @@
 
 `gclo` is a scriptable command-line head over the same engine (`gclo.Engine`) that
 powers the gclo desktop app. It clones every repository of a GitHub organization
-(or user account) into a local folder, and fast-forwards the ones that already
-exist there.
+(or user account), or of one on a Gitea server, into a local folder, and
+fast-forwards the ones that already exist there.
 
 ## Building and running
 
@@ -25,15 +25,20 @@ and runs on Linux/macOS hosts with the .NET 10 SDK.
 
 ```
 gclo sync --org <name> --target <folder> [--parallel N] [--sanitize-paths]
+          [--forge github|gitea] [--server ADDRESS]
           [--include GLOB]... [--exclude GLOB]... [--skip-archived] [--dry-run]
           [--token-env VAR | --token-file PATH | --token-stdin]
           [--json | --json-lines] [--quiet]
-gclo sync --account <name> [same options — each one overrides the account value]
-gclo repos --org <name> [--include GLOB]... [--exclude GLOB]... [--skip-archived]
+gclo sync --account <name> [same options — each one overrides the account value;
+          not --forge or --server: the account says where it lives]
+gclo repos --org <name> [--forge github|gitea] [--server ADDRESS]
+          [--include GLOB]... [--exclude GLOB]... [--skip-archived]
           [--token-env VAR | --token-file PATH | --token-stdin] [--json]
-gclo orgs [--token-env VAR | --token-file PATH | --token-stdin] [--json]
+gclo orgs [--forge github|gitea] [--server ADDRESS]
+          [--token-env VAR | --token-file PATH | --token-stdin] [--json]
 gclo accounts [list] [--json]
 gclo accounts add --name <name> --org <name> --target <folder> [--parallel N]
+          [--forge github|gitea] [--server ADDRESS]
           [--org-subfolder] [--description TEXT] [token option]
 gclo accounts edit --name <name> [--rename NEW] [--org NAME] [--target FOLDER]
           [--parallel N] [--org-subfolder | --no-org-subfolder] [--description TEXT]
@@ -262,14 +267,64 @@ without the `read:org` scope) still prints its own account login — you can pas
 any organization name to `gclo sync` manually. A rate limit or temporary
 throttle is reported as such (exit code 4) rather than shrinking the list.
 
+### GitHub, or a Gitea server: `--forge` and `--server`
+
+Without either option a command talks to GitHub. For an organization on a Gitea
+server (or a Forgejo server, which speaks the same API), name the server:
+
+```powershell
+$env:GITEA_TOKEN = (Get-Secret -Name GiteaToken -AsPlainText)
+gclo orgs  --server https://git.example.com
+gclo repos --server https://git.example.com --org platform
+gclo sync  --server https://git.example.com --org platform --target D:\mirror\platform
+```
+
+- `--server <address>` is the server's own address. `--forge gitea` goes with it
+  and may be left out; `--forge github` is the default and takes no server.
+- **HTTPS only.** `http://` is refused, and nothing turns certificate checks
+  off. A server with a certificate from a private authority works once Windows
+  (or the system gclo runs on) trusts that authority.
+- **The token goes to that server and nowhere else.** gclo does not follow a
+  redirect the server answers with, and clones from the address you gave, not
+  from an address the server names. If the server answers with a redirect, the
+  address is not the one the server itself uses, or the organization was
+  renamed; the message says so.
+- **Each forge has its own default token variable**: `GITHUB_TOKEN` for GitHub,
+  `GITEA_TOKEN` for a Gitea server. One is never used for the other, so a GitHub
+  token that happens to be in the environment is not sent to a Gitea server.
+  `--token-env`, `--token-file` and `--token-stdin` work as everywhere.
+- A Gitea access token needs to be allowed to read repositories, organizations
+  and the user (`read:repository`, `read:organization`, `read:user`). Without
+  the second, `gclo orgs` prints the account alone.
+- A server that is reachable only through a sign-in page or a single-sign-on
+  proxy does not work: gclo reports that the address does not answer like a
+  Gitea server.
+
 ## Accounts
 
-An *account* is a saved sync profile: a name, an organization, a target root
-folder, a parallelism setting, an org-subfolder preference, an optional
-description, and a token stored in **Windows Credential Manager** (under
-`gclo:account:<id>`, or `gclo:<scope>:account:<id>` when `GCLO_DATA_DIR` points
-the data elsewhere; the metadata file,
-`%LOCALAPPDATA%\KofTwentyTwo\gclo\accounts.json`, never contains the token).
+An *account* is a saved sync profile: a name, an organization, where it lives
+(GitHub, or a Gitea server and its address), a target root folder, a parallelism
+setting, an org-subfolder preference, an optional description, and a token
+stored in **Windows Credential Manager** (under `gclo:account:<id>`, or
+`gclo:<scope>:account:<id>` when `GCLO_DATA_DIR` points the data elsewhere; the
+metadata file, `%LOCALAPPDATA%\KofTwentyTwo\gclo\accounts.json`, never contains
+the token).
+
+Accounts on a Gitea server are kept in a file of their own beside it,
+`accounts-forges.json`. A version of gclo from before 1.2 knows only GitHub: it
+reads every account in `accounts.json` as a GitHub account and writes the file
+back with what it knows. It neither reads nor writes the other file, so it does
+not list such accounts, and using it beside 1.2 leaves them as they are. One
+thing it can do: add a GitHub account with the name of an account it does not
+see. gclo then does not choose between the two: `--account <name>`,
+`accounts edit` and `accounts remove` fail (exit 2) and say that two accounts
+have the name, until one of them is renamed in the desktop app.
+
+The token of such an account is kept under an entry name made from the account's
+id, its forge and its server address as the file states them, not under `<id>`.
+It is found only by that account at that address: when the address is changed in
+the file by hand, the account has no token there, instead of sending the one it
+had to the new address.
 Accounts are shared between the CLI and the desktop app: create them with
 `gclo accounts add` on a headless mirror server, or in the app's account
 wizard, and use them from either.
@@ -291,25 +346,31 @@ few seconds and then exits with code 4; run it again.
 ### `gclo accounts` / `gclo accounts list`
 
 Lists the saved accounts, one per line, in aligned columns: name, organization,
-target root, token source (`own` or `default`), and last sync time (local time,
-`never` when the account has not completed a sync yet):
+where it lives (`GitHub`, or the host of a Gitea server), target root, token
+source (`own` or `default`), and last sync time (local time, `never` when the
+account has not completed a sync yet):
 
 ```
-work      contoso   C:\src\contoso   own      2026-07-04 09:12
-personal  octocat   D:\mirror        default  never
+work      contoso   GitHub           C:\src\contoso   own      2026-07-04 09:12
+personal  octocat   GitHub           D:\mirror        default  never
+platform  platform  git.example.com  D:\platform      own      never
 ```
 
 With `--json` it prints a single-line JSON array with everything a script needs
 to reason about a run; `lastSync` is the UTC timestamp of the last completed
 sync and `lastSyncSummary` its summary line, both `null` until the first sync;
-`tokenSource` is `own` or `default`:
+`tokenSource` is `own` or `default`; `forge` is `github` or `gitea` (`unknown`
+for an account a later version of gclo added on a forge this one does not know),
+and `server` is the address of a Gitea account's server as the token is sent to
+it (`null` for GitHub, and for an account whose stored address cannot be used).
+The last two fields are new in 1.2:
 
 ```json
 [{"id":"d0f0e0c09c404a5e8f3a5b1e6f7a2c11","name":"work","description":"","organization":"contoso","targetRoot":"C:\\src\\contoso","createOrgSubfolder":true,"maxConcurrency":8,"lastSync":"2026-07-04T14:12:03+00:00","lastSyncSummary":"Finished: 3 cloned, 41 updated, 0 failed, 0 canceled of 44.","tokenSource":"own"}]
 ```
 
 `id` is the key of the account's Credential Manager entry (`gclo:account:<id>`)
-for an `own` account; a `default` account has no entry of its own and resolves
+for an `own` account on GitHub; a `default` account has no entry of its own and resolves
 to the default token saved in the desktop app's Settings whenever it syncs.
 When no accounts exist yet, stdout stays empty (`--json` prints `[]`) and a
 hint goes to stderr; the exit code is still 0.
@@ -328,15 +389,28 @@ account is used later from other places; a target that cannot be a folder
 `%NAME%`) is refused. `--description=` (or `--description ""`) is an empty
 description. The token comes from a
 token option exactly as for `gclo sync` (default: the `GITHUB_TOKEN` environment
-variable) and is written to Windows Credential Manager — never put it on the
-command line. A name that another account already uses (case-insensitive)
-exits with code 2.
+variable, or `GITEA_TOKEN` for a Gitea server) and is written to Windows
+Credential Manager — never put it on the command line. A name that another
+account already uses (case-insensitive) exits with code 2.
+
+For an account on a Gitea server, add `--server` (see "GitHub, or a Gitea
+server"):
+
+```powershell
+Get-Secret -Name GiteaToken -AsPlainText | gclo accounts add --name platform --org platform --target D:\platform --server https://git.example.com --token-stdin
+```
+
+The forge and the server are **fixed once the account is added**. The token
+was saved for that place, and editing an address must not send it somewhere
+else: to move an account, remove it and add it again.
 
 With `--use-default-token` instead of a token option, the account holds no
 token of its own: it resolves to the default token saved in the desktop app's
 Settings every time it syncs, so replacing that token in Settings updates every
 such account at once. The command fails (exit 2) when no default token is saved,
 because the account could never sync; the CLI cannot set the default token.
+The default token is a GitHub token: `--use-default-token` is for GitHub
+accounts only, and an account on a Gitea server always has a token of its own.
 
 ```powershell
 gclo accounts add --name personal --org octocat --target D:\mirror --use-default-token
@@ -355,7 +429,8 @@ Without a token option the token (and its source) is left untouched. A
 `--token-*` option gives the account a token of its own (also switching a
 `default` account to `own`); `--use-default-token` switches it to the default
 token and removes its own entry from Credential Manager. Editing with nothing
-to change is a usage error.
+to change is a usage error. `--forge` and `--server` are refused: where an
+account lives cannot be changed (remove it and add it again).
 
 ### `gclo accounts remove`
 
@@ -368,8 +443,9 @@ on disk are not touched.
 
 ### `gclo sync --account <name>`
 
-Runs a sync with the account's settings and its stored token — no `--org`,
-`--target`, or token option needed:
+Runs a sync with the account's settings and its stored token, from the forge
+and server the account was added for — no `--org`, `--target`, or token option
+needed (`--forge` and `--server` are not accepted with `--account`):
 
 ```powershell
 gclo sync --account work
@@ -402,7 +478,8 @@ Notes:
 
 ## Providing the token
 
-gclo needs a GitHub Personal Access Token for both the API and the git transport.
+gclo needs a token for both the API and the git transport: a GitHub Personal
+Access Token, or an access token of the Gitea server.
 
 > **Why is there no `--token <value>` option?**
 > Command-line arguments are visible to every other process on the machine —
@@ -413,7 +490,7 @@ gclo needs a GitHub Personal Access Token for both the API and the git transport
 
 | Option | Behavior |
 | --- | --- |
-| *(none)* | Reads the `GITHUB_TOKEN` environment variable. |
+| *(none)* | Reads the `GITHUB_TOKEN` environment variable; for a Gitea server (`--server`) the `GITEA_TOKEN` variable instead. Neither is used for the other forge. |
 | `--token-env VAR` | Reads environment variable `VAR`. |
 | `--token-file PATH` | Reads the first non-blank line of `PATH`, trimmed. |
 | `--token-stdin` | Reads one line from standard input — made for piping from a secret store. |
@@ -422,8 +499,9 @@ The options are mutually exclusive. A missing or empty token prints an error to
 stderr and exits with code 2.
 
 With `gclo sync --account`, the default source is the account's token in
-Windows Credential Manager instead of `GITHUB_TOKEN`; any token option above
-still wins for that run (the stored token is left untouched).
+Windows Credential Manager instead of an environment variable; any token option
+above still wins for that run (the stored token is left untouched), and is sent
+to the place the account lives.
 
 ## Activity log
 
@@ -452,8 +530,8 @@ its offset from UTC (`2026-11-10 14:03:22.123 -06:00 [INFO] ...`). Text that cam
 | 0 | Everything succeeded (or `--dry-run` / a listing completed). | — |
 | 1 | The run completed, but some repositories failed or the run was canceled (Ctrl+C). `--json`'s `wasCanceled` tells the two apart. | Inspect the failures; retry them. |
 | 2 | Fatal: bad arguments, missing/empty token, organization not found, unknown account, missing account token, unusable target folder, or an account command on a non-Windows OS. | Fix the invocation. |
-| 3 | GitHub rejected the token (401), or refused it access (403: the token may not see the organization, or the organization requires SAML single sign-on and the token is not authorized for it). The message carries GitHub's reason when it gave one. | Fix the token or its access; do not retry as is. |
-| 4 | Not your doing: GitHub's primary or secondary rate limit (403 or 429), a temporary throttle, a network failure (DNS, connection, TLS, proxy), a request that timed out, an error on GitHub's side (HTTP 5xx), or the accounts file being changed by another gclo process at that moment. | Retry later (for a rate limit, the message says when). |
+| 3 | The forge (GitHub, or the Gitea server) rejected the token (401), or refused it access (403: the token may not see the organization, the organization requires SAML single sign-on and the token is not authorized for it, or a Gitea token lacks a scope). The message carries the server's reason when it gave one. | Fix the token or its access; do not retry as is. |
+| 4 | Not your doing: a rate limit (GitHub's primary or secondary one, 403 or 429; a Gitea server's 429), a temporary throttle, a network failure (DNS, connection, TLS, proxy), a request that timed out, an error on the server's side (HTTP 5xx), or the accounts file being changed by another gclo process at that moment. | Retry later (for a rate limit, the message says when). |
 | 70 | An unexpected error inside gclo. The exception type is printed and the full details are in the activity log. | Please report it. |
 
 Codes 3 and 4 were part of code 2 before version 1.1; a script that tested

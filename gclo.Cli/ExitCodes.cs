@@ -31,7 +31,7 @@ internal static class ExitCodes
 
    /// <summary>
    /// Not the caller's doing: a rate limit or temporary throttle, a network failure,
-   /// a timeout, or an error on GitHub's side. Retry later.
+   /// a timeout, or an error on the server's side (GitHub, or a Gitea server). Retry later.
    /// </summary>
    public const int Transient = 4;
 
@@ -41,10 +41,10 @@ internal static class ExitCodes
 
 
    /// <summary>The exit code for an engine access refusal of the given kind.</summary>
-   public static int ForAccess(GitHubAccessKind kind) => kind switch
+   public static int ForAccess(ForgeAccessKind kind) => kind switch
    {
-      GitHubAccessKind.Unauthorized or GitHubAccessKind.Forbidden => Auth,
-      GitHubAccessKind.RateLimited or GitHubAccessKind.Unavailable => Transient,
+      ForgeAccessKind.Unauthorized or ForgeAccessKind.Forbidden => Auth,
+      ForgeAccessKind.RateLimited or ForgeAccessKind.Unavailable => Transient,
       _ => Fatal,
    };
 }
