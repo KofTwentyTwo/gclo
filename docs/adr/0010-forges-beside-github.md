@@ -83,7 +83,8 @@ were the two lister implementations and the failure type they throw.
   the command line is a separate download), so such accounts are kept where the
   older version neither reads nor writes. A GitHub account is the one that names
   no forge, and only that one; a record in the second file that names none is not
-  read as a GitHub account. The cost is two files where there was one. A change
+  read as a GitHub account (gclo writes no such record; one that is found is
+  given an empty forge name, which no version knows, and is written back so). The cost is two files where there was one. A change
   itself writes only the file of the account it changes; a file that has to be put
   back, or an account that is in the wrong file, is written before the change, so
   that when it cannot be written the change fails with nothing changed and the

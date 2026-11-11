@@ -516,6 +516,7 @@ public sealed class ForgeCliTests : IDisposable
       CliErrorException remove = Assert.Throws<CliErrorException>(() => Accounts("remove", "--name", "platform"));
 
       Assert.All([sync, edit, remove], error => Assert.Equal(Said, error.Message));
+      Assert.All([sync, edit, remove], error => Assert.Equal(ExitCodes.Fatal, error.ExitCode)); // 2, as docs/CLI.md says
       Assert.Empty(_asked);
       Assert.Null(_repos.LastToken);
       Assert.Equal(2, Store.GetAll().Count);
