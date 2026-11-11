@@ -27,8 +27,8 @@ public sealed class ShareInvitationTests
    {
       ShareInvitation invitation = Invitation();
 
-      Assert.Equal("Try gclo: clone and update every repository of a GitHub organization", invitation.Subject);
-      Assert.Contains("clones every repository of a GitHub organization or account", invitation.Body);
+      Assert.Equal("Try gclo: clone and update every repository of a GitHub or Gitea organization", invitation.Subject);
+      Assert.Contains("clones every repository of an organization or account on GitHub or on a Gitea server", invitation.Body);
       Assert.Contains(Repository + "/releases/latest", invitation.Body);
       Assert.Contains("gclo-stable-Setup.exe", invitation.Body);
       Assert.Contains("scoop bucket add gclo " + Repository, invitation.Body);

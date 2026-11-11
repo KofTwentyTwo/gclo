@@ -93,7 +93,7 @@ public sealed class ShareInvitation
           "Hi,",
           "",
           "I use gclo and thought you might like it. It is a small Windows app (with a command-line version) that "
-          + "clones every repository of a GitHub organization or account into a folder and keeps them up to date.",
+          + "clones every repository of an organization or account on GitHub or on a Gitea server into a folder and keeps them up to date.",
           "",
           "Download the latest release:",
           repository + "/releases/latest",
@@ -110,6 +110,6 @@ public sealed class ShareInvitation
           "(sent from gclo " + version.Trim() + ")",
       ];
       return new ShareInvitation(
-          "Try gclo: clone and update every repository of a GitHub organization", string.Join("\r\n", lines));
+          "Try gclo: clone and update every repository of a GitHub or Gitea organization", string.Join("\r\n", lines));
    }
 }
