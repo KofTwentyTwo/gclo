@@ -254,6 +254,17 @@ public sealed class SettingsGiteaState
                 ? $"default token for {_savedPlace!.DisplayName} removed"
                 : $"default token for {_savedPlace!.DisplayName} removed ({_token.DependentCount} account(s) depend on it)";
          case SettingsTokenAction.Keep when plan.TakesUp:
+            /////////////////////////////////////////////////////////////////////////
+            // Looked for again, now: the plan was made when the address was typed, //
+            // and the token may have been removed since (another window, Windows'  //
+            // Credential Manager). Without it there is nothing to take up, and the //
+            // default that is saved is not given up for it.                        //
+            /////////////////////////////////////////////////////////////////////////
+            if(DefaultTokens.For(vault, plan.Place!) is null)
+            {
+               return $"default token for {plan.Place!.DisplayName} not taken up: it is no longer saved; nothing was changed";
+            }
+
             settings.DefaultGiteaServer = plan.Place!.Server!.AbsoluteUri;
             if(!HasSavedToken)
             {

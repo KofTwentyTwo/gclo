@@ -366,6 +366,32 @@ public sealed class DefaultTokenPerPlaceTests : IDisposable
 
 
 
+   [Theory]
+   [InlineData(true)]
+   [InlineData(false)]
+   public void ATokenThatIsGoneWhenSaveIsPressed_IsNotTakenUp_AndTheSavedDefaultIsNotGivenUpForIt(bool anotherIsSaved)
+   {
+      _vault.Store(DefaultTokens.EntryFor(s_other), "other_saved");
+      _vault.Store(DefaultTokens.EntryFor(s_gitea), "gitea_lost");
+      var settings = new AppSettings { DefaultGiteaServer = anotherIsSaved ? OtherServer : null };
+      var state = new SettingsGiteaState(
+          anotherIsSaved ? s_other : null, hasSavedToken: anotherIsSaved, dependentAccounts: [],
+          holdsATokenFor: place => DefaultTokens.For(_vault, place) is not null);
+      SettingsGiteaPlan takeUp = state.Plan(Server, "");
+      Assert.True(takeUp.TakesUp);
+
+      // Between the address being typed and Save, the token is removed elsewhere.
+      _vault.Delete(DefaultTokens.EntryFor(s_gitea));
+
+      Assert.Equal(
+          "default token for git.example.test not taken up: it is no longer saved; nothing was changed",
+          state.Apply(takeUp, "", _vault, settings));
+      Assert.Equal(anotherIsSaved ? OtherServer : null, settings.DefaultGiteaServer);
+      Assert.Equal("other_saved", DefaultTokens.For(_vault, s_other));
+   }
+
+
+
    [Fact]
    public void ATokenTheVaultStillHolds_IsTakenUp_InPlaceOfTheDefaultThatIsSaved()
    {
