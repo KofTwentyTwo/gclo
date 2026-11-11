@@ -1075,6 +1075,53 @@ public sealed class QuickSyncPlaceTests : IDisposable
 
 
 
+   [Fact]
+   public void WhatAWindowRemembers_GoesOverTheSettingsAsTheyAreOnDiskNow_AndNotOverWhatAnotherWindowSaved()
+   {
+      Directory.CreateDirectory(_root);
+      string file = Path.Combine(_root, "settings.json");
+      var account = Guid.NewGuid();
+
+      // Two windows read the same settings.
+      new AppSettings { Theme = "Light" }.Save(directory: _root);
+      var first = AppSettings.Load(directory: _root);
+      var second = AppSettings.Load(directory: _root);
+
+      // The second saves its Settings dialog, connects Quick Sync, and closes.
+      second.Theme = "Dark";
+      second.DefaultGiteaServer = Server;
+      Assert.True(second.Save(directory: _root));
+      second.RememberQuickSync(new QuickSyncConnection(s_gitea, "platform", @"C:\mirror", CreateOrgSubfolder: true));
+      second.LastWorkspace = StartWorkspace.QuickSync;
+      Assert.True(second.SaveWhatWasRemembered(directory: _root));
+
+      // The first, which read the settings before all that, closes on an account's page.
+      first.LastWorkspace = account;
+      Assert.True(first.SaveWhatWasRemembered(directory: _root));
+
+      var read = AppSettings.Load(directory: _root);
+      Assert.Equal(account, read.LastWorkspace); // the window that closed last
+      Assert.Equal("Dark", read.Theme); // not put back to what the first window had read
+      Assert.Equal(Server, read.DefaultGiteaServer);
+      Assert.Equal(new QuickSyncConnection(s_gitea, "platform", @"C:\mirror", CreateOrgSubfolder: true), read.RememberedQuickSync());
+
+      // A connection the first window makes itself is written.
+      first.RememberQuickSync(new QuickSyncConnection(ForgeEndpoint.GitHub, "acme", @"C:\work", CreateOrgSubfolder: false));
+      Assert.True(first.SaveWhatWasRemembered(directory: _root));
+      read = AppSettings.Load(directory: _root);
+      Assert.Equal(new QuickSyncConnection(ForgeEndpoint.GitHub, "acme", @"C:\work", CreateOrgSubfolder: false), read.RememberedQuickSync());
+      Assert.Equal("Dark", read.Theme);
+
+      // A file that cannot be read any more is left for the user to mend, and it is said.
+      File.WriteAllText(file, "{ this is where the file went wrong");
+      var log = new RecordingActivityLog();
+      Assert.False(first.SaveWhatWasRemembered(log, _root));
+      Assert.Contains("went wrong", File.ReadAllText(file), StringComparison.Ordinal);
+      Assert.Contains("What the app remembers was not written: the settings file cannot be read just now.", log.Messages, StringComparer.Ordinal);
+   }
+
+
+
    // ---------------------------------------------------------------- which workspace the app opens on
 
    [Fact]

@@ -337,7 +337,80 @@ public sealed class DefaultTokenPerPlaceTests : IDisposable
       Assert.Equal(0, vault.Deleted);
       Assert.Equal("gitea_saved", DefaultTokens.For(_vault, s_gitea));
       Assert.Equal(Server, settings.DefaultGiteaServer);
-      Assert.Equal("the entry of the test", vault.DescribeEntry(Guid.Empty));
+   }
+
+
+
+   [Fact]
+   public void ATokenTypedBehindTheMask_IsStoredWithoutTheMask()
+   {
+      _vault.Store(DefaultTokens.EntryFor(s_gitea), "gitea_saved");
+      var settings = new AppSettings { DefaultGiteaServer = Server };
+      var state = new SettingsGiteaState(s_gitea, hasSavedToken: true, dependentAccounts: []);
+      string box = SettingsTokenState.Mask + "gitea_new"; // typed into the box without emptying it first
+
+      Assert.Equal(new SettingsGiteaPlan(SettingsTokenAction.Store, s_gitea, ""), state.Plan(Server, box));
+      Assert.Equal("The default token will be replaced on Save.", state.Caption(Server, box));
+      Assert.Equal("default token for git.example.test replaced", state.Apply(state.Plan(Server, box), box, _vault, settings));
+      Assert.Equal("gitea_new", DefaultTokens.For(_vault, s_gitea));
+
+      // A part of the mask deleted and nothing typed: no token was entered, so the saved one is removed, and it says so.
+      Assert.Equal(SettingsTokenAction.Remove, state.Plan(Server, SettingsTokenState.Mask[1..]).Action);
+      Assert.Equal("The default token will be removed on Save.", state.Caption(Server, SettingsTokenState.Mask[1..]));
+
+      // The same with another address, or none: what is left of the mask is no token for that server either.
+      Assert.True(state.Plan(OtherServer, SettingsTokenState.Mask[1..]).IsError);
+      Assert.Equal(SettingsTokenAction.Remove, state.Plan("", SettingsTokenState.Mask[1..]).Action);
+      Assert.Throws<ArgumentNullException>(() => state.Plan(Server, null!));
+   }
+
+
+
+   [Fact]
+   public void ATokenTheVaultStillHolds_IsTakenUp_InPlaceOfTheDefaultThatIsSaved()
+   {
+      // The default is another server; the vault still holds a token for a server Settings lost sight of.
+      _vault.Store(DefaultTokens.EntryFor(s_other), "other_saved");
+      _vault.Store(DefaultTokens.EntryFor(s_gitea), "gitea_lost");
+      var settings = new AppSettings { DefaultGiteaServer = OtherServer };
+      var asked = new List<ForgeEndpoint>();
+      var state = new SettingsGiteaState(
+          s_other, hasSavedToken: true, dependentAccounts: ["Mirror"],
+          holdsATokenFor: place =>
+          {
+             asked.Add(place);
+             return DefaultTokens.For(_vault, place) is not null;
+          });
+
+      // A server that has no token: refused as before, the saved token is not carried there.
+      Assert.True(state.Plan("https://third.example.test", SettingsTokenState.Mask).IsError);
+
+      // The server whose token is there, with the box as it was or emptied: taken up, and it says what goes.
+      foreach(string box in (string[])[SettingsTokenState.Mask, ""])
+      {
+         SettingsGiteaPlan takeUp = state.Plan(Server, box);
+         Assert.Equal(new SettingsGiteaPlan(SettingsTokenAction.Keep, s_gitea, "", TakesUp: true), takeUp);
+         Assert.Equal(
+             "A default token is already saved for https://git.example.test/. Save makes this server the Gitea default again, "
+             + "and removes the one for https://other.example.test/; open Settings afterwards to replace or remove the token."
+             + " 1 account uses it and will stop syncing until a new one is saved: Mirror.",
+             state.Caption(Server, box));
+         Assert.True(state.IsWarning(Server, box));
+      }
+
+      // The vault was asked once for each server, however often the plan was made.
+      Assert.Equal(2, asked.Count);
+
+      Assert.Equal(
+          "default token for git.example.test taken up again (it was already saved), and the one for other.example.test removed",
+          state.Apply(state.Plan(Server, SettingsTokenState.Mask), SettingsTokenState.Mask, _vault, settings));
+      Assert.Equal(Server, settings.DefaultGiteaServer);
+      Assert.Equal("gitea_lost", DefaultTokens.For(_vault, s_gitea)); // the token itself is not touched
+      Assert.Null(DefaultTokens.For(_vault, s_other)); // one default Gitea server
+
+      // With no account on the saved default, taking another one up is no warning.
+      var unused = new SettingsGiteaState(s_other, hasSavedToken: true, dependentAccounts: [], holdsATokenFor: _ => true);
+      Assert.False(unused.IsWarning(Server, SettingsTokenState.Mask));
    }
 
 
@@ -520,7 +593,7 @@ public sealed class DefaultTokenPerPlaceTests : IDisposable
 
       var wizard = new AccountWizardViewModel(
           store, new FakeOrganizationLister(), new AppSettings(), forge, () => null,
-          defaultTokenOf: place => place.Equals(s_gitea) ? "gitea_default" : "ghp_default");
+          defaultTokenOf: place => place.Equals(s_gitea) ? "gitea_default" : null);
 
       Assert.True(wizard.UseDefaultToken);
       Assert.True(wizard.HasDefaultToken);
@@ -656,6 +729,6 @@ public sealed class DefaultTokenPerPlaceTests : IDisposable
 
 
 
-      public string DescribeEntry(Guid accountId) => "the entry of the test";
+      public string DescribeEntry(Guid accountId) => inner.DescribeEntry(accountId);
    }
 }

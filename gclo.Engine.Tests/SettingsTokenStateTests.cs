@@ -159,4 +159,22 @@ public sealed class SettingsTokenStateTests
 
       Assert.Throws<ArgumentNullException>(() => SettingsTokenState.WithoutTheMask(null!));
    }
+
+
+
+   [Fact]
+   public void ATokenTypedBehindTheMask_IsATokenTyped_AndTheMaskIsNoPartOfIt()
+   {
+      var saved = new SettingsTokenState(hasSavedToken: true, dependentAccounts: ["Work"]);
+
+      Assert.Equal(SettingsTokenAction.Store, saved.Plan(SettingsTokenState.Mask + "ghp_typed"));
+      Assert.Equal(
+          "The default token will be replaced on Save. The 1 account that uses it switches to the new token too.",
+          saved.Caption(SettingsTokenState.Mask + "ghp_typed"));
+
+      // A part of the mask deleted and nothing typed: no token was entered. The saved one is removed, and it says so.
+      Assert.Equal(SettingsTokenAction.Remove, saved.Plan(SettingsTokenState.Mask[1..]));
+      Assert.True(saved.RemovalBreaksAccounts(SettingsTokenState.Mask[1..]));
+      Assert.Throws<ArgumentNullException>(() => saved.Plan(null!));
+   }
 }

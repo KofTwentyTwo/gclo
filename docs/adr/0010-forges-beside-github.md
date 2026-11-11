@@ -199,7 +199,13 @@ place and is never used for another.**
   found by whatever asks for the default of that server, while Settings shows
   none. An address entered in Settings that already has a default token in the
   vault is therefore taken up as the default it is, so the token can be seen,
-  replaced and removed again.
+  replaced and removed again. With another server saved as the default, taking
+  one up removes that server's token, as typing a token for another server
+  does: there is one default Gitea server.
+- What the app remembers by itself (the workspace that was open, Quick Sync's
+  connection) is written over `settings.json` as it is on disk at that moment,
+  those values only. A second gclo window that closes does not put its older
+  copy of the settings back, which would drop an address saved in the meantime.
 
 ## Alternatives considered
 

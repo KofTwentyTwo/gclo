@@ -41,6 +41,8 @@ public sealed class SettingsTokenState
    /// typed into without being emptied first holds the mask and then the typing;
    /// stored like that, the token would begin with the mask's dots. The mask alone
    /// stays the mask (it means "unchanged"); a box that holds none of it is as it is.
+   /// The box itself is left as it is (rewriting it while it is typed into moves the
+   /// caret): this is applied wherever its value is read, and to what is stored.
    /// </summary>
    public static string WithoutTheMask(string boxValue)
    {
@@ -69,7 +71,7 @@ public sealed class SettingsTokenState
    /// <summary>What Save will do with <paramref name="boxValue"/>, the box's current content.</summary>
    public SettingsTokenAction Plan(string boxValue)
    {
-      ArgumentNullException.ThrowIfNull(boxValue);
+      boxValue = WithoutTheMask(boxValue);
       if(string.Equals(boxValue, Mask, StringComparison.Ordinal))
       {
          return HasSavedToken ? SettingsTokenAction.Keep : SettingsTokenAction.Store;

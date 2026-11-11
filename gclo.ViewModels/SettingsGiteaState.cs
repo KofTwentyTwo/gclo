@@ -28,7 +28,9 @@ namespace gclo.ViewModels;
 /// without the address. The token is then still found by everything that asks for
 /// the default of that server, while this dialog shows none. So that it can be
 /// seen and removed again, an address that is entered here and already has a
-/// default token in the vault is taken up as the default it is.
+/// default token in the vault is taken up as the default it is. There is one
+/// default Gitea server: when another one is saved, taking a server up removes
+/// that one's token, as typing a token for another server does.
 /// </para>
 /// </remarks>
 public sealed class SettingsGiteaState
@@ -38,6 +40,9 @@ public sealed class SettingsGiteaState
    private readonly SettingsTokenState _token;
 
    private readonly Func<ForgeEndpoint, bool> _holdsATokenFor;
+
+   /// <summary>What <see cref="_holdsATokenFor"/> answered, by server: the vault is asked once for each.</summary>
+   private readonly Dictionary<ForgeEndpoint, bool> _held = [];
 
 
 
@@ -82,7 +87,7 @@ public sealed class SettingsGiteaState
    public SettingsGiteaPlan Plan(string server, string boxValue)
    {
       ArgumentNullException.ThrowIfNull(server);
-      ArgumentNullException.ThrowIfNull(boxValue);
+      boxValue = SettingsTokenState.WithoutTheMask(boxValue);
       bool typed = boxValue.Length > 0 && !string.Equals(boxValue, SettingsTokenState.Mask, StringComparison.Ordinal);
 
       if(string.IsNullOrWhiteSpace(server))
@@ -109,7 +114,7 @@ public sealed class SettingsGiteaState
          }
 
          // Nothing typed: nothing to do, unless the vault holds a default token for this very server already.
-         return _holdsATokenFor(place) ? new SettingsGiteaPlan(SettingsTokenAction.Keep, place, "", TakesUp: true) : Nothing;
+         return HoldsATokenFor(place) ? new SettingsGiteaPlan(SettingsTokenAction.Keep, place, "", TakesUp: true) : Nothing;
       }
 
       if(place.Equals(_savedPlace))
@@ -120,11 +125,35 @@ public sealed class SettingsGiteaState
 
       ///////////////////////////////////////////////////////////////////////////////
       // Another server than the one the token was saved for. The saved token is   //
-      // not sent there: the token of the new server has to be entered.            //
+      // not sent there: the token of the new server has to be entered, unless the //
+      // vault holds a default token for that very server already (see the         //
+      // remarks), which is then taken up in place of the saved one.               //
       ///////////////////////////////////////////////////////////////////////////////
-      return typed
-          ? new SettingsGiteaPlan(SettingsTokenAction.Store, place, "")
+      if(typed)
+      {
+         return new SettingsGiteaPlan(SettingsTokenAction.Store, place, "");
+      }
+
+      return HoldsATokenFor(place)
+          ? new SettingsGiteaPlan(SettingsTokenAction.Keep, place, "", TakesUp: true)
           : Refused($"The saved token is for {Address(_savedPlace!)}. Enter the token for {Address(place)}, or put the address back.");
+   }
+
+
+
+   /// <summary>
+   /// Whether the vault holds a default token for <paramref name="place"/>. Asked
+   /// once for each server, however often the boxes change: the plan is made again
+   /// for every character that is typed.
+   /// </summary>
+   private bool HoldsATokenFor(ForgeEndpoint place)
+   {
+      if(!_held.TryGetValue(place, out bool held))
+      {
+         held = _holdsATokenFor(place);
+         _held[place] = held;
+      }
+      return held;
    }
 
 
@@ -157,6 +186,10 @@ public sealed class SettingsGiteaState
                 + _token.RemovalWarning();
          case SettingsTokenAction.Remove:
             return "The default token will be removed on Save." + _token.RemovalWarning();
+         case SettingsTokenAction.Keep when plan.TakesUp && HasSavedToken:
+            return $"A default token is already saved for {Address(plan.Place!)}. Save makes this server the Gitea default again, "
+                + $"and removes the one for {Address(_savedPlace!)}; open Settings afterwards to replace or remove the token."
+                + _token.RemovalWarning();
          case SettingsTokenAction.Keep when plan.TakesUp:
             return $"A default token is already saved for {Address(plan.Place!)}. Save makes this server the Gitea default again; "
                 + "open Settings afterwards to replace or remove the token.";
@@ -177,7 +210,7 @@ public sealed class SettingsGiteaState
    {
       SettingsGiteaPlan plan = Plan(server, boxValue);
       bool takesTheSavedTokenAway = plan.Action == SettingsTokenAction.Remove
-          || (plan.Action == SettingsTokenAction.Store && HasSavedToken && !plan.Place!.Equals(_savedPlace));
+          || ((plan.Action == SettingsTokenAction.Store || plan.TakesUp) && HasSavedToken && !plan.Place!.Equals(_savedPlace));
       return plan.IsError || (takesTheSavedTokenAway && _token.DependentCount > 0);
    }
 
@@ -205,7 +238,7 @@ public sealed class SettingsGiteaState
       {
          case SettingsTokenAction.Store:
             // The new one first: if it cannot be stored, the old server keeps its token and stays the default.
-            vault.Store(DefaultTokens.EntryFor(plan.Place!), boxValue);
+            vault.Store(DefaultTokens.EntryFor(plan.Place!), SettingsTokenState.WithoutTheMask(boxValue));
             settings.DefaultGiteaServer = plan.Place!.Server!.AbsoluteUri;
             if(HasSavedToken && !plan.Place.Equals(_savedPlace))
             {
@@ -222,7 +255,14 @@ public sealed class SettingsGiteaState
                 : $"default token for {_savedPlace!.DisplayName} removed ({_token.DependentCount} account(s) depend on it)";
          case SettingsTokenAction.Keep when plan.TakesUp:
             settings.DefaultGiteaServer = plan.Place!.Server!.AbsoluteUri;
-            return $"default token for {plan.Place.DisplayName} taken up again (it was already saved)";
+            if(!HasSavedToken)
+            {
+               return $"default token for {plan.Place.DisplayName} taken up again (it was already saved)";
+            }
+
+            // One default Gitea server: the one it takes the place of goes, as when a token is typed for another server.
+            vault.Delete(DefaultTokens.EntryFor(_savedPlace!));
+            return $"default token for {plan.Place.DisplayName} taken up again (it was already saved), and the one for {_savedPlace!.DisplayName} removed";
          default:
             return null;
       }

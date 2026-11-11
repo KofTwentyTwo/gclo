@@ -139,14 +139,45 @@ public sealed class AppSettings
 
 
 
+   /// <summary>True once this window recorded a Quick Sync connection itself (<see cref="RememberQuickSync"/>).</summary>
+   private bool _rememberedAConnection;
+
+
+
    /// <summary>
-   /// Writes the settings because the app remembered something by itself (the
-   /// workspace that was open, Quick Sync's last connection), not because the user
-   /// saved them. Does nothing when the file could not be read at start: that file
-   /// is not written over with defaults on the app's own account.
+   /// Writes what the app remembered by itself (the workspace that was open, and
+   /// Quick Sync's connection if this window made one), not what the user saved in
+   /// Settings. Only those values are written, over the file as it is on disk now:
+   /// another gclo window may have saved settings since this one read them, and a
+   /// window that closes does not put its older copy of them back. Does nothing
+   /// when the file could not be read, at start or now: that file is not written
+   /// over with defaults on the app's own account.
    /// </summary>
    public bool SaveWhatWasRemembered(IActivityLog? log = null, string? directory = null)
-       => !CouldNotBeRead && Save(log, directory);
+   {
+      if(CouldNotBeRead)
+      {
+         return false;
+      }
+
+      AppSettings onDisk = Load(log: null, directory);
+      if(onDisk.CouldNotBeRead)
+      {
+         log?.Info("What the app remembers was not written: the settings file cannot be read just now.");
+         return false;
+      }
+
+      onDisk.LastWorkspace = LastWorkspace;
+      if(_rememberedAConnection)
+      {
+         onDisk.QuickSyncForge = QuickSyncForge;
+         onDisk.QuickSyncServer = QuickSyncServer;
+         onDisk.QuickSyncOrganization = QuickSyncOrganization;
+         onDisk.QuickSyncTargetFolder = QuickSyncTargetFolder;
+         onDisk.QuickSyncCreateOrgSubfolder = QuickSyncCreateOrgSubfolder;
+      }
+      return onDisk.Save(log, directory);
+   }
 
 
 
@@ -248,6 +279,7 @@ public sealed class AppSettings
       QuickSyncOrganization = connection.Organization.Trim();
       QuickSyncTargetFolder = connection.TargetFolder.Trim();
       QuickSyncCreateOrgSubfolder = connection.CreateOrgSubfolder;
+      _rememberedAConnection = true;
    }
 
 

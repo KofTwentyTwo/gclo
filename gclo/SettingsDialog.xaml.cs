@@ -78,7 +78,7 @@ public sealed partial class SettingsDialog : ContentDialog
           giteaPlace,
           hasSavedToken: giteaPlace is not null && DefaultTokens.For(vault, giteaPlace) is not null,
           dependentAccounts: giteaPlace is null ? [] : accounts.UsingDefaultTokenOf(giteaPlace).Select(a => a.Name).ToList(),
-          holdsATokenFor: place => DefaultTokens.For(vault, place) is not null);
+          holdsATokenFor: place => HoldsADefaultToken(vault, place));
       ArgumentNullException.ThrowIfNull(windowHandleProvider);
       _settings = settings;
       _vault = vault;
@@ -185,7 +185,7 @@ public sealed partial class SettingsDialog : ContentDialog
       switch(_tokenState.Plan(typed))
       {
          case SettingsTokenAction.Store:
-            _vault.Store(AppSettings.DefaultTokenVaultId, typed);
+            _vault.Store(AppSettings.DefaultTokenVaultId, SettingsTokenState.WithoutTheMask(typed));
             changes.Add(_tokenState.HasSavedToken ? "default token replaced" : "default token stored");
             break;
          case SettingsTokenAction.Remove:
@@ -213,25 +213,28 @@ public sealed partial class SettingsDialog : ContentDialog
 
 
 
+   // A box that shows the mask and is typed into without being emptied first holds
+   // the mask and then the typing. The box is left as it is; the state objects take
+   // the mask out where they read it, and it is taken out of what is stored.
    private void DefaultTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
-   {
-      DropTheMaskFromWhatWasTyped(DefaultTokenBox);
-      UpdateTokenCaption();
-   }
+       => UpdateTokenCaption();
 
 
 
    /// <summary>
-   /// A box that shows the mask and is typed into without being emptied first holds
-   /// the mask and then the typing: the mask is taken out, so that what is stored is
-   /// the token alone.
+   /// Whether the vault holds a default token for a Gitea server, asked while its
+   /// address is typed. A credential store that cannot be read just then holds none
+   /// as far as the caption goes: nothing is lost by that, and typing is not broken.
    /// </summary>
-   private static void DropTheMaskFromWhatWasTyped(PasswordBox box)
+   private static bool HoldsADefaultToken(ITokenVault vault, ForgeEndpoint place)
    {
-      string typed = SettingsTokenState.WithoutTheMask(box.Password);
-      if(!string.Equals(typed, box.Password, StringComparison.Ordinal))
+      try
       {
-         box.Password = typed;
+         return DefaultTokens.For(vault, place) is not null;
+      }
+      catch(System.ComponentModel.Win32Exception)
+      {
+         return false;
       }
    }
 
@@ -243,10 +246,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
 
    private void GiteaTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
-   {
-      DropTheMaskFromWhatWasTyped(GiteaTokenBox);
-      UpdateGiteaCaption();
-   }
+       => UpdateGiteaCaption();
 
 
 
