@@ -304,17 +304,31 @@ public sealed class ForgeCliTests : IDisposable
 
 
    [Fact]
-   public void AccountsAdd_OnTheDefaultToken_IsForGitHubOnly()
+   public void AccountsAdd_OnTheDefaultToken_NeedsTheDefaultTokenOfItsOwnPlace()
    {
-      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default"); // GitHub's: it is not the server's
+      Assert.True(ForgeEndpoint.TryCreate(ForgeKind.Gitea, Server, out ForgeEndpoint? place, out _));
+      using var console = new ConsoleCapture();
 
-      CliUsageException error = Assert.Throws<CliUsageException>(
+      CliErrorException error = Assert.Throws<CliErrorException>(
           () => Accounts("add", "--name", "forge", "--org", "acme", "--target", _dir, "--server", Server, "--use-default-token"));
 
       Assert.Equal(
-          "--use-default-token is for GitHub accounts: the default token is a GitHub token. Give the account on git.example.test a token of its own.",
+          "No default token is saved for https://git.example.test/, so the account could not sync. Save one in the desktop app "
+          + "(File > Settings), or give the account a token of its own with --token-env, --token-file, or --token-stdin.",
           error.Message);
       Assert.Empty(Store.GetAll());
+
+      // With one saved for that server, the account uses it and has no token of its own.
+      _vault.Store(DefaultTokens.EntryFor(place), "gitea_default");
+
+      Assert.Equal(0, Accounts("add", "--name", "forge", "--org", "acme", "--target", _dir, "--server", Server, "--use-default-token"));
+
+      Account added = Assert.Single(Store.GetAll());
+      Assert.Equal(TokenSource.Default, added.TokenSource);
+      Assert.Equal(ForgeKind.Gitea, added.Forge);
+      Assert.Null(_vault.TryRetrieve(added.TokenEntryId));
+      Assert.Equal("gitea_default", new AccountTokenResolver(_vault).TryResolve(added));
    }
 
 
@@ -354,18 +368,18 @@ public sealed class ForgeCliTests : IDisposable
 
 
    [Fact]
-   public void AccountsEdit_AGiteaAccount_KeepsATokenOfItsOwn_AndATokenOptionReplacesIt()
+   public void AccountsEdit_AGiteaAccount_KeepsATokenOfItsOwn_UnlessItsServerHasADefaultToken()
    {
       Account account = AddGiteaAccount();
-      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default"); // GitHub's: it is not the server's
+      Assert.True(ForgeEndpoint.TryCreate(ForgeKind.Gitea, Server, out ForgeEndpoint? place, out _));
       Environment.SetEnvironmentVariable("GCLO_FORGE_TEST_TOKEN", "replaced");
       using var console = new ConsoleCapture();
       try
       {
          CliErrorException error = Assert.Throws<CliErrorException>(() => Accounts("edit", "--name", "forge", "--use-default-token"));
-         Assert.Equal(
-             "Account 'forge' is on git.example.test: the default token is a GitHub token, so it keeps a token of its own.",
-             error.Message);
+         Assert.StartsWith("No default token is saved for https://git.example.test/, so the account could not sync.", error.Message, StringComparison.Ordinal);
+         Assert.Equal(TokenSource.Own, Store.FindByName("forge")!.TokenSource);
 
          Assert.Equal(0, Accounts("edit", "--name", "forge", "--token-env", "GCLO_FORGE_TEST_TOKEN"));
       }
@@ -377,6 +391,35 @@ public sealed class ForgeCliTests : IDisposable
       Assert.Equal("replaced", _vault.TryRetrieve(account.TokenEntryId));
       Assert.Null(_vault.TryRetrieve(account.Id));
       Assert.Equal(TokenSource.Own, Store.FindByName("forge")!.TokenSource);
+
+      // With a default token saved for its server, the account can be switched to it: its own token is removed.
+      _vault.Store(DefaultTokens.EntryFor(place), "gitea_default");
+
+      Assert.Equal(0, Accounts("edit", "--name", "forge", "--use-default-token"));
+
+      Account switched = Store.FindByName("forge")!;
+      Assert.Equal(TokenSource.Default, switched.TokenSource);
+      Assert.Null(_vault.TryRetrieve(account.TokenEntryId));
+      Assert.Equal("gitea_default", new AccountTokenResolver(_vault).TryResolve(switched));
+   }
+
+
+
+   [Fact]
+   public void AccountsEdit_OfAnAccountThatCannotBeUsed_DoesNotSwitchItToADefaultToken()
+   {
+      AddGiteaAccount();
+      string file = Path.Combine(_dir, "accounts-forges.json");
+      File.WriteAllText(file, File.ReadAllText(file).Replace(Server, "http://git.example.test/", StringComparison.Ordinal));
+      _store = null; // read the file again
+      using var console = new ConsoleCapture();
+
+      CliErrorException error = Assert.Throws<CliErrorException>(() => Accounts("edit", "--name", "forge", "--use-default-token"));
+
+      Assert.Equal(
+          "Account 'forge' cannot be used as it is saved: the server address cannot be used: "
+          + "it has to begin with https://. Remove the account and add it again.",
+          error.Message);
    }
 
 

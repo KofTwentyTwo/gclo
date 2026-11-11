@@ -50,6 +50,13 @@ public sealed partial class SettingsDialog : ContentDialog
    /// </summary>
    private readonly SettingsTokenState _tokenState;
 
+   /// <summary>
+   /// The same for the Gitea group (#212): the address of the server and its default
+   /// token, which are saved, replaced and removed together. The saved token is never
+   /// carried to another address.
+   /// </summary>
+   private readonly SettingsGiteaState _giteaState;
+
 
 
    /// <summary>
@@ -64,8 +71,14 @@ public sealed partial class SettingsDialog : ContentDialog
       ArgumentNullException.ThrowIfNull(vault);
       ArgumentNullException.ThrowIfNull(accounts);
       _tokenState = new SettingsTokenState(
-          hasSavedToken: !string.IsNullOrEmpty(vault.TryRetrieve(AppSettings.DefaultTokenVaultId)),
-          dependentAccounts: accounts.GetAll().Where(a => a.UsesDefaultToken).Select(a => a.Name).ToList());
+          hasSavedToken: DefaultTokens.For(vault, ForgeEndpoint.GitHub) is not null,
+          dependentAccounts: accounts.UsingDefaultTokenOf(ForgeEndpoint.GitHub).Select(a => a.Name).ToList());
+      ForgeEndpoint? giteaPlace = settings.DefaultGiteaPlace();
+      _giteaState = new SettingsGiteaState(
+          giteaPlace,
+          hasSavedToken: giteaPlace is not null && DefaultTokens.For(vault, giteaPlace) is not null,
+          dependentAccounts: giteaPlace is null ? [] : accounts.UsingDefaultTokenOf(giteaPlace).Select(a => a.Name).ToList(),
+          holdsATokenFor: place => HoldsADefaultToken(vault, place));
       ArgumentNullException.ThrowIfNull(windowHandleProvider);
       _settings = settings;
       _vault = vault;
@@ -89,6 +102,9 @@ public sealed partial class SettingsDialog : ContentDialog
       // removes it. The caption follows every edit (PasswordChanged).
       DefaultTokenBox.Password = _tokenState.InitialBoxValue;
       UpdateTokenCaption();
+      GiteaServerBox.Text = _giteaState.InitialServer;
+      GiteaTokenBox.Password = _giteaState.InitialBoxValue;
+      UpdateGiteaCaption();
    }
 
 
@@ -154,13 +170,22 @@ public sealed partial class SettingsDialog : ContentDialog
          }
       }
 
+      // The Gitea default: the token to the vault, the address of its server to the
+      // settings, which are written just below. Save is not offered while the group
+      // cannot be saved as it stands (UpdateGiteaCaption).
+      string giteaToken = GiteaTokenBox.Password;
+      if(_giteaState.Apply(_giteaState.Plan(GiteaServerBox.Text, giteaToken), giteaToken, _vault, _settings) is { } giteaChange)
+      {
+         changes.Add(giteaChange);
+      }
+
       bool written = _settings.Save(_log);
 
       string typed = DefaultTokenBox.Password;
       switch(_tokenState.Plan(typed))
       {
          case SettingsTokenAction.Store:
-            _vault.Store(AppSettings.DefaultTokenVaultId, typed);
+            _vault.Store(AppSettings.DefaultTokenVaultId, SettingsTokenState.WithoutTheMask(typed));
             changes.Add(_tokenState.HasSavedToken ? "default token replaced" : "default token stored");
             break;
          case SettingsTokenAction.Remove:
@@ -188,8 +213,64 @@ public sealed partial class SettingsDialog : ContentDialog
 
 
 
+   // A box that shows the mask and is typed into without being emptied first holds
+   // the mask and then the typing. The box is left as it is; the state objects take
+   // the mask out where they read it, and it is taken out of what is stored.
    private void DefaultTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
        => UpdateTokenCaption();
+
+
+
+   /// <summary>
+   /// Whether the vault holds a default token for a Gitea server, asked while its
+   /// address is typed. A credential store that cannot be read just then holds none
+   /// as far as the caption goes: nothing is lost by that, and typing is not broken.
+   /// </summary>
+   private static bool HoldsADefaultToken(ITokenVault vault, ForgeEndpoint place)
+   {
+      try
+      {
+         return DefaultTokens.For(vault, place) is not null;
+      }
+      catch(System.ComponentModel.Win32Exception)
+      {
+         return false;
+      }
+   }
+
+
+
+   private void RemoveGiteaTokenButton_Click(object sender, RoutedEventArgs e)
+       => GiteaTokenBox.Password = "";
+
+
+
+   private void GiteaTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
+       => UpdateGiteaCaption();
+
+
+
+   private void GiteaServerBox_TextChanged(object sender, TextChangedEventArgs e)
+       => UpdateGiteaCaption();
+
+
+
+   /// <summary>
+   /// The caption of the Gitea group follows its two boxes: the state object words
+   /// what Save will do, or why the group cannot be saved as it stands. In that case
+   /// Save is not offered, so nothing is half saved; a warning (that, or a removal
+   /// that breaks accounts) is shown in the critical colour.
+   /// </summary>
+   private void UpdateGiteaCaption()
+   {
+      string server = GiteaServerBox.Text;
+      string box = GiteaTokenBox.Password;
+      GiteaStateText.Text = _giteaState.Caption(server, box);
+      GiteaStateText.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+          _giteaState.IsWarning(server, box) ? "SystemFillColorCriticalBrush" : "TextFillColorSecondaryBrush"];
+      RemoveGiteaTokenButton.Visibility = _giteaState.CanOfferRemoval(box) ? Visibility.Visible : Visibility.Collapsed;
+      IsPrimaryButtonEnabled = !_giteaState.Plan(server, box).IsError;
+   }
 
 
 

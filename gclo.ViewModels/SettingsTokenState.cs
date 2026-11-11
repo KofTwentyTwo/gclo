@@ -36,6 +36,24 @@ public sealed class SettingsTokenState
 
 
 
+   /// <summary>
+   /// What was typed, without the mask. A token box that shows the mask and is
+   /// typed into without being emptied first holds the mask and then the typing;
+   /// stored like that, the token would begin with the mask's dots. The mask alone
+   /// stays the mask (it means "unchanged"); a box that holds none of it is as it is.
+   /// The box itself is left as it is (rewriting it while it is typed into moves the
+   /// caret): this is applied wherever its value is read, and to what is stored.
+   /// </summary>
+   public static string WithoutTheMask(string boxValue)
+   {
+      ArgumentNullException.ThrowIfNull(boxValue);
+      return string.Equals(boxValue, Mask, StringComparison.Ordinal) || !boxValue.Contains(Mask[0], StringComparison.Ordinal)
+          ? boxValue
+          : boxValue.Replace(Mask[0].ToString(), "", StringComparison.Ordinal);
+   }
+
+
+
    /// <summary>True when the vault held a default token when the dialog opened.</summary>
    public bool HasSavedToken { get; }
 
@@ -53,7 +71,7 @@ public sealed class SettingsTokenState
    /// <summary>What Save will do with <paramref name="boxValue"/>, the box's current content.</summary>
    public SettingsTokenAction Plan(string boxValue)
    {
-      ArgumentNullException.ThrowIfNull(boxValue);
+      boxValue = WithoutTheMask(boxValue);
       if(string.Equals(boxValue, Mask, StringComparison.Ordinal))
       {
          return HasSavedToken ? SettingsTokenAction.Keep : SettingsTokenAction.Store;
@@ -93,7 +111,7 @@ public sealed class SettingsTokenState
 
 
 
-   private string UsedBy() => DependentCount switch
+   internal string UsedBy() => DependentCount switch
    {
       0 => " and used by Quick Sync",
       1 => " and used by Quick Sync and 1 account",
@@ -102,7 +120,7 @@ public sealed class SettingsTokenState
 
 
 
-   private string RotationNote() => DependentCount switch
+   internal string RotationNote() => DependentCount switch
    {
       0 => "",
       1 => " The 1 account that uses it switches to the new token too.",
@@ -111,7 +129,7 @@ public sealed class SettingsTokenState
 
 
 
-   private string RemovalWarning()
+   internal string RemovalWarning()
    {
       if(DependentCount == 0)
       {

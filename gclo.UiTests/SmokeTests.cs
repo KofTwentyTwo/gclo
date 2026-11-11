@@ -95,6 +95,46 @@ public sealed partial class SmokeTests : UiTestBase
 
 
 
+   // (4b) Settings holds a default token per forge (#212): GitHub, and a Gitea
+   //      server with its address. A token for a server whose address cannot be
+   //      used is not saved: the dialog says why and does not offer Save, and with
+   //      the address corrected it does. Nothing is saved here: the dialog is canceled.
+   [Fact]
+   public void Settings_HasADefaultTokenPerForge_AndDoesNotSaveATokenForAnAddressItRefuses()
+   {
+      Session.InvokeMenuItem("File", "MenuSettings");
+      try
+      {
+         Session.WaitForText("Default tokens");
+         Assert.NotNull(Session.WaitForElement("SettingsDefaultTokenBox")); // GitHub
+         Session.EnterText(Session.WaitForElement("SettingsGiteaServerBox"), "http://git.example.test");
+         Session.EnterText(Session.WaitForElement("SettingsGiteaTokenBox"), "a-token-that-is-not-saved");
+
+         Session.WaitForText("The server address cannot be used: it has to begin with https://.");
+         Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.Button).And(cf.ByName("Save")).And(cf.ByClassName("Button")))
+                   is { IsEnabled: false } save ? save : null,
+             "Save to be withheld");
+
+         Session.EnterText(Session.WaitForElement("SettingsGiteaServerBox"), "git.example.test");
+
+         Session.WaitForText("The default token for https://git.example.test/ will be saved on Save; Quick Sync fills it in when it is on that server.");
+         Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.Button).And(cf.ByName("Save")).And(cf.ByClassName("Button")))
+                   is { IsEnabled: true } save ? save : null,
+             "Save to be offered again");
+
+         Session.ClickButton("Cancel");
+         Session.WaitForTextGone("Default tokens");
+      }
+      finally
+      {
+         Session.TryClickButton("Cancel"); // no-op when the happy path closed it
+      }
+   }
+
+
+
    // Help -> Share gclo by email. Under the fixture the invitation is shown in the
    // app instead of being handed to an email program, so the test can read it and
    // nothing opens on the machine that runs the suite.
@@ -327,6 +367,18 @@ public sealed partial class SmokeTests : UiTestBase
              },
              "the fixture's Gitea organization in the organization list");
          orgBox.Collapse();
+
+         // The address typed over names no place, so Find is withheld; typed back, without
+         // the box being left, it is the server again and Find is offered.
+         AutomationElement serverBox = Session.WaitForElement("ConnectServerBox");
+         Session.EnterText(serverBox, "https://git.example.test/x");
+         Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByAutomationId("ConnectFindOrgsButton")) is { IsEnabled: false } button ? button : null,
+             "Find to be withheld while the address is typed over");
+         Session.EnterText(serverBox, "https://git.example.test/");
+         Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByAutomationId("ConnectFindOrgsButton")) is { IsEnabled: true } button ? button : null,
+             "Find to be offered again for the address that was typed back");
          Assert.False(Session.App.HasExited);
       }
       finally

@@ -2658,15 +2658,15 @@ public sealed class WorkspaceViewModelTests : IDisposable
 
       foreach(WorkspaceViewModel vm in new[] { prefilled, typed, empty })
       {
-         vm.OnDefaultTokenChanged(previous: "default-token-old-123", current: "default-token-new-456");
+         vm.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: "default-token-old-123", current: "default-token-new-456");
       }
 
       Assert.Equal("default-token-new-456", prefilled.Token);
       Assert.Equal("typed-by-hand-0000000", typed.Token); // somebody's own token stays
       Assert.Equal("", empty.Token);                      // the box was cleared by hand: it stays cleared
 
-      prefilled.OnDefaultTokenChanged(previous: "default-token-new-456", current: null);
-      empty.OnDefaultTokenChanged(previous: null, current: "default-token-first-1"); // first saved: nothing was there before
+      prefilled.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: "default-token-new-456", current: null);
+      empty.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: "default-token-first-1"); // first saved: nothing was there before
       prefilled.RefreshAccountToken(); // Quick Sync has no source to read from: nothing happens
 
       Assert.Equal("", prefilled.Token);
@@ -2684,7 +2684,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
       vault.Store(AppSettings.DefaultTokenVaultId, "default-token-new-456");
 
       // What the caller passes is not what an account uses: its source is the vault.
-      vm.OnDefaultTokenChanged(previous: "something else entirely", current: "also something else");
+      vm.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: "something else entirely", current: "also something else");
 
       Assert.Equal("default-token-new-456", vm.Token);
    }
@@ -2904,7 +2904,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
 
       vault.Fails = true;
       vm.RefreshAccountToken(); // must not throw: the shell and Sync all call this
-      vm.OnDefaultTokenChanged(previous: null, current: null);
+      vm.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: null);
 
       Assert.Equal("default-token-old-123", vm.Token);
       Assert.Contains(log.Messages, m => m.Contains("its saved token could not be read", StringComparison.Ordinal));
@@ -2934,7 +2934,7 @@ public sealed class WorkspaceViewModelTests : IDisposable
    public async Task QuickSync_WhoseTokenBoxWasEmptied_FailsTheSyncInItsOwnWords()
    {
       WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"));
-      vm.OnDefaultTokenChanged(previous: "token-1234567890", current: null); // the pre-filled default was removed
+      vm.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: "token-1234567890", current: null); // the pre-filled default was removed
 
       await vm.SyncCommand.ExecuteAsync(null);
 

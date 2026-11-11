@@ -30,12 +30,22 @@
                 ToolTipService.ToolTip="Choose the default target folder"
                 Click="BrowseButton_Click" />
         </Grid>
+        <!-- Default tokens (#212): one for GitHub, one for a Gitea server, named as
+             everywhere else. Each belongs to its place and is used for no other. -->
+        <StackPanel Spacing="2">
+            <TextBlock Style="{ThemeResource BodyStrongTextBlockStyle}" Text="Default tokens" />
+            <TextBlock
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                TextWrapping="Wrap"
+                Text="Quick Sync fills in the default token of the place it is on, and an account can use the one of its place. Stored in Windows Credential Manager, never in a file." />
+        </StackPanel>
         <PasswordBox
             x:Name="DefaultTokenBox"
-            Header="Default GitHub token"
+            Header="GitHub"
             AutomationProperties.AutomationId="SettingsDefaultTokenBox"
             PlaceholderText="ghp_…"
-            ToolTipService.ToolTip="Pre-fills Quick Sync and serves every account set to use it. Stored in Windows Credential Manager, never in a file."
+            ToolTipService.ToolTip="The default token for GitHub: pre-fills Quick Sync when it is on GitHub and serves every GitHub account set to use it."
             PasswordChanged="DefaultTokenBox_PasswordChanged" />
         <!-- Caption takes the width, the Remove link keeps its own: a horizontal
              StackPanel clipped the link once the caption grew (#101). -->
@@ -60,6 +70,45 @@
                 Content="Remove saved token"
                 ToolTipService.ToolTip="Clears the box; the saved default token is deleted from Windows Credential Manager when you press Save"
                 Click="RemoveTokenButton_Click" />
+        </Grid>
+        <!-- Gitea: the token is for one server, so the address and the token are
+             saved, replaced and removed together. -->
+        <TextBox
+            x:Name="GiteaServerBox"
+            Header="Gitea"
+            AutomationProperties.AutomationId="SettingsGiteaServerBox"
+            PlaceholderText="Server address, like https://git.example.com"
+            ToolTipService.ToolTip="The address of the Gitea (or Forgejo) server the default token below is for. HTTPS only; the token is used for this server and no other."
+            TextChanged="GiteaServerBox_TextChanged" />
+        <PasswordBox
+            x:Name="GiteaTokenBox"
+            AutomationProperties.AutomationId="SettingsGiteaTokenBox"
+            AutomationProperties.Name="Default token for the Gitea server"
+            PlaceholderText="Access token of that server"
+            ToolTipService.ToolTip="The default token for the Gitea server above: pre-fills Quick Sync when it is on that server and serves every account on it that is set to use the default token."
+            PasswordChanged="GiteaTokenBox_PasswordChanged" />
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock
+                x:Name="GiteaStateText"
+                Grid.Column="0"
+                VerticalAlignment="Center"
+                TextWrapping="Wrap"
+                AutomationProperties.AutomationId="SettingsGiteaStateText"
+                AutomationProperties.LiveSetting="Polite"
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <HyperlinkButton
+                x:Name="RemoveGiteaTokenButton"
+                Grid.Column="1"
+                Padding="0"
+                VerticalAlignment="Center"
+                Content="Remove saved token"
+                ToolTipService.ToolTip="Clears the box; the saved default token is deleted from Windows Credential Manager when you press Save"
+                Click="RemoveGiteaTokenButton_Click" />
         </Grid>
         <NumberBox
             x:Name="ConcurrencyBox"

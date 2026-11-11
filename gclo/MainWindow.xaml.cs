@@ -205,10 +205,8 @@ public sealed partial class MainWindow : Window
 
       Closed += (_, _) =>
       {
-         if(_settings.LastWorkspace != workspaceAtStart)
-         {
-            _settings.SaveWhatWasRemembered(_log);
-         }
+         // The workspace that is open now is where the next start opens: written here, whatever was written before.
+         _settings.SaveWhatWasRemembered(_log);
          responsiveness.Dispose();
          _logWindow?.Close(); // a log-only process would linger otherwise
          DisposeWorkspaces();
@@ -809,7 +807,6 @@ public sealed partial class MainWindow : Window
    /// </summary>
    private async Task ShowAccountWizardAsync(Account? existing)
    {
-      Func<string?> defaultToken = () => _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId);
       AccountWizardViewModel viewModel;
       if(existing is null)
       {
@@ -820,7 +817,7 @@ public sealed partial class MainWindow : Window
              place => UiTestFixture.WrapOrganizationLister(place.CreateOrganizationLister(), place),
              _settings,
              _log,
-             defaultToken);
+             place => DefaultTokens.For(_tokenVault, place));
       }
       else
       {
@@ -834,7 +831,7 @@ public sealed partial class MainWindow : Window
              existing,
              () => _tokenVault.TryRetrieve(existing.TokenEntryId),
              _log,
-             defaultToken);
+             defaultTokenOf: place => DefaultTokens.For(_tokenVault, place));
       }
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
@@ -888,7 +885,7 @@ public sealed partial class MainWindow : Window
       ForgeEndpoint place = seed.Place ?? ForgeEndpoint.GitHub;
       var viewModel = new AccountWizardViewModel(
           _accountsStore, UiTestFixture.WrapOrganizationLister(place.CreateOrganizationLister(), place), seed, _log,
-          defaultToken: () => _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId));
+          defaultTokenOf: where => DefaultTokens.For(_tokenVault, where));
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
       {
@@ -1301,13 +1298,28 @@ public sealed partial class MainWindow : Window
       if(await DialogGuard.ShowAsync(dialog) == ContentDialogResult.Primary)
       {
          // Held only to tell the open workspaces what changed; never logged or stored.
-         string? defaultTokenBefore = _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId);
+         // A default token belongs to one place: GitHub's, and the one of the Gitea
+         // server that is named in Settings before the save and after it.
+         var places = new List<ForgeEndpoint> { ForgeEndpoint.GitHub };
+         if(_settings.DefaultGiteaPlace() is { } giteaBefore)
+         {
+            places.Add(giteaBefore);
+         }
+         var before = places.ToDictionary(place => place, place => DefaultTokens.For(_tokenVault, place));
          dialog.ApplyAndSave(); // logs what changed
          ApplySettings(seedQuickSyncConcurrency: _settings.DefaultMaxConcurrency != concurrencyBefore);
-         string? defaultTokenNow = _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId);
-         foreach(WorkspaceEntry workspace in _workspaces.Values)
+         if(_settings.DefaultGiteaPlace() is { } giteaNow && !places.Contains(giteaNow))
          {
-            workspace.ViewModel.OnDefaultTokenChanged(defaultTokenBefore, defaultTokenNow);
+            places.Add(giteaNow);
+         }
+         foreach(ForgeEndpoint place in places)
+         {
+            string? was = before.GetValueOrDefault(place);
+            string? now = DefaultTokens.For(_tokenVault, place);
+            foreach(WorkspaceEntry workspace in _workspaces.Values)
+            {
+               workspace.ViewModel.OnDefaultTokenChanged(place, was, now);
+            }
          }
       }
       else

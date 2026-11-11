@@ -38,6 +38,13 @@ public sealed class AppSettings
    public static readonly Guid DefaultTokenVaultId = new("d0f0e0c0-9c40-4a5e-8f3a-5b1e6f7a2c11");
 
    /// <summary>
+   /// The address of the Gitea server a default token is saved for (Settings); null
+   /// when there is none. The token itself is in the vault, under an entry named
+   /// after this address (<see cref="DefaultTokens.EntryFor"/>), never in this file.
+   /// </summary>
+   public string? DefaultGiteaServer { get; set; }
+
+   /// <summary>
    /// The workspace that was open last: an account's id, or <see cref="StartWorkspace.QuickSync"/>.
    /// Null when nothing is recorded yet. See <see cref="StartWorkspace.Choose"/>.
    /// </summary>
@@ -132,14 +139,45 @@ public sealed class AppSettings
 
 
 
+   /// <summary>True once this window recorded a Quick Sync connection itself (<see cref="RememberQuickSync"/>).</summary>
+   private bool _rememberedAConnection;
+
+
+
    /// <summary>
-   /// Writes the settings because the app remembered something by itself (the
-   /// workspace that was open, Quick Sync's last connection), not because the user
-   /// saved them. Does nothing when the file could not be read at start: that file
-   /// is not written over with defaults on the app's own account.
+   /// Writes what the app remembered by itself (the workspace that was open, and
+   /// Quick Sync's connection if this window made one), not what the user saved in
+   /// Settings. Only those values are written, over the file as it is on disk now:
+   /// another gclo window may have saved settings since this one read them, and a
+   /// window that closes does not put its older copy of them back. Does nothing
+   /// when the file could not be read, at start or now: that file is not written
+   /// over with defaults on the app's own account.
    /// </summary>
    public bool SaveWhatWasRemembered(IActivityLog? log = null, string? directory = null)
-       => !CouldNotBeRead && Save(log, directory);
+   {
+      if(CouldNotBeRead)
+      {
+         return false;
+      }
+
+      AppSettings onDisk = Load(log: null, directory);
+      if(onDisk.CouldNotBeRead)
+      {
+         log?.Info("What the app remembers was not written: the settings file cannot be read just now.");
+         return false;
+      }
+
+      onDisk.LastWorkspace = LastWorkspace;
+      if(_rememberedAConnection)
+      {
+         onDisk.QuickSyncForge = QuickSyncForge;
+         onDisk.QuickSyncServer = QuickSyncServer;
+         onDisk.QuickSyncOrganization = QuickSyncOrganization;
+         onDisk.QuickSyncTargetFolder = QuickSyncTargetFolder;
+         onDisk.QuickSyncCreateOrgSubfolder = QuickSyncCreateOrgSubfolder;
+      }
+      return onDisk.Save(log, directory);
+   }
 
 
 
@@ -221,6 +259,15 @@ public sealed class AppSettings
 
 
    /// <summary>
+   /// The Gitea server a default token is saved for, or null when there is none or
+   /// what is stored is no address that can be used (a file edited by hand).
+   /// </summary>
+   public ForgeEndpoint? DefaultGiteaPlace()
+       => ForgeEndpoint.TryCreate(ForgeKind.Gitea, DefaultGiteaServer, out ForgeEndpoint? place, out _) ? place : null;
+
+
+
+   /// <summary>
    /// Records a Quick Sync connection that worked, so the card opens the same way
    /// next time. The caller saves. Never a token.
    /// </summary>
@@ -232,6 +279,7 @@ public sealed class AppSettings
       QuickSyncOrganization = connection.Organization.Trim();
       QuickSyncTargetFolder = connection.TargetFolder.Trim();
       QuickSyncCreateOrgSubfolder = connection.CreateOrgSubfolder;
+      _rememberedAConnection = true;
    }
 
 

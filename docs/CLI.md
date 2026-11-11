@@ -407,10 +407,11 @@ else: to move an account, remove it and add it again.
 With `--use-default-token` instead of a token option, the account holds no
 token of its own: it resolves to the default token saved in the desktop app's
 Settings every time it syncs, so replacing that token in Settings updates every
-such account at once. The command fails (exit 2) when no default token is saved,
-because the account could never sync; the CLI cannot set the default token.
-The default token is a GitHub token: `--use-default-token` is for GitHub
-accounts only, and an account on a Gitea server always has a token of its own.
+such account at once. Settings holds one default token for GitHub and one for a
+Gitea server; an account gets the one of the place it is on, and a default
+token is never used for another place. The command fails (exit 2) when no
+default token is saved for the account's place, because the account could never
+sync; the CLI cannot set a default token.
 
 ```powershell
 gclo accounts add --name personal --org octocat --target D:\mirror --use-default-token

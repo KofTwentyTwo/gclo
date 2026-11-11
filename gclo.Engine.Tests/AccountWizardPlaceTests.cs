@@ -63,7 +63,7 @@ public sealed class AccountWizardPlaceTests : IDisposable
 
 
    private AccountWizardViewModel ChoosingWizard(string? defaultToken = null)
-       => new(_store, ListerOf, _defaults, defaultToken: () => defaultToken);
+       => new(_store, ListerOf, _defaults, defaultTokenOf: place => place.Kind == ForgeKind.GitHub ? defaultToken : null);
 
 
 
@@ -538,10 +538,12 @@ public sealed class AccountWizardPlaceTests : IDisposable
       Assert.Equal("Enter a token to continue.", wizard.TokenError);
       Assert.Empty(_sent);
 
-      // The choice is not shown here. Set all the same, it is refused: nothing is sent.
+      // The choice is not shown here: the server has no default token. Set all the same, there is nothing to send.
       wizard.TokenChoiceIndex = 0;
       Assert.False(await wizard.TryAdvanceAsync());
-      Assert.Equal("The default token is a GitHub token. This account needs a token of its own.", wizard.TokenError);
+      Assert.Equal(
+          "The default token is no longer saved. Save one in Settings, or use a different token for this account.",
+          wizard.TokenError);
       Assert.Empty(_sent);
 
       // Back on GitHub, it is on offer again, and preselected as for any new account.

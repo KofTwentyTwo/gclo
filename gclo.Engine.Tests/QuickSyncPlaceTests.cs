@@ -561,11 +561,70 @@ public sealed class QuickSyncPlaceTests : IDisposable
       Task asking = workspace.FindOrganizationsCommand.ExecuteAsync(null);
 
       workspace.ServerIsBeingEdited();
-      await asking;
+      await asking.WaitAsync(TimeSpan.FromSeconds(10)); // a lookup that is not ended fails here, and does not wait for ever
 
       Assert.True(answer.Task.IsCanceled);
       Assert.Empty(workspace.Organizations);
       Assert.False(workspace.IsLoadingOrgs);
+   }
+
+
+
+   [Fact]
+   public async Task ARowWhosePathsAreToBeResolved_IsNotResolved_WhileTheAddressIsNoPlace()
+   {
+      WorkspaceViewModel workspace = QuickSync();
+      workspace.IsOnGitea = true;
+      workspace.Server = Server;
+      await TypeTokenAsync(workspace, "gitea-token-0123456789");
+      workspace.Organization = "org-at-git.example.test";
+      workspace.TargetFolder = _root;
+      await workspace.LoadReposCommand.ExecuteAsync(null);
+      _git.CloneHandler = (_, path, _, _, _) => string.Equals(Path.GetFileName(path), "alpha", StringComparison.Ordinal)
+          ? Task.FromException(new InvalidRepositoryPathsException([new InvalidPathInfo("aux", "'aux' is a reserved Windows device name", "aux_")]))
+          : Task.CompletedTask;
+      await workspace.SyncCommand.ExecuteAsync(null);
+      RepoItemViewModel alpha = Assert.Single(workspace.Repos, row => row.HasPathIssue);
+      int asked = 0;
+      workspace.RecoveryInteraction = _ =>
+      {
+         asked++;
+         return Task.FromResult<PathRecoveryDecision?>(null);
+      };
+      Assert.True(workspace.ResolvePathsCommand.CanExecute(alpha));
+
+      // The address on the card is being typed over: the row is of a server the card no longer names.
+      workspace.ServerIsBeingEdited();
+
+      Assert.False(workspace.ResolvePathsCommand.CanExecute(alpha));
+      await workspace.ResolvePathsCommand.ExecuteAsync(alpha);
+      Assert.Equal(0, asked);
+
+      // The same address after all: the row can be resolved again.
+      workspace.Server = Server;
+
+      Assert.True(workspace.ResolvePathsCommand.CanExecute(alpha));
+      await workspace.ResolvePathsCommand.ExecuteAsync(alpha);
+      Assert.Equal(1, asked);
+   }
+
+
+
+   [Fact]
+   public async Task OnGitHub_ThereIsNoAddressToBeEdited_AndSayingSoChangesNothing()
+   {
+      WorkspaceViewModel workspace = QuickSyncOnGitHub();
+      await TypeTokenAsync(workspace, "ghp_token_0123456789");
+      workspace.Organization = "org-at-GitHub";
+      workspace.TargetFolder = @"C:\mirror";
+      Assert.True(workspace.LoadReposCommand.CanExecute(null));
+
+      workspace.ServerIsBeingEdited();
+
+      Assert.True(workspace.LoadReposCommand.CanExecute(null));
+      Assert.True(workspace.FindOrganizationsCommand.CanExecute(null));
+      Assert.NotNull(workspace.ToAccountSeed());
+      Assert.Equal("Connect to GitHub", workspace.ConnectTitle);
    }
 
 
@@ -756,25 +815,25 @@ public sealed class QuickSyncPlaceTests : IDisposable
 
 
    [Fact]
-   public void AChangeOfTheDefaultTokenInSettings_ReachesQuickSync_OnlyWhileItIsOnGitHub()
+   public void AChangeOfGitHubsDefaultToken_ReachesQuickSync_OnlyWhileItIsOnGitHub()
    {
       WorkspaceViewModel workspace = QuickSync();
 
-      workspace.OnDefaultTokenChanged(previous: null, current: "ghp_default_0123456789");
+      workspace.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: "ghp_default_0123456789");
       Assert.Equal("", workspace.Token); // no place was chosen yet
 
       workspace.PlaceIndex = 0;
-      workspace.OnDefaultTokenChanged(previous: null, current: "ghp_default_0123456789");
+      workspace.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: "ghp_default_0123456789");
       Assert.Equal("ghp_default_0123456789", workspace.Token);
 
       workspace.IsOnGitea = true;
       workspace.Server = Server;
-      workspace.OnDefaultTokenChanged(previous: null, current: "ghp_another_0123456789"); // the box is empty, as "previous" says
+      workspace.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: "ghp_another_0123456789"); // the box is empty, as "previous" says
 
       Assert.Equal("", workspace.Token); // a GitHub token: not for this place
 
       workspace.Server = "http://not-usable";
-      workspace.OnDefaultTokenChanged(previous: null, current: "ghp_another_0123456789");
+      workspace.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: "ghp_another_0123456789");
 
       Assert.Equal("", workspace.Token);
    }
@@ -866,15 +925,20 @@ public sealed class QuickSyncPlaceTests : IDisposable
       Assert.Contains("Place = git.example.test", seed.ToString(), StringComparison.Ordinal);
       Assert.Contains("Place = GitHub", (seed with { Place = null }).ToString(), StringComparison.Ordinal);
 
-      // The wizard that saves it: on that place, with that place's lister, and never on the default token (a GitHub token).
+      // The wizard that saves it: on that place, with that place's lister. The server has no default token, so the
+      // account gets the token of the connection as its own.
       var vault = new InMemoryVault();
       var store = new AccountsStore(vault, _root);
-      var wizard = new AccountWizardViewModel(
-          store, ListersOf(s_gitea).Organizations, seed, defaultToken: () => "gitea-token-0123456789");
+      var wizard = new AccountWizardViewModel(store, ListersOf(s_gitea).Organizations, seed, defaultToken: () => null);
       Assert.False(wizard.CanChoosePlace);
       Assert.Equal("This account is on git.example.test.", wizard.PlaceNote);
       Assert.False(wizard.UseDefaultToken);
       Assert.False(wizard.OffersTokenChoice);
+
+      // Had the connection run on the default token of its server, the account would use that one.
+      Assert.True(new AccountWizardViewModel(
+          store, ListersOf(s_gitea).Organizations, seed,
+          defaultTokenOf: place => place.Equals(s_gitea) ? "gitea-token-0123456789" : null).UseDefaultToken);
 
       wizard.Name = "Platform";
       while(wizard.Step < 4)
@@ -1011,6 +1075,53 @@ public sealed class QuickSyncPlaceTests : IDisposable
 
 
 
+   [Fact]
+   public void WhatAWindowRemembers_GoesOverTheSettingsAsTheyAreOnDiskNow_AndNotOverWhatAnotherWindowSaved()
+   {
+      Directory.CreateDirectory(_root);
+      string file = Path.Combine(_root, "settings.json");
+      var account = Guid.NewGuid();
+
+      // Two windows read the same settings.
+      new AppSettings { Theme = "Light" }.Save(directory: _root);
+      var first = AppSettings.Load(directory: _root);
+      var second = AppSettings.Load(directory: _root);
+
+      // The second saves its Settings dialog, connects Quick Sync, and closes.
+      second.Theme = "Dark";
+      second.DefaultGiteaServer = Server;
+      Assert.True(second.Save(directory: _root));
+      second.RememberQuickSync(new QuickSyncConnection(s_gitea, "platform", @"C:\mirror", CreateOrgSubfolder: true));
+      second.LastWorkspace = StartWorkspace.QuickSync;
+      Assert.True(second.SaveWhatWasRemembered(directory: _root));
+
+      // The first, which read the settings before all that, closes on an account's page.
+      first.LastWorkspace = account;
+      Assert.True(first.SaveWhatWasRemembered(directory: _root));
+
+      var read = AppSettings.Load(directory: _root);
+      Assert.Equal(account, read.LastWorkspace); // the window that closed last
+      Assert.Equal("Dark", read.Theme); // not put back to what the first window had read
+      Assert.Equal(Server, read.DefaultGiteaServer);
+      Assert.Equal(new QuickSyncConnection(s_gitea, "platform", @"C:\mirror", CreateOrgSubfolder: true), read.RememberedQuickSync());
+
+      // A connection the first window makes itself is written.
+      first.RememberQuickSync(new QuickSyncConnection(ForgeEndpoint.GitHub, "acme", @"C:\work", CreateOrgSubfolder: false));
+      Assert.True(first.SaveWhatWasRemembered(directory: _root));
+      read = AppSettings.Load(directory: _root);
+      Assert.Equal(new QuickSyncConnection(ForgeEndpoint.GitHub, "acme", @"C:\work", CreateOrgSubfolder: false), read.RememberedQuickSync());
+      Assert.Equal("Dark", read.Theme);
+
+      // A file that cannot be read any more is left for the user to mend, and it is said.
+      File.WriteAllText(file, "{ this is where the file went wrong");
+      var log = new RecordingActivityLog();
+      Assert.False(first.SaveWhatWasRemembered(log, _root));
+      Assert.Contains("went wrong", File.ReadAllText(file), StringComparison.Ordinal);
+      Assert.Contains("What the app remembers was not written: the settings file cannot be read just now.", log.Messages, StringComparer.Ordinal);
+   }
+
+
+
    // ---------------------------------------------------------------- which workspace the app opens on
 
    [Fact]
@@ -1041,7 +1152,7 @@ public sealed class QuickSyncPlaceTests : IDisposable
    // ---------------------------------------------------------------- the default token saved for a place
 
    [Fact]
-   public void TheDefaultTokenInSettings_IsGitHubs_AndNoneForAnotherPlace()
+   public void GitHubsDefaultToken_IsNoneForAnotherPlace()
    {
       var vault = new InMemoryVault();
 

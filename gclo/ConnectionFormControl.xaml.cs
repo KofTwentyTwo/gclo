@@ -309,9 +309,19 @@ public sealed partial class ConnectionFormControl : UserControl
    /// </summary>
    private void ServerBox_TextChanged(object sender, TextChangedEventArgs e)
    {
-      if(ViewModel is not null && !string.Equals(ServerBox.Text, ViewModel.Server, StringComparison.Ordinal))
+      if(ViewModel is null)
+      {
+         return;
+      }
+
+      if(!string.Equals(ServerBox.Text, ViewModel.Server, StringComparison.Ordinal))
       {
          ViewModel.ServerIsBeingEdited();
+      }
+      else if(ViewModel.AsksForServer)
+      {
+         // The text is the address that was taken again (typed back): it is the place once more, without leaving the box.
+         ViewModel.Server = ServerBox.Text;
       }
    }
 
