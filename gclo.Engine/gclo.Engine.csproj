@@ -13,7 +13,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <Description>Core engine for gclo (Git Clone Large Organizations): lists every repository in a GitHub organization or user account and clones or fast-forward-pulls them all in parallel, with Windows path validation and rename/skip recovery.</Description>
+    <Description>Core engine for gclo (Git Clone Large Organizations): lists every repository of an organization or user account on GitHub or on a Gitea server and clones or fast-forward-pulls them all in parallel, with Windows path validation and rename/skip recovery.</Description>
     <Authors>James Maes</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://git.kof22.com/KofTwentyTwo/gclo</RepositoryUrl>

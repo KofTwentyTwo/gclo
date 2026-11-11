@@ -21,7 +21,8 @@ namespace gclo.Cli;
 internal static class Program
 {
    private const string RootHelp = """
-        gclo (Git Clone Large Organizations) - clone or update every repository of a GitHub organization or user account.
+        gclo (Git Clone Large Organizations) - clone or update every repository of an organization or user account
+        on GitHub or on a Gitea server.
 
         Usage:
           gclo sync --org <name> --target <folder> [options]
@@ -60,7 +61,7 @@ internal static class Program
 
         Exit codes:
           0 success, 1 completed with failures or canceled, 2 usage or fatal error,
-          3 token rejected or access denied, 4 rate limit, network or GitHub-side
+          3 token rejected or access denied, 4 rate limit, network or server-side
           failure (retry later),
           70 unexpected error (details in the activity log).
         """;

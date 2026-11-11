@@ -2,7 +2,7 @@
   <img src="docs/images/gclo-lockup.png" width="440" alt="gclo — Git Clone Large Organizations" />
 </p>
 
-<p align="center"><b>Clone an entire GitHub organization. Keep it up to date. In parallel.</b></p>
+<p align="center"><b>Clone an entire GitHub or Gitea organization. Keep it up to date. In parallel.</b></p>
 
 <p align="center">
   <a href="https://scorecard.dev/viewer/?uri=github.com/KofTwentyTwo/gclo"><img src="https://api.scorecard.dev/projects/github.com/KofTwentyTwo/gclo/badge" alt="OpenSSF Scorecard" /></a>
