@@ -129,6 +129,22 @@
                         TextWrapping="Wrap"
                         Text="Once this connection works, save it as an account (Edit on the connection chip) so the token is kept for you."
                         Visibility="{x:Bind local:StatusFormat.VisibleIfNot(IsAccountWorkspace), Mode=OneTime}" />
+                    <!-- A saved account: its token is not typed here (#182). -->
+                    <TextBlock
+                        AutomationProperties.AutomationId="ConnectAccountTokenNote"
+                        Style="{ThemeResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextWrapping="Wrap"
+                        Text="{x:Bind AccountTokenNote, Mode=OneTime}"
+                        Visibility="{x:Bind local:StatusFormat.VisibleIf(IsAccountWorkspace), Mode=OneTime}" />
+                    <TextBlock
+                        x:Name="MissingTokenTextBlock"
+                        AutomationProperties.AutomationId="ConnectMissingTokenText"
+                        AutomationProperties.LiveSetting="Polite"
+                        Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                        TextWrapping="Wrap"
+                        Text="{x:Bind ViewModel.MissingTokenAdvice, Mode=OneWay}"
+                        Visibility="{x:Bind MissingTokenVisibility(ViewModel.MissingTokenAdvice), Mode=OneWay}" />
 
                     <StackPanel Orientation="Horizontal" Spacing="12">
                         <Button
@@ -142,6 +158,12 @@
                                 <KeyboardAccelerator Key="R" Modifiers="Control" />
                             </Button.KeyboardAccelerators>
                         </Button>
+                        <Button
+                            AutomationProperties.AutomationId="ConnectEditAccountButton"
+                            Content="Edit account…"
+                            IsEnabled="{x:Bind ViewModel.CanEditInputs, Mode=OneWay}"
+                            Click="EditAccountButton_Click"
+                            Visibility="{x:Bind local:StatusFormat.VisibleIf(IsAccountWorkspace), Mode=OneTime}" />
                         <ProgressRing
                             Width="20"
                             Height="20"

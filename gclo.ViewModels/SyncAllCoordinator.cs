@@ -40,9 +40,12 @@ public sealed class SyncAllCoordinator(IActivityLog log)
    /// <summary>
    /// Syncs each workspace of <paramref name="accountWorkspaces"/> in list order,
    /// loading its repositories first when needed. A workspace is skipped (counted,
-   /// logged, never fatal) when it is already busy, when its repositories cannot be
-   /// loaded, or when its sync command cannot run. Canceling <paramref name="ct"/>
-   /// stops the queue after the in-flight account rather than canceling its sync.
+   /// logged, never fatal) when it is already busy or has nothing to sync. One that
+   /// cannot be synced (it has no token, its repositories cannot be loaded, its sync
+   /// cannot start) is left out too, and counted and announced as failed, not as
+   /// skipped: the pass must not read as a success when an account was not synced
+   /// (#182). Canceling <paramref name="ct"/> stops the queue after the in-flight
+   /// account rather than canceling its sync.
    /// </summary>
    public async Task<SyncAllResult> RunAsync(
        IReadOnlyList<WorkspaceViewModel> accountWorkspaces, CancellationToken ct)
@@ -80,6 +83,7 @@ public sealed class SyncAllCoordinator(IActivityLog log)
       int ran = 0;
       int skipped = 0;
       int failed = 0;
+      int couldNotSync = 0;
 
       for(int i = 0; i < accountWorkspaces.Count; i++)
       {
@@ -95,7 +99,7 @@ public sealed class SyncAllCoordinator(IActivityLog log)
                Announce(accountWorkspaces[rest], SyncAllAccountState.Skipped);
             }
             _log.Info("Sync all: canceled — remaining accounts were not started.");
-            return new SyncAllResult(ran, skipped, WasCanceled: true, failed);
+            return new SyncAllResult(ran, skipped, WasCanceled: true, failed, NotStarted: accountWorkspaces.Count - i, couldNotSync);
          }
 
          if(workspace.IsRunning || workspace.IsLoadingRepos || workspace.IsResolvingPaths)
@@ -113,9 +117,10 @@ public sealed class SyncAllCoordinator(IActivityLog log)
             // Whichever source the account's token comes from, it holds none: say
             // which, instead of a sync that cannot start or a generic auth failure
             // that sends the user to the wrong place.
-            skipped++;
-            Announce(workspace, SyncAllAccountState.Skipped);
-            _log.Info($"Sync all: skipped '{workspace.DisplayName}' — {missingToken}");
+            couldNotSync++;
+            failed++;
+            Announce(workspace, SyncAllAccountState.Failed);
+            _log.Info($"Sync all: '{workspace.DisplayName}' could not be synced — {missingToken}");
             continue;
          }
 
@@ -128,10 +133,11 @@ public sealed class SyncAllCoordinator(IActivityLog log)
             await workspace.LoadReposCommand.ExecuteAsync(null);
             if(!workspace.HasLoadedRepos)
             {
-               skipped++;
-               Announce(workspace, SyncAllAccountState.Skipped);
+               couldNotSync++;
+               failed++;
+               Announce(workspace, SyncAllAccountState.Failed);
                _log.Info(
-                   $"Sync all: skipped '{workspace.DisplayName}' — its repositories could not be loaded.");
+                   $"Sync all: '{workspace.DisplayName}' could not be synced — its repositories could not be loaded.");
                continue;
             }
          }
@@ -151,10 +157,31 @@ public sealed class SyncAllCoordinator(IActivityLog log)
             // The sync never ran its repositories (its target folder could not be
             // used, its token went away at that moment): that is not a success with
             // nothing to report.
-            skipped++;
+            couldNotSync++;
             failed++;
             Announce(workspace, SyncAllAccountState.Failed);
             _log.Info($"Sync all: '{workspace.DisplayName}' could not be synced — {workspace.ResultMessage}");
+            continue;
+         }
+
+         if(workspace.ResultKind == RunResultKind.Canceled)
+         {
+            ///////////////////////////////////////////////////////////////////////////
+            // Its own sync was canceled (in its workspace, or because the account  //
+            // was edited meanwhile) and left repositories unsynced: that is not a  //
+            // synced account. The pass itself goes on.                             //
+            ///////////////////////////////////////////////////////////////////////////
+            if(workspace.HasFailedRepos)
+            {
+               couldNotSync++;
+               failed++;
+            }
+            else
+            {
+               skipped++;
+            }
+            Announce(workspace, workspace.HasFailedRepos ? SyncAllAccountState.Failed : SyncAllAccountState.Skipped);
+            _log.Info($"Sync all: '{workspace.DisplayName}' was canceled before it finished.");
             continue;
          }
 
@@ -169,7 +196,7 @@ public sealed class SyncAllCoordinator(IActivityLog log)
          _log.Info($"Sync all: finished '{workspace.DisplayName}'.");
       }
 
-      return new SyncAllResult(ran, skipped, WasCanceled: false, failed);
+      return new SyncAllResult(ran, skipped, WasCanceled: false, failed, CouldNotSync: couldNotSync);
    }
 
 

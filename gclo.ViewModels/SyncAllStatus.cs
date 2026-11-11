@@ -158,12 +158,29 @@ public sealed partial class SyncAllStatus : ObservableObject
    /// <summary>The sentence that sums up a finished or canceled pass.</summary>
    internal static string Describe(SyncAllResult result)
    {
-      string summary = $"{Count(result.Ran, "account")} synced, {result.Skipped.ToString(CultureInfo.InvariantCulture)} skipped.";
-      return result.Failed switch
+      ///////////////////////////////////////////////////////////////////////////////
+      // How many of how many, then each group that was not synced once: an       //
+      // account that could not be synced is one that needs attention, not also    //
+      // one that was "skipped" (#182).                                            //
+      ///////////////////////////////////////////////////////////////////////////////
+      string summary = $"{result.Ran.ToString(CultureInfo.InvariantCulture)} of {Count(result.Total, "account")} synced.";
+      summary += result.Failed switch
       {
-         0 => summary,
-         1 => summary + " 1 account needs attention; it is marked in the pane.",
-         _ => summary + $" {result.Failed.ToString(CultureInfo.InvariantCulture)} accounts need attention; they are marked in the pane.",
+         0 => "",
+         1 => " 1 account needs attention; it is marked in the pane.",
+         _ => $" {result.Failed.ToString(CultureInfo.InvariantCulture)} accounts need attention; they are marked in the pane.",
+      };
+      summary += result.Skipped switch
+      {
+         0 => "",
+         1 => " 1 account was skipped (busy, canceled, or nothing selected).",
+         _ => $" {result.Skipped.ToString(CultureInfo.InvariantCulture)} accounts were skipped (busy, canceled, or nothing selected).",
+      };
+      return summary + result.NotStarted switch
+      {
+         0 => "",
+         1 => " 1 account was not started.",
+         _ => $" {result.NotStarted.ToString(CultureInfo.InvariantCulture)} accounts were not started.",
       };
    }
 

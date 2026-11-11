@@ -641,9 +641,9 @@ public sealed class WorkspaceViewModelTests : IDisposable
       Assert.Equal(SyncStatus.Done, byName["bravo"].Status);
       Assert.Null(byName["bravo"].Error);
       Assert.Equal(SyncStatus.Done, byName["alpha"].Status); // untouched by the retry
-      Assert.True(byName["bravo"].IsSelected); // retry selected exactly the failures
-      Assert.False(byName["alpha"].IsSelected);
-      Assert.False(byName["charlie"].IsSelected);
+      Assert.True(byName["bravo"].IsSelected); // the retry ran exactly the failure, and the selection was not touched (#182)
+      Assert.True(byName["alpha"].IsSelected);
+      Assert.True(byName["charlie"].IsSelected);
       Assert.Equal(1, vm.TotalCount); // run-scoped (#22): the retry run was just bravo
       Assert.Equal(1, vm.CompletedCount);
       Assert.False(vm.RetryFailedCommand.CanExecute(null)); // nothing failed anymore

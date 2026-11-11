@@ -608,11 +608,13 @@ public sealed partial class MainWindow : Window
                         CreateBadge("InformationalDotInfoBadgeStyle", "SystemFillColorSolidNeutralBrush"),
                  SyncAllAccountState.Succeeded =>
                         CreateBadge("SuccessIconInfoBadgeStyle", "SystemFillColorSuccessBrush"),
-                 SyncAllAccountState.Failed =>
+                 SyncAllAccountState.Failed when viewModel.HasFailedRepos =>
                         CreateBadge(
                             "CriticalValueInfoBadgeStyle",
                             "SystemFillColorCriticalBrush",
                             viewModel.Repos.Count(r => r.Status == SyncStatus.Failed)),
+                 SyncAllAccountState.Failed => // it could not be synced at all: there is no number to show
+                        CreateBadge("CriticalDotInfoBadgeStyle", "SystemFillColorCriticalBrush"),
                  SyncAllAccountState.Skipped =>
                         CreateBadge("CautionDotInfoBadgeStyle", "SystemFillColorCautionBrush"),
                  _ => null, // Running is covered by IsRunning above

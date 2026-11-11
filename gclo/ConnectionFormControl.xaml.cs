@@ -86,15 +86,30 @@ public sealed partial class ConnectionFormControl : UserControl
    private void OnLoaded(object sender, RoutedEventArgs e)
    {
       bool hasToken = ViewModel is not null && ViewModel.Token.Length > 0;
+      bool savedWithAnAccount = ViewModel?.AccountId is not null;
       TokenBox.Password = hasToken ? SettingsTokenState.Mask : "";
-      TokenBox.PlaceholderText = "ghp_…";
-      // The organization placeholder must not ask for a token the box already has.
-      OrgBox.PlaceholderText = hasToken ? "Choose an organization, or type one" : "Paste a token first, or type an org";
-      ToolTipService.SetToolTip(TokenBox, !hasToken
-          ? "Fine-grained or classic PAT with repository read access; used for the GitHub API and git over HTTPS. Never written to disk or logs."
-          : ViewModel!.AccountId is null
-              ? "Using the saved default token from Settings. Type here to use a different one for this session."
-              : "Using this account's token. Type here to use a different one for this session.");
+
+      ///////////////////////////////////////////////////////////////////////////////
+      // An account's token is read from where it is saved each time it is used    //
+      // (#158). A token typed here would look taken and then not be used, so the  //
+      // box of an account takes none; the page says where the token is changed    //
+      // (#182).                                                                   //
+      ///////////////////////////////////////////////////////////////////////////////
+      TokenBox.IsEnabled = !savedWithAnAccount;
+      TokenBox.PlaceholderText = !savedWithAnAccount ? "ghp_…"
+          : ViewModel!.UsesDefaultToken ? "No default token is saved"
+          : "No token is saved for this account";
+      // The organization placeholder must not ask for a token the box already has, or cannot take.
+      OrgBox.PlaceholderText = hasToken ? "Choose an organization, or type one"
+          : savedWithAnAccount ? "Type an organization or account"
+          : "Paste a token first, or type an org";
+      ToolTipService.SetToolTip(TokenBox, savedWithAnAccount
+          ? ViewModel!.UsesDefaultToken
+              ? "This account uses the default token from File > Settings."
+              : "This account's token is set with Edit account…, not typed here."
+          : !hasToken
+              ? "Fine-grained or classic PAT with repository read access; used for the GitHub API and git over HTTPS. Never written to disk or logs."
+              : "Using the saved default token from Settings. Type here to use a different one for this session.");
    }
 
 
@@ -105,7 +120,7 @@ public sealed partial class ConnectionFormControl : UserControl
    private void TokenBox_PasswordChanged(object sender, RoutedEventArgs e)
    {
       string typed = ((PasswordBox)sender).Password;
-      if(ViewModel is not null && !string.Equals(typed, SettingsTokenState.Mask, StringComparison.Ordinal))
+      if(ViewModel is not null && ViewModel.AccountId is null && !string.Equals(typed, SettingsTokenState.Mask, StringComparison.Ordinal))
       {
          ViewModel.Token = typed;
       }

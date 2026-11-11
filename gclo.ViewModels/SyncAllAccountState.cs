@@ -18,9 +18,16 @@ public enum SyncAllAccountState
    /// <summary>Finished with no failed repositories.</summary>
    Succeeded,
 
-   /// <summary>Finished, but at least one repository failed.</summary>
+   /// <summary>
+   /// Needs attention: its sync finished with at least one failed repository, or it
+   /// could not be synced (no token, repositories that could not be loaded, a sync
+   /// that could not start).
+   /// </summary>
    Failed,
 
-   /// <summary>Not run: busy, unloadable, nothing to sync, or the queue was canceled.</summary>
+   /// <summary>
+   /// Not synced, and nothing is wrong with it: busy, nothing to sync, its own sync
+   /// was canceled, or the queue was canceled before its turn.
+   /// </summary>
    Skipped,
 }

@@ -113,6 +113,20 @@ public sealed partial class WorkspacePage : UserControl
 
 
 
+   /// <summary>Where an account's token is set, said on its connect card: the box there takes none.</summary>
+   public string AccountTokenNote
+       => ViewModel.UsesDefaultToken
+           ? "This account uses the default token from File > Settings."
+           : "This account's token is set with Edit account…, not typed here.";
+
+
+
+   /// <summary>Whether the connect card says that the account has no token, and where to save one.</summary>
+   public Visibility MissingTokenVisibility(string? advice)
+       => string.IsNullOrEmpty(advice) ? Visibility.Collapsed : Visibility.Visible;
+
+
+
    /// <summary>
    /// Unhooks every subscription this page made on its (longer-lived) view model, so
    /// a page the shell releases while its workspace is idle can be collected: the
@@ -215,6 +229,11 @@ public sealed partial class WorkspacePage : UserControl
          // LiveRegionChanged automatically, so each StatusText update must raise
          // it here. Enqueued so the binding has pushed the new text first.
          DispatcherQueue.TryEnqueue(RaiseStatusLiveRegionChanged);
+      }
+      else if(string.Equals(e.PropertyName, nameof(WorkspaceViewModel.MissingTokenAdvice), StringComparison.Ordinal))
+      {
+         // The same goes for the connect card's line about a missing token.
+         DispatcherQueue.TryEnqueue(() => RaiseLiveRegionChanged(MissingTokenTextBlock));
       }
       else if(e.PropertyName is nameof(WorkspaceViewModel.SelectedCount)
           or nameof(WorkspaceViewModel.LoadedOrganization))
@@ -445,10 +464,14 @@ public sealed partial class WorkspacePage : UserControl
 
 
 
-   private void RaiseStatusLiveRegionChanged()
+   private void RaiseStatusLiveRegionChanged() => RaiseLiveRegionChanged(StatusTextBlock);
+
+
+
+   private static void RaiseLiveRegionChanged(FrameworkElement element)
    {
-      AutomationPeer peer = Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(StatusTextBlock)
-          ?? Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(StatusTextBlock);
+      AutomationPeer peer = Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(element)
+          ?? Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(element);
       peer?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged);
    }
 

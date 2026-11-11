@@ -220,6 +220,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
    [ObservableProperty]
    [NotifyCanExecuteChangedFor(nameof(LoadReposCommand))]
+   [NotifyPropertyChangedFor(nameof(MissingTokenDescription))]
+   [NotifyPropertyChangedFor(nameof(MissingTokenAdvice))]
    public partial string Token { get; set; }
 
    [ObservableProperty]
@@ -605,6 +607,20 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
 
    /// <summary>
+   /// What an account's page says when the account has no token to work with: where
+   /// to save one, in the words of the window's own menus. Null when it has one, and
+   /// for Quick Sync, whose token is typed into its box.
+   /// </summary>
+   public string? MissingTokenAdvice
+       => _account is null || Token.Trim().Length > 0
+           ? null
+           : AccountAsItIsNow().UsesDefaultToken
+               ? "No default token is saved. Save one in File > Settings, or give this account its own token with Edit account…"
+               : "No token is saved for this account. Choose Edit account… and enter one.";
+
+
+
+   /// <summary>
    /// Tells the workspace that the default token in Settings was saved, replaced, or
    /// removed. An account workspace takes its token from its source again. Quick
    /// Sync follows only when its box still holds what Settings put there
@@ -967,7 +983,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          RebuildReposIndex();
          LoadedOrganization = organization;
          HasLoadedRepos = true;
-         StatusText = $"{Repos.Count} repositories loaded.";
+         StatusText = Repos.Count == 1 ? "1 repository loaded." : $"{Repos.Count} repositories loaded.";
          _log.Info($"Loaded {Repos.Count} repositories for organization '{organization}'.");
       }
       catch(Exception ex)
@@ -1016,7 +1032,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          // token leaves the table (failures, their paths, the retry) as it was.
          string token = TokenToUseNow();
 
-         var selected = Repos.Where(r => r.IsSelected).ToList();
+         List<RepoItemViewModel> selected = _runOnly ?? [.. Repos.Where(r => r.IsSelected)];
          foreach(RepoItemViewModel item in selected)
          {
             item.Status = SyncStatus.Queued;
@@ -1032,7 +1048,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          RebuildFilteredRepos(); // every selected row just went back to Queued
 
          string targetRoot = EffectiveTargetRoot;
-         StatusText = $"Syncing {selected.Count} repositories...";
+         StatusText = selected.Count == 1 ? "Syncing 1 repository..." : $"Syncing {selected.Count} repositories...";
          _log.Info($"Sync started: {selected.Count} repositories into '{targetRoot}'.");
 
          // Constructed on the UI thread: the delivery captures the WinUI
@@ -1129,31 +1145,35 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
 
 
-   /// <summary>Selects exactly the failed repositories and runs the same sync path again.</summary>
+   /// <summary>
+   /// Runs the same sync path again for exactly the failed repositories. The
+   /// selection is not touched: the retry is one run, not a change of what the next
+   /// sync covers. (It used to select the failed rows; a later Sync, or Sync all,
+   /// then synced only those and reported the account as synced, #182.)
+   /// </summary>
    [RelayCommand(CanExecute = nameof(CanRetryFailed))]
    private async Task RetryFailedAsync()
    {
-      _log.Info($"Retrying {Repos.Count(r => r.Status == SyncStatus.Failed)} failed repositories.");
-      // One batch: per-row recounts and command re-queries would be O(n^2) (#30).
-      _syncingSelection = true;
+      _runOnly = [.. Repos.Where(r => r.Status == SyncStatus.Failed)];
+      _log.Info($"Retrying {_runOnly.Count} failed repositories.");
       try
       {
-         foreach(RepoItemViewModel item in Repos)
-         {
-            item.IsSelected = item.Status == SyncStatus.Failed;
-         }
+         // Executing SyncCommand itself keeps SyncCancelCommand working for retry runs.
+         await SyncCommand.ExecuteAsync(null);
       }
       finally
       {
-         _syncingSelection = false;
+         _runOnly = null;
       }
-      RecomputeSelectedCount();
-      UpdateAllSelectedFromItems();
-      SyncCommand.NotifyCanExecuteChanged();
-
-      // Executing SyncCommand itself keeps SyncCancelCommand working for retry runs.
-      await SyncCommand.ExecuteAsync(null);
    }
+
+
+
+   /// <summary>
+   /// The repositories the run that is starting takes instead of the selected ones;
+   /// null for an ordinary sync. Set by <see cref="RetryFailedAsync"/> for its one run.
+   /// </summary>
+   private List<RepoItemViewModel>? _runOnly;
 
 
 

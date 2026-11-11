@@ -178,7 +178,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
 
    [Fact]
-   public async Task RunAsync_DefaultTokenAccount_WithoutADefaultToken_IsSkipped_NotRun()
+   public async Task RunAsync_DefaultTokenAccount_WithoutADefaultToken_NeedsAttention_AndIsNotRun()
    {
       WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: false);
       Assert.True(shared.UsesDefaultToken);
@@ -188,10 +188,9 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
       SyncAllResult result = await _coordinator.RunAsync([shared], CancellationToken.None);
 
-      Assert.Equal(0, result.Ran);
-      Assert.Equal(1, result.Skipped);
-      Assert.Equal([SyncAllAccountState.Queued, SyncAllAccountState.Skipped], states);
-      Assert.Empty(_lister.Organizations); // never asked GitHub: skipped before loading
+      Assert.Equal(new SyncAllResult(Ran: 0, Skipped: 0, WasCanceled: false, Failed: 1, CouldNotSync: 1), result);
+      Assert.Equal([SyncAllAccountState.Queued, SyncAllAccountState.Failed], states); // not a success with one skipped (#182)
+      Assert.Empty(_lister.Organizations); // never asked GitHub: stopped before loading
    }
 
 
@@ -298,7 +297,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
 
    [Fact]
-   public async Task RunAsync_SkipsAWorkspaceWhoseLoadFails_AndMovesOn()
+   public async Task RunAsync_AWorkspaceWhoseLoadFails_NeedsAttention_AndThePassMovesOn()
    {
       _lister.Handler = org => string.Equals(org, "org-alpha"
 , StringComparison.Ordinal) ? throw new InvalidOperationException("org not found")
@@ -309,7 +308,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
       SyncAllResult result = await _coordinator.RunAsync(new[] { alpha, beta }, CancellationToken.None);
 
-      Assert.Equal(new SyncAllResult(Ran: 1, Skipped: 1, WasCanceled: false), result);
+      Assert.Equal(new SyncAllResult(Ran: 1, Skipped: 0, WasCanceled: false, Failed: 1, CouldNotSync: 1), result);
       Assert.False(alpha.HasLoadedRepos);
       Assert.Equal(new[] { "org-beta-repo" }, git.ClonedRepoNames);
    }
@@ -354,7 +353,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
       gate.SetResult(); // ...which must still run to completion
       SyncAllResult result = await run.WaitAsync(TimeSpan.FromSeconds(30));
 
-      Assert.Equal(new SyncAllResult(Ran: 1, Skipped: 0, WasCanceled: true), result);
+      Assert.Equal(new SyncAllResult(Ran: 1, Skipped: 0, WasCanceled: true, NotStarted: 1), result);
       Assert.Equal(SyncStatus.Done, alpha.Repos[0].Status); // finished, not canceled
       Assert.False(alpha.IsRunning);
       Assert.False(beta.HasLoadedRepos); // the second account never started
@@ -374,7 +373,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
       SyncAllResult result = await _coordinator.RunAsync(new[] { workspace }, cts.Token);
 
-      Assert.Equal(new SyncAllResult(Ran: 0, Skipped: 0, WasCanceled: true), result);
+      Assert.Equal(new SyncAllResult(Ran: 0, Skipped: 0, WasCanceled: true, NotStarted: 1), result);
       Assert.False(workspace.HasLoadedRepos);
       Assert.Empty(git.CloneCalls);
    }
@@ -497,15 +496,14 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
 
    [Fact]
-   public async Task RunAsync_DefaultTokenAccount_WhoseTokenWasRemovedAfterItOpened_IsSkipped()
+   public async Task RunAsync_DefaultTokenAccount_WhoseTokenWasRemovedAfterItOpened_NeedsAttention()
    {
       WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: true);
       _vault.Delete(AppSettings.DefaultTokenVaultId); // removed in Settings meanwhile
 
       SyncAllResult result = await _coordinator.RunAsync([shared], CancellationToken.None);
 
-      Assert.Equal(0, result.Ran);
-      Assert.Equal(1, result.Skipped);
+      Assert.Equal(new SyncAllResult(Ran: 0, Skipped: 0, WasCanceled: false, Failed: 1, CouldNotSync: 1), result);
       Assert.Empty(_lister.Organizations); // GitHub was never asked with the old token
    }
 
@@ -514,7 +512,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
    // ---------------------------------------------------------------- review of #157: no success for a sync that never ran
 
    [Fact]
-   public async Task RunAsync_AnAccountWhoseOwnTokenIsGone_IsSkipped_NotReportedAsSucceeded()
+   public async Task RunAsync_AnAccountWhoseOwnTokenIsGone_NeedsAttention_NotReportedAsSucceeded()
    {
       WorkspaceViewModel workspace = CreateWorkspace("own");
       await workspace.LoadReposCommand.ExecuteAsync(null); // a loaded table: the sync command can run without a token
@@ -524,9 +522,8 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
       SyncAllResult result = await _coordinator.RunAsync([workspace], CancellationToken.None);
 
-      Assert.Equal(0, result.Ran);
-      Assert.Equal(1, result.Skipped);
-      Assert.Equal([SyncAllAccountState.Queued, SyncAllAccountState.Skipped], states);
+      Assert.Equal(new SyncAllResult(Ran: 0, Skipped: 0, WasCanceled: false, Failed: 1, CouldNotSync: 1), result);
+      Assert.Equal([SyncAllAccountState.Queued, SyncAllAccountState.Failed], states);
    }
 
 
@@ -544,8 +541,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
       SyncAllResult result = await _coordinator.RunAsync([workspace], CancellationToken.None);
 
       Assert.Equal(RunResultKind.Error, workspace.ResultKind);
-      Assert.Equal(0, result.Ran);
-      Assert.Equal(1, result.Skipped);
+      Assert.Equal(new SyncAllResult(Ran: 0, Skipped: 0, WasCanceled: false, Failed: 1, CouldNotSync: 1), result);
       Assert.Equal([SyncAllAccountState.Queued, SyncAllAccountState.Running, SyncAllAccountState.Failed], states);
    }
 
@@ -610,7 +606,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
       Assert.True(status.IsOpen); // the result stays until it is closed
       Assert.Equal(SyncAllOutcome.Finished, status.Outcome);
       Assert.Equal("Sync all finished", status.Title);
-      Assert.Equal("2 accounts synced, 0 skipped.", status.Message);
+      Assert.Equal("2 of 2 accounts synced.", status.Message);
       Assert.Null(status.CurrentAccountId);
       Assert.Null(status.Fraction);
 
@@ -630,14 +626,14 @@ public sealed class SyncAllCoordinatorTests : IDisposable
              "beta: 0 of 1 repository.",
              "beta: 1 of 1 repository.",
              "beta: starting.",
-             "2 accounts synced, 0 skipped.",
+             "2 of 2 accounts synced.",
           ],
           said);
 
       // The pass is over: what the accounts do next is no longer the bar's business.
       status.IsOpen = false;
       await alpha.SyncCommand.ExecuteAsync(null);
-      Assert.Equal("2 accounts synced, 0 skipped.", status.Message);
+      Assert.Equal("2 of 2 accounts synced.", status.Message);
       Assert.False(status.IsOpen);
    }
 
@@ -669,7 +665,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
       await run.WaitAsync(TimeSpan.FromSeconds(30));
 
       Assert.Contains(0.5, fractions);
-      Assert.Equal("1 account synced, 0 skipped.", status.Message);
+      Assert.Equal("1 of 1 account synced.", status.Message);
    }
 
 
@@ -701,7 +697,7 @@ public sealed class SyncAllCoordinatorTests : IDisposable
       Assert.True(result.WasCanceled);
       Assert.Equal(SyncAllOutcome.Canceled, status.Outcome);
       Assert.Equal("Sync all canceled", status.Title);
-      Assert.Equal("1 account synced, 0 skipped.", status.Message);
+      Assert.Equal("1 of 2 accounts synced. 1 account was not started.", status.Message);
       Assert.False(status.IsRunning);
 
       // The next pass starts clean.
@@ -727,10 +723,10 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
       SyncAllResult result = await _coordinator.RunAsync([failing, blocked, fine], CancellationToken.None);
 
-      Assert.Equal(new SyncAllResult(Ran: 2, Skipped: 1, WasCanceled: false, Failed: 2), result);
+      Assert.Equal(new SyncAllResult(Ran: 2, Skipped: 0, WasCanceled: false, Failed: 2, CouldNotSync: 1), result);
       Assert.Equal(SyncAllOutcome.FinishedWithFailures, status.Outcome);
       Assert.Equal("Sync all finished", status.Title);
-      Assert.Equal("2 accounts synced, 1 skipped. 2 accounts need attention; they are marked in the pane.", status.Message);
+      Assert.Equal("2 of 3 accounts synced. 2 accounts need attention; they are marked in the pane.", status.Message);
    }
 
 
@@ -752,8 +748,13 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
       SyncAllResult result = await _coordinator.RunAsync([failing, never], cts.Token);
 
-      Assert.Equal(new SyncAllResult(Ran: 1, Skipped: 0, WasCanceled: true, Failed: 1), result);
-      Assert.Equal("1 account synced, 0 skipped. 1 account needs attention; it is marked in the pane.", SyncAllStatus.Describe(result));
+      Assert.Equal(new SyncAllResult(Ran: 1, Skipped: 0, WasCanceled: true, Failed: 1, NotStarted: 1), result);
+      Assert.Equal(
+          "1 of 2 accounts synced. 1 account needs attention; it is marked in the pane. 1 account was not started.",
+          SyncAllStatus.Describe(result));
+      Assert.Equal(
+          "0 of 3 accounts synced. 3 accounts were not started.",
+          SyncAllStatus.Describe(new SyncAllResult(Ran: 0, Skipped: 0, WasCanceled: true, NotStarted: 3)));
    }
 
 
@@ -832,5 +833,239 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
       Assert.Throws<ArgumentNullException>(() => status.Enter(1, null!));
       Assert.Throws<ArgumentNullException>(() => status.End(null!));
+   }
+
+
+
+   // ---------------------------------------------------------------- release reviews of 1.1.1 (#182)
+
+   [Fact]
+   public async Task AnAccountThatCouldNotBeSynced_DoesNotLeaveThePassLookingLikeASuccess()
+   {
+      // Its token is gone: nothing else is wrong in the pass.
+      WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: false);
+      var status = new SyncAllStatus();
+      _coordinator.Status = status;
+
+      await _coordinator.RunAsync([shared], CancellationToken.None);
+
+      Assert.Equal(SyncAllOutcome.FinishedWithFailures, status.Outcome);
+      Assert.Equal("0 of 1 account synced. 1 account needs attention; it is marked in the pane.", status.Message);
+   }
+
+
+
+   [Theory]
+   [InlineData(false)]
+   [InlineData(true)] // a repository had failed before the cancel: the account needs attention
+   public async Task AnAccountWhoseOwnSyncWasCanceled_IsNotCountedAsSynced_AndThePassGoesOn(bool afterAFailure)
+   {
+      _lister.Handler = _ => [Repo("one"), Repo("two"), Repo("three")];
+      var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var git = new FakeGitClient
+      {
+         CloneHandler = async (_, path, _, _, ct) =>
+         {
+            if(afterAFailure && path.EndsWith("one", StringComparison.Ordinal))
+            {
+               throw new InvalidOperationException("boom"); // one at a time, in order: this one is over before the next begins
+            }
+            entered.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+         },
+      };
+      WorkspaceViewModel alpha = CreateWorkspace("alpha", git);
+      alpha.MaxConcurrency = 1;
+      WorkspaceViewModel beta = CreateWorkspace("beta");
+      var states = new List<SyncAllAccountState>();
+      _coordinator.AccountStateChanged = (id, state) =>
+      {
+         if(id == alpha.AccountId)
+         {
+            states.Add(state);
+         }
+      };
+      var status = new SyncAllStatus();
+      _coordinator.Status = status;
+
+      Task<SyncAllResult> run = _coordinator.RunAsync([alpha, beta], CancellationToken.None);
+      await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+      alpha.SyncCancelCommand.Execute(null); // Cancel in that account's own workspace
+      SyncAllResult result = await run.WaitAsync(TimeSpan.FromSeconds(30));
+
+      Assert.Equal(RunResultKind.Canceled, alpha.ResultKind);
+      Assert.Equal(
+          afterAFailure
+              ? new SyncAllResult(Ran: 1, Skipped: 0, WasCanceled: false, Failed: 1, CouldNotSync: 1)
+              : new SyncAllResult(Ran: 1, Skipped: 1, WasCanceled: false),
+          result); // beta ran
+      Assert.Equal(
+          [SyncAllAccountState.Queued, SyncAllAccountState.Running, afterAFailure ? SyncAllAccountState.Failed : SyncAllAccountState.Skipped],
+          states);
+      Assert.Equal(
+          afterAFailure
+              ? "1 of 2 accounts synced. 1 account needs attention; it is marked in the pane."
+              : "1 of 2 accounts synced. 1 account was skipped (busy, canceled, or nothing selected).",
+          status.Message);
+   }
+
+
+
+   [Theory]
+   [InlineData(true)]
+   [InlineData(false)] // one repository was not selected: it is not selected afterwards either
+   public async Task RetryFailed_LeavesTheSelectionAlone_SoTheNextSyncCoversWhatItCoveredBefore(bool allSelected)
+   {
+      _lister.Handler = _ => [Repo("one"), Repo("two"), Repo("three")];
+      bool failTwo = true;
+      var git = new FakeGitClient
+      {
+         CloneHandler = (_, path, _, _, _) => failTwo && path.EndsWith("two", StringComparison.Ordinal)
+             ? Task.FromException(new InvalidOperationException("boom"))
+             : Task.CompletedTask,
+      };
+      WorkspaceViewModel alpha = CreateWorkspace("alpha", git);
+      await alpha.LoadReposCommand.ExecuteAsync(null);
+      if(!allSelected)
+      {
+         alpha.Repos.Single(repo => string.Equals(repo.Name, "three", StringComparison.Ordinal)).IsSelected = false;
+      }
+      int selected = allSelected ? 3 : 2;
+      await alpha.SyncCommand.ExecuteAsync(null);
+      Assert.True(alpha.HasFailedRepos);
+
+      failTwo = false;
+      await alpha.RetryFailedCommand.ExecuteAsync(null);
+
+      Assert.False(alpha.HasFailedRepos);
+      Assert.Equal(selected, alpha.SelectedCount); // the retry ran one repository; the selection is still the user's
+      Assert.Equal(selected, alpha.Repos.Count(repo => repo.IsSelected));
+      Assert.Equal(allSelected, alpha.Repos.Single(repo => string.Equals(repo.Name, "three", StringComparison.Ordinal)).IsSelected);
+
+      int before = git.CloneCalls.Count;
+      SyncAllResult result = await _coordinator.RunAsync([alpha], CancellationToken.None);
+
+      Assert.Equal(new SyncAllResult(Ran: 1, Skipped: 0, WasCanceled: false), result);
+      Assert.Equal(selected, git.CloneCalls.Count - before); // not only the one that had failed
+   }
+
+
+
+   [Fact]
+   public void AnAccountsPage_IsToldWhenItsTokenIsNoLongerMissing()
+   {
+      WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: false);
+      var changed = new List<string?>();
+      shared.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+      Assert.NotNull(shared.MissingTokenDescription);
+
+      _vault.Store(AppSettings.DefaultTokenVaultId, "tok-default"); // saved in Settings meanwhile
+      shared.RefreshAccountToken();
+
+      Assert.Null(shared.MissingTokenDescription);
+      Assert.Null(shared.MissingTokenAdvice);
+      Assert.Contains(changed, name => string.Equals(name, nameof(WorkspaceViewModel.MissingTokenDescription), StringComparison.Ordinal));
+      Assert.Contains(changed, name => string.Equals(name, nameof(WorkspaceViewModel.MissingTokenAdvice), StringComparison.Ordinal));
+   }
+
+
+
+   [Fact]
+   public void AnAccountsPage_SaysWhereItsTokenIsSaved_InTheWordsOfTheWindow()
+   {
+      WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: false);
+      WorkspaceViewModel own = CreateWorkspace("own");
+      _vault.Delete(own.AccountId!.Value);
+      own.RefreshAccountToken();
+
+      Assert.Equal(
+          "No default token is saved. Save one in File > Settings, or give this account its own token with Edit account…",
+          shared.MissingTokenAdvice);
+      Assert.Equal("No token is saved for this account. Choose Edit account… and enter one.", own.MissingTokenAdvice);
+      Assert.Null(CreateWorkspace("fine").MissingTokenAdvice);
+   }
+
+
+
+   [Fact]
+   public async Task SeveralAccountsThatWereSkipped_AreCountedOnce_AndNotAsNeedingAttention()
+   {
+      WorkspaceViewModel first = CreateWorkspace("first");
+      WorkspaceViewModel second = CreateWorkspace("second");
+      _lister.Handler = _ => []; // nothing to sync in either
+      var status = new SyncAllStatus();
+      _coordinator.Status = status;
+
+      SyncAllResult result = await _coordinator.RunAsync([first, second], CancellationToken.None);
+
+      Assert.Equal(new SyncAllResult(Ran: 0, Skipped: 2, WasCanceled: false), result);
+      Assert.Equal(2, result.Total);
+      Assert.Equal(SyncAllOutcome.Finished, status.Outcome);
+      Assert.Equal("0 of 2 accounts synced. 2 accounts were skipped (busy, canceled, or nothing selected).", status.Message);
+   }
+
+
+
+   [Fact]
+   public async Task OneRepository_IsCountedInTheSingular()
+   {
+      (FakeGitClient git, Task entered, TaskCompletionSource gate) = GatedGit();
+      WorkspaceViewModel alpha = CreateWorkspace("alpha", git);
+
+      await alpha.LoadReposCommand.ExecuteAsync(null);
+      Assert.Equal("1 repository loaded.", alpha.StatusText);
+
+      Task sync = alpha.SyncCommand.ExecuteAsync(null);
+      await entered.WaitAsync(TimeSpan.FromSeconds(30));
+      Assert.Equal("Syncing 1 repository...", alpha.StatusText);
+      gate.SetResult();
+      await sync.WaitAsync(TimeSpan.FromSeconds(30));
+   }
+
+
+
+   [Fact]
+   public async Task RetryFailed_RunsTheFailedRows_AlsoWhenTheyAreNotSelected_AndASelectionChangeMadeMeanwhileStays()
+   {
+      _lister.Handler = _ => [Repo("one"), Repo("two"), Repo("three")];
+      bool failTwo = true;
+      var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var git = new FakeGitClient
+      {
+         CloneHandler = (_, path, _, _, _) =>
+         {
+            if(!path.EndsWith("two", StringComparison.Ordinal))
+            {
+               return Task.CompletedTask;
+            }
+            if(failTwo)
+            {
+               return Task.FromException(new InvalidOperationException("boom"));
+            }
+            entered.TrySetResult();
+            return gate.Task;
+         },
+      };
+      WorkspaceViewModel alpha = CreateWorkspace("alpha", git);
+      await alpha.LoadReposCommand.ExecuteAsync(null);
+      await alpha.SyncCommand.ExecuteAsync(null);
+      RepoItemViewModel Row(string name) => alpha.Repos.Single(repo => string.Equals(repo.Name, name, StringComparison.Ordinal));
+      Row("two").IsSelected = false; // the failed row is taken out of the selection: the retry is for it all the same
+      int before = git.CloneCalls.Count;
+
+      failTwo = false;
+      Task retry = alpha.RetryFailedCommand.ExecuteAsync(null);
+      await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+      Row("one").IsSelected = false; // the checkboxes stay enabled while a run is going on
+      gate.SetResult();
+      await retry.WaitAsync(TimeSpan.FromSeconds(30));
+
+      Assert.Equal(SyncStatus.Done, Row("two").Status);
+      Assert.Equal(1, git.CloneCalls.Count - before); // the failed row, and only it
+      Assert.False(Row("one").IsSelected);
+      Assert.False(Row("two").IsSelected);
+      Assert.True(Row("three").IsSelected);
+      Assert.Equal(1, alpha.SelectedCount);
    }
 }
