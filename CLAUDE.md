@@ -123,8 +123,10 @@ together are the "Core": all logic lives there, under the coverage gate.
   single seam for per-user data (`%LOCALAPPDATA%\KofTwentyTwo\gclo`, overridden by
   `GCLO_DATA_DIR`, and deliberately not the Velopack install root, which Setup.exe
   deletes); `AppSettings` → `settings.json`; `AccountsStore` → `accounts.json`
-  (metadata only) with tokens in an `ITokenVault` (`CredentialManagerVault`, or
-  `InMemoryVault`). The file and the vault have no shared transaction, so every
+  for GitHub accounts and `accounts-forges.json` for the others (an older gclo
+  rewrites the first with the fields it knows, so an account on another forge is
+  never put there; ADR 0010), metadata only, with tokens in an `ITokenVault`
+  (`CredentialManagerVault`, or `InMemoryVault`). The file and the vault have no shared transaction, so every
   operation touching both has a fixed order and a compensating step: keep that when
   changing `AccountsStore`.
 - **`gclo.Cli`**: `Program` dispatches to `SyncCommand`, `ReposCommand`, `OrgsCommand`,

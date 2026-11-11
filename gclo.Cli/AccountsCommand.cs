@@ -170,7 +170,7 @@ internal static class AccountsCommand
                 .Select(a => new AccountSummary(
                     a.Id.ToString("N"), a.Name, a.Description, a.Organization, a.TargetRoot,
                     a.CreateOrgSubfolder, a.MaxConcurrency, a.LastSyncUtc, a.LastSyncSummary, TokenSourceLabel(a),
-                    ForgeLabel(a.Forge), a.Server))
+                    ForgeLabel(a), ServerOf(a)))
                 .ToList();
             Terminal.OutVerbatim(JsonSerializer.Serialize(
                 summaries, CliJsonContext.Default.IReadOnlyListAccountSummary));
@@ -507,14 +507,28 @@ internal static class AccountsCommand
 
 
 
-   /// <summary>The forge as the JSON listing names it.</summary>
-   private static string ForgeLabel(ForgeKind forge) => forge == ForgeKind.GitHub ? "github" : "gitea";
+   /// <summary>The forge as the JSON listing names it: 'github', 'gitea', or 'unknown' for one this version does not know.</summary>
+   private static string ForgeLabel(Account account)
+       => !account.IsOnAKnownForge ? "unknown"
+           : account.Forge == ForgeKind.GitHub ? "github"
+           : "gitea";
+
+
+
+   /// <summary>
+   /// The server of an account as the JSON listing gives it: the address the token
+   /// is sent to, as it is normalized, and nothing for an account whose stored
+   /// address cannot be used. What the file says is not repeated as it is: an
+   /// address that cannot be used may be one with a password or a token in it.
+   /// </summary>
+   private static string? ServerOf(Account account)
+       => account.TryGetEndpoint(out ForgeEndpoint? endpoint, out _) ? endpoint.Server?.AbsoluteUri : null;
 
 
 
    /// <summary>Where an account lives, as the listing and messages name it: "GitHub", or the host of its server.</summary>
    private static string Where(Account account)
-       => account.TryGetEndpoint(out ForgeEndpoint? endpoint, out _) ? endpoint.DisplayName : $"{ForgeLabel(account.Forge)} (not usable)";
+       => account.TryGetEndpoint(out ForgeEndpoint? endpoint, out _) ? endpoint.DisplayName : $"{ForgeLabel(account)} (not usable)";
 
 
 

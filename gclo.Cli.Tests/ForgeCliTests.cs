@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+using System.Text.Json;
 using gclo.Engine;
 using gclo.ViewModels;
 
@@ -184,7 +185,10 @@ public sealed class ForgeCliTests : IDisposable
 
 
    [Theory]
-   [InlineData("Unknown forge 'gitlab'. Use github or gitea.", "--forge", "gitlab")]
+   [InlineData("--forge takes github or gitea. (The address of a server goes after --server.)", "--forge", "gitlab")]
+   [InlineData(
+       "--forge takes github or gitea. (The address of a server goes after --server.)",
+       "--forge", "https://someone:s3cret-token@git.example.test")] // an address after the wrong option: not repeated either
    [InlineData("A Gitea account needs the address of its server.", "--forge", "gitea")]
    [InlineData("GitHub has no server address to choose: it is always github.com.", "--forge", "github", "--server", Server)]
    [InlineData("The server address cannot be used: it has to begin with https://.", "--server", "http://git.example.test")]
@@ -415,9 +419,9 @@ public sealed class ForgeCliTests : IDisposable
    [Fact]
    public async Task AnAccountThatCannotBeUsedAsItIsSaved_IsNotSynced_AndIsListedAsSuch()
    {
-      // An accounts.json edited by hand: the server over plain http.
+      // A file edited by hand: the server over plain http.
       Account account = AddGiteaAccount();
-      string file = Path.Combine(_dir, "accounts.json");
+      string file = Path.Combine(_dir, "accounts-forges.json");
       File.WriteAllText(file, File.ReadAllText(file).Replace(Server, "http://git.example.test/", StringComparison.Ordinal));
       _store = null; // read the file again
       using var console = new ConsoleCapture();
@@ -433,5 +437,62 @@ public sealed class ForgeCliTests : IDisposable
       Assert.Null(_repos.LastToken);
       Assert.Contains("  gitea (not usable)  ", console.Out, StringComparison.Ordinal);
       Assert.Equal("gitea-token", _vault.TryRetrieve(account.TokenEntryId)); // untouched, and sent nowhere
+   }
+
+
+
+   [Fact]
+   public void TheJsonListing_GivesTheAddressATokenGoesTo_AndNeverOneThatWasRefused()
+   {
+      // A file edited by hand: a password in the address of one account, a forge of a later version on another.
+      AddGiteaAccount("edited");
+      AddGiteaAccount("forge");
+      AddGiteaAccount("later");
+      string file = Path.Combine(_dir, "accounts-forges.json");
+      string[] parts = File.ReadAllText(file).Split("\"Server\": \"https://git.example.test/\"");
+      Assert.Equal(4, parts.Length);
+      File.WriteAllText(
+          file,
+          parts[0] + "\"Server\": \"https://bot:hunter2@git.example.test/\""
+          + parts[1] + "\"Server\": \"https://git.example.test/\""
+          + parts[2].Replace("\"Forge\": \"Gitea\"", "\"Forge\": \"GitLab\"", StringComparison.Ordinal) + "\"Server\": \"https://git.example.test/\""
+          + parts[3]);
+      _store = null; // read the file again
+      using var console = new ConsoleCapture();
+
+      Assert.Equal(0, Accounts("--json"));
+
+      using var listed = JsonDocument.Parse(console.Out);
+      var byName = listed.RootElement.EnumerateArray().ToDictionary(a => a.GetProperty("name").GetString()!, StringComparer.Ordinal);
+      Assert.DoesNotContain("hunter2", console.Out, StringComparison.Ordinal);
+      Assert.Equal("gitea", byName["edited"].GetProperty("forge").GetString());
+      Assert.Equal(JsonValueKind.Null, byName["edited"].GetProperty("server").ValueKind);
+      Assert.Equal("gitea", byName["forge"].GetProperty("forge").GetString());
+      Assert.Equal("https://git.example.test/", byName["forge"].GetProperty("server").GetString());
+      Assert.Equal("unknown", byName["later"].GetProperty("forge").GetString());
+      Assert.Equal(JsonValueKind.Null, byName["later"].GetProperty("server").ValueKind);
+   }
+
+
+
+   [Fact]
+   public async Task AnAccountOnAForgeThisVersionDoesNotKnow_IsNotSynced_AndIsToldWhichVersionToUse()
+   {
+      AddGiteaAccount();
+      string file = Path.Combine(_dir, "accounts-forges.json");
+      File.WriteAllText(file, File.ReadAllText(file).Replace("\"Forge\": \"Gitea\"", "\"Forge\": \"GitLab\"", StringComparison.Ordinal));
+      _store = null; // read the file again
+      using var console = new ConsoleCapture();
+
+      CliErrorException error = await Assert.ThrowsAsync<CliErrorException>(() => Sync("--account", "forge", "--dry-run"));
+      Assert.Equal(0, Accounts());
+
+      Assert.Equal(
+          "Account 'forge' cannot be used as it is saved: it is on a forge this version of gclo does not know. "
+          + "Use the version of gclo that added it.",
+          error.Message);
+      Assert.Empty(_asked);
+      Assert.Null(_repos.LastToken);
+      Assert.Contains("  unknown (not usable)  ", console.Out, StringComparison.Ordinal);
    }
 }

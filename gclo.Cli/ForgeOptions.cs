@@ -58,7 +58,8 @@ internal sealed class ForgeOptions
       {
          "GITHUB" => ForgeKind.GitHub,
          "GITEA" => ForgeKind.Gitea,
-         _ => throw new CliUsageException($"Unknown forge '{_forge}'. Use github or gitea."),
+         // What was given is not repeated: an address typed after the wrong option may hold a password or a token.
+         _ => throw new CliUsageException("--forge takes github or gitea. (The address of a server goes after --server.)"),
       };
    }
 

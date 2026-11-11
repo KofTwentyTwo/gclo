@@ -71,19 +71,38 @@ were the two lister implementations and the failure type they throw.
 
 ### Accounts and the command line (#204)
 
-- **An account names its forge and, for Gitea, its server.** Both are left out of
-  `accounts.json` when they are the default, so files written before stay as they
-  are and a GitHub account written now reads the same in an older gclo.
+- **An account names its forge and, for Gitea, its server.** Both are left out
+  when they are the default, so a GitHub account is written as it always was.
+- **Accounts on another forge are kept in a file of their own**
+  (`accounts-forges.json`, beside `accounts.json`, under the same lock). A version
+  from before forges reads every account in `accounts.json` as a GitHub account
+  and writes the file back with the fields it knows. It would drop the forge and
+  the server of a Gitea account, and from then on that account would read as a
+  GitHub account in every version: its token would be asked for again and sent to
+  GitHub. Two versions on one data folder are ordinary (the app updates itself,
+  the command line is a separate download), so such accounts are kept where the
+  older version neither reads nor writes. The cost is two files where there was
+  one: a change writes only the file of the account it changes; a name is unique
+  across both, but an older version does not see the second file and can add a
+  GitHub account with the name of a Gitea account, which the command line then
+  finds first.
+- **What this version does not know is kept.** The kind of forge is stored as
+  text; a name this version does not know (a later version's forge) makes that
+  one account unusable here, not the file unreadable, and is written back as it
+  was. Fields this version does not know are written back as they were read. So
+  this version does not do to a later one what an older one would do to it.
 - **A token stays with the place it was saved for.** The forge and the server of
   an account are set when it is added and cannot be changed by an edit, in the
   app or on the command line: to move an account, it is removed and added again,
   and its token is entered for the new place. `gclo sync --account` takes no
   `--forge` or `--server`.
-- **An older gclo must not send a Gitea token to GitHub.** A version from before
-  forges reads every account as a GitHub account and looks its token up under the
-  account's id. The token of an account that is not on GitHub is therefore kept
-  under another entry (the id combined with a fixed value): to the older version
-  the account has no token, and it says so.
+- **A token is found only by the account and the place it was saved for.** The
+  vault entry of a GitHub account is its id, as ever. For another forge it is made
+  from the id, the forge and the server address exactly as the file states them
+  (a hash). `AccountsStore.Save` refuses a change of place; this makes the same
+  hold for a file changed by hand: at another address the account has no token.
+  The price: a token whose account was edited that way stays in Credential Manager
+  under a name gclo no longer derives, until the address is put back.
 - **Tokens do not cross forges by default.** The default token saved in Settings
   is a GitHub token: an account on another forge has a token of its own, and is
   never handed the default one, whatever its record says. On the command line

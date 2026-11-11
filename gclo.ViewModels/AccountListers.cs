@@ -22,7 +22,7 @@ public static class AccountListers
       ArgumentNullException.ThrowIfNull(account);
       return account.TryGetEndpoint(out ForgeEndpoint? endpoint, out string? reason)
           ? endpoint.CreateRepositoryLister()
-          : new UnusableAccountLister(account.Name, reason);
+          : new UnusableAccountLister(account, reason);
    }
 
 
@@ -33,6 +33,6 @@ public static class AccountListers
       ArgumentNullException.ThrowIfNull(account);
       return account.TryGetEndpoint(out ForgeEndpoint? endpoint, out string? reason)
           ? endpoint.CreateOrganizationLister()
-          : new UnusableAccountLister(account.Name, reason);
+          : new UnusableAccountLister(account, reason);
    }
 }

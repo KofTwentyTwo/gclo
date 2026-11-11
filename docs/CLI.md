@@ -310,11 +310,17 @@ stored in **Windows Credential Manager** (under `gclo:account:<id>`, or
 metadata file, `%LOCALAPPDATA%\KofTwentyTwo\gclo\accounts.json`, never contains
 the token).
 
-The token of an account on a Gitea server is kept under a different entry
-name than `<id>` (one derived from it). A version of gclo from before 1.2 knows
-only GitHub and reads every account as a GitHub account; it does not find that
-entry, so it reports the account as having no token instead of sending a Gitea
-token to GitHub.
+Accounts on a Gitea server are kept in a file of their own beside it,
+`accounts-forges.json`. A version of gclo from before 1.2 knows only GitHub: it
+reads every account in `accounts.json` as a GitHub account and writes the file
+back with what it knows. It neither reads nor writes the other file, so it does
+not list such accounts, and using it beside 1.2 leaves them as they are.
+
+The token of such an account is kept under an entry name made from the account's
+id, its forge and its server address as the file states them, not under `<id>`.
+It is found only by that account at that address: when the address is changed in
+the file by hand, the account has no token there, instead of sending the one it
+had to the new address.
 Accounts are shared between the CLI and the desktop app: create them with
 `gclo accounts add` on a headless mirror server, or in the app's account
 wizard, and use them from either.
@@ -349,9 +355,11 @@ platform  platform  git.example.com  D:\platform      own      never
 With `--json` it prints a single-line JSON array with everything a script needs
 to reason about a run; `lastSync` is the UTC timestamp of the last completed
 sync and `lastSyncSummary` its summary line, both `null` until the first sync;
-`tokenSource` is `own` or `default`; `forge` is `github` or `gitea`, and
-`server` is the address of a Gitea account's server (`null` for GitHub). The
-last two fields are new in 1.2:
+`tokenSource` is `own` or `default`; `forge` is `github` or `gitea` (`unknown`
+for an account a later version of gclo added on a forge this one does not know),
+and `server` is the address of a Gitea account's server as the token is sent to
+it (`null` for GitHub, and for an account whose stored address cannot be used).
+The last two fields are new in 1.2:
 
 ```json
 [{"id":"d0f0e0c09c404a5e8f3a5b1e6f7a2c11","name":"work","description":"","organization":"contoso","targetRoot":"C:\\src\\contoso","createOrgSubfolder":true,"maxConcurrency":8,"lastSync":"2026-07-04T14:12:03+00:00","lastSyncSummary":"Finished: 3 cloned, 41 updated, 0 failed, 0 canceled of 44.","tokenSource":"own"}]

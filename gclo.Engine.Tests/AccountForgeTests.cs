@@ -35,6 +35,9 @@ public sealed class AccountForgeTests : IDisposable
 
    private string FileText => File.ReadAllText(Path.Combine(_root, "accounts.json"));
 
+   /// <summary>The file of the accounts that are not on GitHub (see <see cref="AccountFilesTests"/>).</summary>
+   private string ForgesFileText => File.ReadAllText(Path.Combine(_root, "accounts-forges.json"));
+
 
 
    private static Account GitHubAccount(string name = "Work") => new()
@@ -78,8 +81,8 @@ public sealed class AccountForgeTests : IDisposable
    {
       NewStore().Save(GiteaAccount(server: typed), "gitea_token");
 
-      Assert.Contains("\"Forge\": \"Gitea\"", FileText, StringComparison.Ordinal);
-      Assert.Contains($"\"Server\": \"{Server}\"", FileText, StringComparison.Ordinal);
+      Assert.Contains("\"Forge\": \"Gitea\"", ForgesFileText, StringComparison.Ordinal);
+      Assert.Contains($"\"Server\": \"{Server}\"", ForgesFileText, StringComparison.Ordinal);
       Account reloaded = Assert.Single(NewStore().GetAll());
       Assert.Equal(ForgeKind.Gitea, reloaded.Forge);
       Assert.Equal(Server, reloaded.Server);
@@ -104,21 +107,6 @@ public sealed class AccountForgeTests : IDisposable
       Assert.NotEqual(account.Id, account.TokenEntryId);
       Assert.Equal("gitea_token", _vault.TryRetrieve(account.TokenEntryId));
       Assert.Equal("gitea_token", new AccountTokenResolver(_vault).TryResolve(account));
-   }
-
-
-
-   [Fact]
-   public void TheTokenEntry_IsTheAccountsIdForGitHub_AndAFixedOtherIdForAnotherForge()
-   {
-      Account gitHub = GitHubAccount();
-      var zero = new Account { Id = Guid.Empty, Name = "z", Organization = "o", TargetRoot = "t", Forge = ForgeKind.Gitea, Server = Server };
-
-      Assert.Equal(gitHub.Id, gitHub.TokenEntryId);
-
-      // Pinned: tokens that are saved are found again by this value.
-      Assert.Equal(new Guid("6f0c2a51-9d3e-4b77-8a14-c5e2f0b39d68"), zero.TokenEntryId);
-      Assert.Equal(Guid.Empty, (zero with { Forge = ForgeKind.GitHub, Server = null }).TokenEntryId);
    }
 
 
@@ -225,14 +213,14 @@ public sealed class AccountForgeTests : IDisposable
       Account account = GiteaAccount();
       AccountsStore store = NewStore();
       store.Save(account, "gitea_token");
-      string before = FileText;
+      string before = ForgesFileText;
 
       ArgumentException ex = Assert.Throws<ArgumentException>(
           () => store.Save(account with { Server = "https://elsewhere.example.test" }, token: null));
 
       Assert.Contains("is on git.example.test, and that cannot be changed: its token was saved for that place", ex.Message, StringComparison.Ordinal);
       Assert.Contains("Delete the account and add it again", ex.Message, StringComparison.Ordinal);
-      Assert.Equal(before, FileText);
+      Assert.Equal(before, ForgesFileText);
       Assert.Equal("gitea_token", _vault.TryRetrieve(account.TokenEntryId));
    }
 

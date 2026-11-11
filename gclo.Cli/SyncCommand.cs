@@ -528,7 +528,7 @@ internal static class SyncCommand
       return account.TryGetEndpoint(out ForgeEndpoint? endpoint, out string? unusable)
           ? (account, store, vault, endpoint)
           : throw new CliErrorException(
-              $"Account '{account.Name}' cannot be used as it is saved: {unusable}. Remove the account and add it again.");
+              $"Account '{account.Name}' cannot be used as it is saved: {unusable}. {account.AdviceWhenUnusable("Remove")}");
    }
 
 

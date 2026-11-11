@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-using System.Diagnostics;
-using System.Text.Json;
 using gclo.Engine;
 
 
@@ -12,10 +10,11 @@ namespace gclo.ViewModels;
 
 
 /// <summary>
-/// Persists account profiles as JSON at accounts.json under
-/// <see cref="GcloPaths.DataRoot"/> (default %LOCALAPPDATA%\KofTwentyTwo\gclo) and their
-/// tokens in an <see cref="ITokenVault"/>; the file holds metadata only and never a
-/// token. Unlike <see cref="AppSettings"/>, accounts are primary user data, so write
+/// Persists account profiles as JSON under <see cref="GcloPaths.DataRoot"/> (default
+/// %LOCALAPPDATA%\KofTwentyTwo\gclo) and their tokens in an <see cref="ITokenVault"/>;
+/// the files hold metadata only and never a token. GitHub accounts are in
+/// accounts.json, as they always were; accounts on another forge are in
+/// accounts-forges.json (see the remarks). Unlike <see cref="AppSettings"/>, accounts are primary user data, so write
 /// failures in <see cref="Save"/>, <see cref="Delete"/>, and
 /// <see cref="RecordSyncResult"/> propagate instead of being swallowed; only loading
 /// is tolerant (a missing, corrupt, or unreadable file yields an empty list).
@@ -58,6 +57,19 @@ namespace gclo.ViewModels;
 /// that is also what the store holds after a change that failed.
 /// </para>
 /// <para>
+/// <b>Two files.</b> A version of gclo from before forges reads every account in
+/// accounts.json as a GitHub account, and writes the file back with what it knows:
+/// it would drop the forge and the server of an account on a Gitea server, and from
+/// then on that account would read as a GitHub account, whose token is sent to
+/// GitHub. The desktop app updates itself and the command line is a separate
+/// download, so two versions on one data folder are ordinary. Accounts on another
+/// forge are therefore kept in a file of their own, which such a version neither
+/// reads nor writes. Both files are changed under the one lock. An account on
+/// another forge that is found in accounts.json (gclo does not put one there) is
+/// moved to its own file by the next change, and one that is in both files is read
+/// from its own.
+/// </para>
+/// <para>
 /// A file that cannot be read is not a corrupt file. Only content that is not valid
 /// JSON is moved aside. A file that is in use is tried again for a short while; one
 /// that stays unreadable is left exactly where it is: at construction the store then
@@ -72,7 +84,14 @@ public sealed class AccountsStore
 
    private readonly IActivityLog _log;
 
-   private readonly string _filePath;
+   /// <summary>accounts.json: the GitHub accounts. Read and written by every version of gclo.</summary>
+   private readonly AccountsFile _gitHubFile;
+
+   /// <summary>accounts-forges.json: the accounts on another forge. A version from before forges does not touch it.</summary>
+   private readonly AccountsFile _forgesFile;
+
+   /// <summary>The lock every gclo process takes before it changes an accounts file.</summary>
+   private readonly string _lockPath;
 
    /// <summary>How long the lock another gclo process holds is waited for.</summary>
    private static readonly TimeSpan s_defaultPatience = TimeSpan.FromSeconds(5);
@@ -84,8 +103,6 @@ public sealed class AccountsStore
    /// not outlast the patience of the ones waiting for it.
    /// </summary>
    private const int FilePatienceDivisor = 5;
-
-   private static readonly TimeSpan s_pause = TimeSpan.FromMilliseconds(15);
 
    private readonly Lock _gate = new();
 
@@ -115,8 +132,10 @@ public sealed class AccountsStore
       _vault = vault;
       _log = log ?? new NullActivityLog();
       directory ??= GcloPaths.DataRoot;
-      _filePath = Path.Combine(directory, "accounts.json");
       _patience = patience;
+      _gitHubFile = new AccountsFile(Path.Combine(directory, "accounts.json"), _log, patience / FilePatienceDivisor);
+      _forgesFile = new AccountsFile(Path.Combine(directory, "accounts-forges.json"), _log, patience / FilePatienceDivisor);
+      _lockPath = _gitHubFile.FilePath + ".lock";
       _accounts = LoadAtStart();
    }
 
@@ -432,18 +451,21 @@ public sealed class AccountsStore
    /// </summary>
    private List<Account> LoadAtStart()
    {
-      try
+      foreach(AccountsFile file in (AccountsFile[])[_gitHubFile, _forgesFile])
       {
-         return ReadFile() ?? [];
+         try
+         {
+            file.Refresh();
+         }
+         catch(Exception ex) when(ex is IOException or UnauthorizedAccessException)
+         {
+            _log.Error(
+                $"Could not read accounts from '{file.FilePath}' ({ex.Message}); its accounts are not shown. "
+                + "The file was left as it is.",
+                ex);
+         }
       }
-      catch(Exception ex) when(ex is IOException or UnauthorizedAccessException)
-      {
-         _log.Error(
-             $"Could not read accounts from '{_filePath}' ({ex.Message}); no accounts are shown. "
-             + "The file was left as it is.",
-             ex);
-         return [];
-      }
+      return Union();
    }
 
 
@@ -456,17 +478,54 @@ public sealed class AccountsStore
    /// </summary>
    private void RefreshForAChange()
    {
-      List<Account>? current = ReadFile();
-      if(current is not null)
+      foreach(AccountsFile file in (AccountsFile[])[_gitHubFile, _forgesFile])
       {
-         _accounts = current;
+         int lastRead = file.Accounts.Count;
+         if(!file.Refresh() && lastRead > 0)
+         {
+            _log.Error(
+                $"Accounts file '{file.FilePath}' is missing or damaged; the change is applied to the {lastRead} "
+                + "account(s) this session last read, which writes them back.");
+         }
       }
-      else if(_accounts.Count > 0)
-      {
-         _log.Error(
-             $"Accounts file '{_filePath}' is missing or damaged; the change is applied to the {_accounts.Count} "
-             + "account(s) this session last read, which writes them back.");
-      }
+      _accounts = Union();
+   }
+
+
+
+   /// <summary>
+   /// The accounts of both files as one list. An account that is in both (by its
+   /// id) is the one of the file for other forges: that is the file gclo writes such
+   /// an account to, and the copy in accounts.json is what an older version may
+   /// have rewritten.
+   /// </summary>
+   private List<Account> Union()
+   {
+      HashSet<Guid> apart = [.. _forgesFile.Accounts.Select(a => a.Id)];
+      return [.. _gitHubFile.Accounts.Where(a => !apart.Contains(a.Id)), .. _forgesFile.Accounts];
+   }
+
+
+
+   /// <summary>
+   /// Whether an account is kept in the file for other forges: every account that
+   /// names a forge. An account that names none is a GitHub account as an older
+   /// version knows it.
+   /// </summary>
+   private static bool IsKeptApart(Account account) => account.ForgeName is not null;
+
+
+
+   /// <summary>
+   /// Writes each account to the file it belongs in. Only a file whose accounts
+   /// changed is written, so one change is one file put in place. (The exception is
+   /// an account on another forge that was found in accounts.json: it is written to
+   /// its own file first, and then leaves the other.)
+   /// </summary>
+   private void Persist(List<Account> accounts)
+   {
+      _forgesFile.WriteIfChanged(accounts.Where(IsKeptApart).ToList());
+      _gitHubFile.WriteIfChanged(accounts.Where(a => !IsKeptApart(a)).ToList());
    }
 
 
@@ -519,14 +578,25 @@ public sealed class AccountsStore
       {
          throw new ArgumentException($"Account '{account.Name}' cannot be saved: {reason}.", nameof(account));
       }
-      account = account with { Server = endpoint.Server?.AbsoluteUri };
 
       Account? onDisk = _accounts.FirstOrDefault(a => a.Id == account.Id);
-      if(onDisk is not null
-          && (onDisk.Forge != account.Forge || !string.Equals(onDisk.Server, account.Server, StringComparison.Ordinal)))
+      if(onDisk is null)
+      {
+         account = account with { Server = endpoint.Server?.AbsoluteUri };
+      }
+      else if(onDisk.TryGetEndpoint(out ForgeEndpoint? was, out _) && was.Equals(endpoint))
+      {
+         ///////////////////////////////////////////////////////////////////////////
+         // The same place, however the caller spelled it. What the file says     //
+         // about the place stays as it is, to the letter: the account's token is //
+         // found by it (AccountTokenEntry).                                      //
+         ///////////////////////////////////////////////////////////////////////////
+         account = account with { ForgeName = onDisk.ForgeName, Server = onDisk.Server };
+      }
+      else
       {
          throw new ArgumentException(
-             $"Account '{onDisk.Name}' is on {DescribeForge(onDisk)}, and that cannot be changed: its token was saved for that place. "
+             $"Account '{onDisk.Name}' is on {onDisk.DescribePlace()}, and that cannot be changed: its token was saved for that place. "
              + "Delete the account and add it again for the other one.",
              nameof(account));
       }
@@ -543,62 +613,6 @@ public sealed class AccountsStore
 
 
    /// <summary>
-   /// How a message names the place an account is on, also when what is stored cannot
-   /// be used. Such an address is not repeated: it may hold a password or a token.
-   /// </summary>
-   private static string DescribeForge(Account account)
-       => account.TryGetEndpoint(out ForgeEndpoint? endpoint, out _)
-           ? endpoint.DisplayName
-           : $"{account.Forge}, at an address that cannot be used";
-
-
-
-   /// <summary>
-   /// The accounts the file holds now, or null when it holds none that can be used:
-   /// the file is missing, or its content is not a list of accounts (it is then moved
-   /// aside). A file that cannot be read at all throws, and is not touched.
-   /// </summary>
-   private List<Account>? ReadFile()
-   {
-      string json;
-      try
-      {
-         json = WithPatience(() => File.ReadAllText(_filePath), FilePatience, accessDeniedIsBusy: false);
-      }
-      catch(Exception ex) when(ex is FileNotFoundException or DirectoryNotFoundException)
-      {
-         return null;
-      }
-
-      try
-      {
-         List<Account>? loaded = JsonSerializer.Deserialize(json, AccountsJsonContext.Default.ListAccount);
-         if(loaded is not null)
-         {
-            return loaded;
-         }
-         _log.Error($"Accounts file '{_filePath}' deserialized to null; starting with no accounts.");
-      }
-      catch(Exception ex)
-      {
-         ///////////////////////////////////////////////////////////////////////////
-         // The text was read; it is what it says that cannot be used. That, and  //
-         // only that, is a corrupt file.                                          //
-         ///////////////////////////////////////////////////////////////////////////
-         _log.Error($"Accounts file '{_filePath}' is not a valid list of accounts; starting with no accounts.", ex);
-      }
-
-      PreserveCorruptFile();
-      return null;
-   }
-
-
-
-   private TimeSpan FilePatience => _patience / FilePatienceDivisor;
-
-
-
-   /// <summary>
    /// Takes the lock that every gclo process takes before it changes the accounts
    /// file, waiting a short while for another process to finish. The lock is a file
    /// beside accounts.json, opened for this process alone and held until it is
@@ -607,7 +621,7 @@ public sealed class AccountsStore
    /// <exception cref="AccountsFileBusyException">Another gclo process kept the lock for the whole wait.</exception>
    private FileStream AcquireFileLock()
    {
-      string? directory = Path.GetDirectoryName(_filePath);
+      string? directory = Path.GetDirectoryName(_lockPath);
       if(!string.IsNullOrEmpty(directory))
       {
          Directory.CreateDirectory(directory);
@@ -615,157 +629,16 @@ public sealed class AccountsStore
 
       try
       {
-         return WithPatience(
-             () => new FileStream(_filePath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None),
+         return AccountsFile.WithPatience(
+             () => new FileStream(_lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None),
              _patience,
              accessDeniedIsBusy: false);
       }
-      catch(IOException ex) when(IsBusy(ex, accessDeniedIsBusy: false))
+      catch(IOException ex) when(AccountsFile.IsBusy(ex, accessDeniedIsBusy: false))
       {
          throw new AccountsFileBusyException(
-             $"The accounts file '{_filePath}' is in use by another gclo process; nothing was changed. Try again in a moment.",
+             $"The accounts file '{_gitHubFile.FilePath}' is in use by another gclo process; nothing was changed. Try again in a moment.",
              ex);
-      }
-   }
-
-
-
-   /// <summary>Runs <paramref name="action"/>, trying again for <paramref name="patience"/> as long as the file is busy.</summary>
-   private static T WithPatience<T>(Func<T> action, TimeSpan patience, bool accessDeniedIsBusy)
-   {
-      long started = Stopwatch.GetTimestamp();
-      while(true)
-      {
-         try
-         {
-            return action();
-         }
-         catch(Exception ex) when(IsBusy(ex, accessDeniedIsBusy) && Stopwatch.GetElapsedTime(started) < patience)
-         {
-            Thread.Sleep(s_pause);
-         }
-      }
-   }
-
-
-
-   /// <summary>
-   /// True for a failure that means "in use right now", which passes: on Windows a
-   /// sharing or lock violation, and, where the operation reports a busy target that
-   /// way (replacing a file somebody has open), a refused access. A missing file, a
-   /// full disk, or a path that is too long is never that, and is not waited for.
-   /// </summary>
-   private static bool IsBusy(Exception exception, bool accessDeniedIsBusy)
-   {
-      const int SharingViolation = 32;
-      const int LockViolation = 33;
-      if(exception is UnauthorizedAccessException)
-      {
-         return accessDeniedIsBusy;
-      }
-
-      return exception is IOException and not (FileNotFoundException or DirectoryNotFoundException or PathTooLongException)
-          && (!OperatingSystem.IsWindows() || (exception.HResult & 0xFFFF) is SharingViolation or LockViolation);
-   }
-
-
-
-   /// <summary>
-   /// Moves an unreadable accounts file aside before the empty in-memory list can be
-   /// persisted over it: the metadata is what associates vault entries with accounts,
-   /// so clobbering a recoverable file would orphan every stored token.
-   /// </summary>
-   private void PreserveCorruptFile()
-   {
-      try
-      {
-         if(File.Exists(_filePath))
-         {
-            string aside = $"{_filePath}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
-            File.Move(_filePath, aside, overwrite: true);
-            _log.Error($"Preserved unreadable accounts file as '{aside}'.");
-         }
-      }
-      catch(Exception ex)
-      {
-         _log.Error("Could not preserve the unreadable accounts file.", ex);
-      }
-   }
-
-
-
-   private void Persist(List<Account> accounts)
-   {
-      string? directory = Path.GetDirectoryName(_filePath);
-      if(!string.IsNullOrEmpty(directory))
-      {
-         Directory.CreateDirectory(directory);
-      }
-
-      // Atomic replace: a crash or full disk mid-write must never truncate the live
-      // file — corrupted metadata orphans every vault token (accounts are found by
-      // Guid, and recreated accounts mint new ones).
-      string json = JsonSerializer.Serialize(accounts, AccountsJsonContext.Default.ListAccount);
-      string tempPath = _filePath + ".tmp";
-      using(var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
-      using(var writer = new StreamWriter(stream))
-      {
-         writer.Write(json);
-         writer.Flush();
-         stream.Flush(flushToDisk: true);
-      }
-
-      KeepABackup();
-
-      ///////////////////////////////////////////////////////////////////////////////
-      // A file nobody may write to stays that way however long it is tried: say   //
-      // so at once instead of taking the refusal for a file that is busy.          //
-      ///////////////////////////////////////////////////////////////////////////////
-      if(File.Exists(_filePath) && File.GetAttributes(_filePath).HasFlag(FileAttributes.ReadOnly))
-      {
-         throw new UnauthorizedAccessException($"The accounts file '{_filePath}' is read-only; nothing was changed.");
-      }
-
-      ///////////////////////////////////////////////////////////////////////////////
-      // One step puts the new file in place of the old: the name is never absent, //
-      // so a process that reads without the lock always finds a whole file.        //
-      // Something outside gclo (a scanner, a backup, a viewer) can hold the live   //
-      // file for a moment; the step is then refused, and tried again for a while.  //
-      ///////////////////////////////////////////////////////////////////////////////
-      WithPatience(
-          () =>
-          {
-             File.Move(tempPath, _filePath, overwrite: true);
-             return true;
-          },
-          FilePatience,
-          accessDeniedIsBusy: true);
-   }
-
-
-
-   /// <summary>
-   /// Copies the file that is about to be replaced to accounts.json.bak. Best effort:
-   /// the backup is a convenience for a person, and failing to write it must not
-   /// stop the change it is a backup for.
-   /// </summary>
-   private void KeepABackup()
-   {
-      try
-      {
-         if(File.Exists(_filePath))
-         {
-            string backup = _filePath + ".bak";
-            if(File.Exists(backup))
-            {
-               File.SetAttributes(backup, FileAttributes.Normal);
-            }
-            File.Copy(_filePath, backup, overwrite: true);
-         }
-      }
-      catch(Exception ex) when(ex is IOException or UnauthorizedAccessException)
-      {
-         _log.Error($"Could not write the backup '{_filePath}.bak' ({ex.Message}); the change goes ahead without it.", ex);
       }
    }
 }

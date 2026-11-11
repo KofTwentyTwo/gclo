@@ -347,6 +347,17 @@ public sealed partial class AccountWizardViewModel : ObservableObject
                // An edit with the box left empty validates the STORED token, fetched
                // here and used for this one call only.
                string candidate;
+               if(UseDefaultToken && (_existing?.Forge ?? ForgeKind.GitHub) != ForgeKind.GitHub)
+               {
+                  ///////////////////////////////////////////////////////////////////
+                  // The choice is not shown for such an account. Whatever set it, //
+                  // the default token is a GitHub token and is not sent anywhere  //
+                  // else.                                                         //
+                  ///////////////////////////////////////////////////////////////////
+                  TokenError = "The default token is a GitHub token. This account needs a token of its own.";
+                  return false;
+               }
+
                if(UseDefaultToken)
                {
                   // The default token is fetched for this one call only; the box

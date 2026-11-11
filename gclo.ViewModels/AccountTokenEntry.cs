@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-using gclo.Engine;
+using System.Security.Cryptography;
+using System.Text;
 
 
 namespace gclo.ViewModels;
@@ -11,36 +12,37 @@ namespace gclo.ViewModels;
 
 /// <summary>
 /// Which vault entry holds an account's own token. For a GitHub account it is the
-/// account's id, as it always was. For an account on another forge it is a
-/// different id, derived from the account's.
+/// account's id, as it always was. For an account on another forge it is an id
+/// made from the account's id, the name of its forge and the address of its
+/// server, exactly as the account's file states them.
 /// </summary>
 /// <remarks>
-/// A version of gclo from before forges existed reads every account as a GitHub
-/// account and looks its token up under the account's id. If the token of a Gitea
-/// account were kept there, that version would send it to GitHub. Kept under an id
-/// it does not look up, the account has no token as far as that version can tell,
-/// and it says so instead.
+/// <para>
+/// The entry belongs to one account at one place. An account's forge and server
+/// cannot be changed through gclo (<see cref="AccountsStore.Save"/>); when the file
+/// is changed by hand to name another server, the entry is not found there either,
+/// and the account has no token instead of sending the one it had to the new
+/// address. A record that names another account's id finds nothing for the same
+/// reason.
+/// </para>
+/// <para>
+/// Never to be changed: saved tokens are found by it. What goes in is the text of
+/// the file, not an address that was parsed, so a later change to how an address
+/// is normalized changes no entry.
+/// </para>
 /// </remarks>
 internal static class AccountTokenEntry
 {
-   /// <summary>What an account's id is combined with for a forge that is not GitHub. Never to be changed: saved tokens are found by it.</summary>
-   private static readonly byte[] s_otherForge = new Guid("6f0c2a51-9d3e-4b77-8a14-c5e2f0b39d68").ToByteArray();
-
-
-
-   /// <summary>The id of the vault entry for the token of the account <paramref name="accountId"/> on <paramref name="forge"/>.</summary>
-   public static Guid For(Guid accountId, ForgeKind forge)
+   /// <summary>The id of the vault entry for the token of <paramref name="account"/>.</summary>
+   public static Guid For(Account account)
    {
-      if(forge == ForgeKind.GitHub)
+      if(account.ForgeName is null)
       {
-         return accountId;
+         return account.Id;
       }
 
-      byte[] id = accountId.ToByteArray();
-      for(int i = 0; i < id.Length; i++)
-      {
-         id[i] ^= s_otherForge[i];
-      }
-      return new Guid(id);
+      byte[] hash = SHA256.HashData(
+          Encoding.UTF8.GetBytes($"gclo account token\n{account.Id:N}\n{account.ForgeName}\n{account.Server}"));
+      return new Guid(hash.AsSpan(0, 16));
    }
 }
