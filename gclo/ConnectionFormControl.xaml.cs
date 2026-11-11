@@ -96,6 +96,13 @@ public sealed partial class ConnectionFormControl : UserControl
       // (#182).                                                                   //
       ///////////////////////////////////////////////////////////////////////////////
       TokenBox.IsEnabled = !savedWithAnAccount;
+
+      // The page of the place this workspace connects to (#206); none when that place is not known.
+      if(ViewModel is not null)
+      {
+         TokenPageLink.NavigateUri = ViewModel.TokenPage;
+         TokenPageLink.Visibility = StatusFormat.VisibleIfNotNull(ViewModel.TokenPage);
+      }
       TokenBox.PlaceholderText = !savedWithAnAccount ? "ghp_…"
           : ViewModel!.UsesDefaultToken ? "No default token is saved"
           : "No token is saved for this account";

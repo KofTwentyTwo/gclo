@@ -241,7 +241,54 @@ public sealed partial class SmokeTests : UiTestBase
 
 
 
-   // (9) Resizing below the minimum window size is intentionally not covered:
+   // (9) A new account on a Gitea server (#206). Step 1 asks for the server's
+   //     address only once that place is chosen; step 2 names the server the token
+   //     is checked with; and step 3 lists what that server listed, which here is
+   //     the fixture's organization for a Gitea server: the fixture token is
+   //     answered offline for the place the wizard asked, so nothing leaves the
+   //     machine. The wizard is canceled on step 3, so nothing is saved either.
+   [Fact]
+   public void AddAccountWizard_OnAGiteaServer_ChecksTheTokenWithThatServer()
+   {
+      Session.InvokeNavItem("NavAddAccount");
+      try
+      {
+         Session.EnterText(Session.WaitForElement("WizardNameBox"), "Forge");
+         Assert.Null(Session.FindInApp(cf => cf.ByAutomationId("WizardServerBox"))); // GitHub is the default: no address is asked
+
+         Session.WaitForElement("WizardPlaceGitea").AsRadioButton().IsChecked = true;
+         Session.EnterText(Session.WaitForElement("WizardServerBox"), "git.example.test");
+         Session.ClickButton("Next");
+
+         Session.WaitForText("Step 2 of 4: Access token");
+         Session.WaitForText("Next checks the token with git.example.test and lists the organizations it can see.");
+         Session.EnterText(Session.WaitForElement("WizardTokenBox"), "gclo-uitest-fixture-token");
+         Session.ClickButton("Next");
+
+         Session.WaitForText("Step 3 of 4: Organization", TimeSpan.FromSeconds(20));
+         ComboBox orgBox = Session.WaitForElement("WizardOrgBox").AsComboBox();
+         Session.WaitFor(
+             () =>
+             {
+                orgBox.Expand();
+                return orgBox.Items.FirstOrDefault(i => string.Equals(i.Name, "fixture-gitea-org", StringComparison.Ordinal));
+             },
+             "the fixture's Gitea organization in the organization list");
+         orgBox.Collapse();
+         Assert.False(Session.App.HasExited);
+
+         Session.ClickButton("Cancel");
+         Session.WaitForElementGone("WizardOrgBox");
+      }
+      finally
+      {
+         Session.TryClickButton("Cancel"); // no-op when the happy path closed it
+      }
+   }
+
+
+
+   // (10) Resizing below the minimum window size is intentionally not covered:
    //     driving OS-level resize through UIA transforms is flaky across DPI
    //     scales, and the minimum is already enforced by OverlappedPresenter.
 

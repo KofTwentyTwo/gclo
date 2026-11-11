@@ -122,6 +122,25 @@ were the two lister implementations and the failure type they throw.
   forge or server cannot be used (a file edited by hand) gets listers that ask no
   server anything and fail with the reason.
 
+### The desktop app's wizard (#206)
+
+- **The place is asked first, on step 1, for a new account only.** GitHub is the
+  default; a Gitea server needs its address, which is checked by the same rule as
+  on the command line (`ForgeEndpoint.TryCreate`) and shown afterwards as it was
+  normalized: that is the address the token goes to. An edit shows where the
+  account is and that it stays there. A Quick Sync connection saved as an account
+  is a GitHub account: Quick Sync itself connects to GitHub only.
+- **The wizard has the lister of one place at a time.** The shell gives it a
+  lister per place; step 1 takes the lister of the place that was chosen, and step
+  2 has no other to send the token to. A wizard that was given one lister (an
+  edit, a saved Quick Sync connection) offers no choice.
+- **What was entered for one place is not carried to another.** When step 1 is
+  left with another place than before, the typed token, the organization and the
+  list of organizations are emptied, and the default token (a GitHub token) is
+  neither offered nor preselected for a Gitea server.
+- **Texts follow the place.** The page a token is made on is the one of the
+  chosen place (`ForgeTexts`); step 2 names the place the token is checked with.
+
 ## Alternatives considered
 
 - **A Gitea client package.** One more dependency to track and to trust with the

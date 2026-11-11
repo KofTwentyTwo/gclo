@@ -57,9 +57,6 @@ public sealed partial class AccountWizardDialog : ContentDialog
       // by hand. The stored token of an existing account is deliberately NOT
       // loaded into the box: an empty box means "keep it", and the secret never
       // sits in an editable control with a reveal button (#32).
-      TokenBox.PlaceholderText = ViewModel.IsEditing && !ViewModel.UseDefaultToken
-          ? "Leave empty to keep the stored token"
-          : "ghp_…";
 
       // NumberBox.Value is a double; the int is mirrored by hand (see ValueChanged).
       ConcurrencyBox.Value = ViewModel.MaxConcurrency;
@@ -70,6 +67,17 @@ public sealed partial class AccountWizardDialog : ContentDialog
       // after the panel has laid out, every time the wizard arrives on step 3.
       ViewModel.PropertyChanged += (_, e) =>
       {
+         ///////////////////////////////////////////////////////////////////////////
+         // The view model empties the token when step 1 changes the place the    //
+         // account is on (#206). The box is mirrored by hand, so it is emptied   //
+         // here: what it shows is what would be sent.                            //
+         ///////////////////////////////////////////////////////////////////////////
+         if(string.Equals(e.PropertyName, nameof(AccountWizardViewModel.Token), StringComparison.Ordinal)
+             && ViewModel.Token.Length == 0 && TokenBox.Password.Length > 0)
+         {
+            TokenBox.Password = "";
+         }
+
          if(string.Equals(e.PropertyName, nameof(AccountWizardViewModel.Step), StringComparison.Ordinal) && ViewModel.Step == 3)
          {
             // The panel was collapsed, so the ComboBox has no template (and no inner
@@ -106,7 +114,7 @@ public sealed partial class AccountWizardDialog : ContentDialog
 
 
 
-   /// <summary>Next is locked while the token step is talking to GitHub.</summary>
+   /// <summary>Next is locked while the token step is talking to the server.</summary>
    public bool PrimaryEnabled(bool isValidatingToken) => !isValidatingToken;
 
 
@@ -266,7 +274,7 @@ public sealed partial class AccountWizardDialog : ContentDialog
    {
       TextBlock errorText = ViewModel.Step switch
       {
-         1 => NameErrorText,
+         1 => ViewModel.NameError.Length > 0 ? NameErrorText : ServerErrorText,
          2 => TokenErrorText,
          3 => OrganizationErrorText,
          _ => TargetErrorText,

@@ -24,6 +24,7 @@
             PlaceholderText="ghp_…"
             PasswordChanged="TokenBox_PasswordChanged" />
         <HyperlinkButton
+            x:Name="TokenPageLink"
             Padding="0"
             Content="How to create a token"
             NavigateUri="https://github.com/settings/tokens" />
@@ -38,7 +39,7 @@
                 HorizontalAlignment="Stretch"
                 Header="Organization or account"
                 x:Name="OrgBox"
-                ToolTipService.ToolTip="The GitHub organization or user account whose repositories are synced. Populated from the token; typing a name also works."
+                ToolTipService.ToolTip="The organization or user account whose repositories are synced. Populated from the token; typing a name also works."
                 IsEditable="True"
                 ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
                 PlaceholderText="Paste a token first, or type an org"

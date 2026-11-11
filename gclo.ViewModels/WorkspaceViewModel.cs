@@ -174,6 +174,25 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    public string DisplayName => _account?.Name ?? "Quick Sync";
 
    /// <summary>
+   /// How the place this workspace connects to is named: "GitHub" for Quick Sync
+   /// and a GitHub account, the server's host for an account on a Gitea server. For
+   /// an account whose stored place cannot be used, what <see cref="Account.DescribePlace"/> says.
+   /// </summary>
+   public string PlaceName => _account is null ? ForgeEndpoint.GitHub.DisplayName : _account.DescribePlace();
+
+   /// <summary>The title of the connect card: where this workspace connects to.</summary>
+   public string ConnectTitle => $"Connect to {PlaceName}";
+
+   /// <summary>The page a token for this workspace is made on; null when the account's place is not known.</summary>
+   public Uri? TokenPage => ForgeTexts.TokenPage(Place);
+
+   /// <summary>The place this workspace connects to; null for an account whose stored forge and server cannot be used.</summary>
+   private ForgeEndpoint? Place
+       => _account is null ? ForgeEndpoint.GitHub
+           : _account.TryGetEndpoint(out ForgeEndpoint? place, out _) ? place
+           : null;
+
+   /// <summary>
    /// True for an account workspace whose token is the default token from Settings
    /// (<see cref="TokenSource.Default"/>): the pane tags it, and Sync All names
    /// Settings when that token is missing.

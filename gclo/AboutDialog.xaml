@@ -56,7 +56,7 @@
             </Border>
 
             <TextBlock
-                Text="Clone and update every repository in a GitHub organization."
+                Text="Clone and update every repository of a GitHub organization, or of one on a Gitea server."
                 TextWrapping="Wrap" />
 
             <HyperlinkButton

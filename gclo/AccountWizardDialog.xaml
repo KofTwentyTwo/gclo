@@ -18,13 +18,15 @@
     SecondaryButtonClick="OnSecondaryButtonClick">
 
     <!-- The four step panels overlay each other; StepVisible shows exactly one. The
-         MinHeight is the tallest step (token + hint + validation row + error), so the
-         dialog keeps one footprint across steps instead of resizing and re-centering
-         under the pointer on every Next (#31). -->
-    <Grid MinWidth="400" MinHeight="280">
+         MinHeight is the tallest step (step 1 with the server address and its error),
+         and the width is fixed (a note that names a server wraps instead of widening
+         the dialog), so the dialog keeps one footprint across steps, and when a Gitea
+         server is chosen, instead of resizing and re-centering under the pointer (#31). -->
+    <Grid Width="440" MinHeight="360">
 
         <!-- ============================================================ Step 1
-             Identity: the unique display name plus an optional note. -->
+             Identity: the unique display name, an optional note, and for a new
+             account the place it lives (GitHub, or a Gitea server). -->
         <StackPanel Spacing="12" Visibility="{x:Bind StepVisible(1, ViewModel.Step), Mode=OneWay}">
             <TextBlock
                 Style="{ThemeResource CaptionTextBlockStyle}"
@@ -48,10 +50,46 @@
                 ToolTipService.ToolTip="A note to future you about what this account is for"
                 PlaceholderText="What this account is for"
                 Text="{x:Bind ViewModel.Description, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <!-- Where the account lives (#206). Asked for a new account only: an
+                 account stays on the place its token was saved for, and then the
+                 note below says where that is. -->
+            <RadioButtons
+                x:Name="PlaceChoice"
+                AutomationProperties.AutomationId="WizardPlaceChoice"
+                Header="Where are the repositories?"
+                MaxColumns="2"
+                SelectedIndex="{x:Bind ViewModel.PlaceIndex, Mode=TwoWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.CanChoosePlace)}">
+                <RadioButton AutomationProperties.AutomationId="WizardPlaceGitHub" Content="GitHub" />
+                <RadioButton AutomationProperties.AutomationId="WizardPlaceGitea" Content="A Gitea server" />
+            </RadioButtons>
+            <TextBox
+                AutomationProperties.AutomationId="WizardServerBox"
+                Header="Server address"
+                ToolTipService.ToolTip="The address of the Gitea (or Forgejo) server itself. HTTPS only; the token is sent to this address and nowhere else."
+                PlaceholderText="https://git.example.com"
+                Text="{x:Bind ViewModel.Server, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.AsksForServer), Mode=OneWay}" />
+            <TextBlock
+                x:Name="ServerErrorText"
+                AutomationProperties.AutomationId="WizardServerError"
+                AutomationProperties.LiveSetting="Polite"
+                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                TextWrapping="Wrap"
+                Text="{x:Bind ViewModel.ServerError, Mode=OneWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.ServerError), Mode=OneWay}" />
+            <TextBlock
+                AutomationProperties.AutomationId="WizardPlaceNote"
+                Style="{ThemeResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                TextWrapping="Wrap"
+                Text="{x:Bind ViewModel.PlaceNote}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.PlaceNote)}" />
         </StackPanel>
 
         <!-- ============================================================ Step 2
-             Access token: validated against GitHub when Next is pressed. -->
+             Access token: validated when Next is pressed, against the place the
+             account is on (step 1) and nowhere else. -->
         <StackPanel Spacing="12" Visibility="{x:Bind StepVisible(2, ViewModel.Step), Mode=OneWay}">
             <TextBlock
                 Style="{ThemeResource CaptionTextBlockStyle}"
@@ -78,20 +116,23 @@
             <PasswordBox
                 x:Name="TokenBox"
                 AutomationProperties.AutomationId="WizardTokenBox"
-                Header="Personal access token"
-                ToolTipService.ToolTip="Stored in Windows Credential Manager, never in a file; needs repository read access"
-                PlaceholderText="ghp_…"
+                Header="{x:Bind ViewModel.TokenHeader, Mode=OneWay}"
+                ToolTipService.ToolTip="{x:Bind ViewModel.TokenAdvice, Mode=OneWay}"
+                PlaceholderText="{x:Bind ViewModel.TokenPlaceholder, Mode=OneWay}"
                 IsEnabled="{x:Bind ViewModel.IsOwnTokenSelected, Mode=OneWay}"
                 PasswordChanged="TokenBox_PasswordChanged" />
+            <!-- The page of the place the account is on; none when that place is not known. -->
             <HyperlinkButton
                 Padding="0"
                 Content="How to create a token"
-                NavigateUri="https://github.com/settings/tokens" />
+                NavigateUri="{x:Bind ViewModel.TokenPage, Mode=OneWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIfNotNull(ViewModel.TokenPage), Mode=OneWay}" />
             <TextBlock
+                AutomationProperties.AutomationId="WizardTokenStepNote"
                 Style="{ThemeResource CaptionTextBlockStyle}"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 TextWrapping="Wrap"
-                Text="Next validates the token and lists the organizations it can see." />
+                Text="{x:Bind ViewModel.TokenStepNote, Mode=OneWay}" />
             <StackPanel
                 Orientation="Horizontal"
                 Spacing="8"
@@ -125,7 +166,7 @@
                 AutomationProperties.AutomationId="WizardOrgBox"
                 HorizontalAlignment="Stretch"
                 Header="Organization or account"
-                ToolTipService.ToolTip="The GitHub organization or user account this saved account syncs"
+                ToolTipService.ToolTip="The organization or user account this saved account syncs"
                 IsEditable="True"
                 ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
                 PlaceholderText="Choose from the list, or type a name"

@@ -115,7 +115,10 @@
                 BorderThickness="1"
                 CornerRadius="8">
                 <StackPanel Spacing="12">
-                    <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Connect to GitHub" />
+                    <TextBlock
+                        AutomationProperties.AutomationId="ConnectTitle"
+                        Style="{ThemeResource SubtitleTextBlockStyle}"
+                        Text="{x:Bind ViewModel.ConnectTitle, Mode=OneWay}" />
 
                     <local:ConnectionFormControl
                         x:Name="ConnectForm"
@@ -405,7 +408,7 @@
                         <Button
                             AutomationProperties.AutomationId="RefreshButton"
                             Content="Refresh"
-                            ToolTipService.ToolTip="Reload the repository list from GitHub (Ctrl+R)"
+                            ToolTipService.ToolTip="Reload the repository list (Ctrl+R)"
                             Command="{x:Bind ViewModel.LoadReposCommand, Mode=OneTime}">
                             <Button.KeyboardAccelerators>
                                 <KeyboardAccelerator Key="R" Modifiers="Control" />
