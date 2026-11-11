@@ -117,6 +117,8 @@ On launch, gclo shows a brief branded splash and then opens where you left off: 
 
 **Settings** (File > Settings…) let you set default tokens (one for GitHub, and one for a Gitea server together with its address; stored in the Windows Credential Manager), the default target folder (with a folder picker), the default parallelism, and the theme (System, Light, or Dark); an Advanced section toggles the startup splash and its duration.
 
+**One window:** gclo opens one window per user. Starting it again brings the open window to the front instead of opening a second one (two windows would each keep their own copy of the settings and undo each other's changes). The command line is not affected and can run beside the app.
+
 **Activity log:** View > Activity log… shows the tail of today's log and links to the logs folder. Logs live under `%LOCALAPPDATA%\KofTwentyTwo\gclo\logs`, one file per day, kept for 30 days; they record run parameters, per-repo failures, and when the window stopped responding (for how long, and what was running), and never contain your token (see [SECURITY.md](SECURITY.md)).
 
 **Share:** Help > Share gclo by email… opens a new message in your email program with an invitation already written: what gclo is, where to download the latest release, and how to install it. Type an address and send; gclo itself sends nothing. If no email program is set up, the text is shown and copied to the clipboard, to paste into a message by hand.

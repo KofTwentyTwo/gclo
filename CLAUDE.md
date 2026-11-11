@@ -145,6 +145,9 @@ together are the "Core": all logic lives there, under the coverage gate.
   `UiTestFixture`, which answers from a fixed offline organization only when
   `GCLO_UITEST_FIXTURE=1` **and** the token is the fixture's magic token. `Program.cs`
   replaces the XAML-generated `Main` so `VelopackApp.Build().Run()` executes first, and
+  ends at once when another window holds the data folder (`WindowClaim` in
+  `gclo.ViewModels`: one window per data folder, the open one is asked to come to
+  the front), and
   switches `GcloPaths.Edition` to `dev` for the `gclo-dev` app id (the dev channel
   installs beside stable with its own data root). `ImplicitUsings` is off in this
   project only. Handlers and `x:Bind` targets look unused to analyzers; the relaxations
