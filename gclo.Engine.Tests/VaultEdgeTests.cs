@@ -68,7 +68,7 @@ public sealed class VaultEdgeTests
 
 
    [Fact]
-   public void ScopedVault_DoesNotSeeTheUnscopedEntry_AndCleansUpItsOwn()
+   public void AScopedVault_DoesNotSeeAnotherScopesEntry_AndCleansUpItsOwn()
    {
       if(!OperatingSystem.IsWindows())
       {
@@ -76,24 +76,27 @@ public sealed class VaultEdgeTests
       }
 
       var id = Guid.NewGuid();
-      var unscoped = new CredentialManagerVault(isWindows: true, scope: null);
-      var scoped = new CredentialManagerVault(isWindows: true, scope: "0123456789abcdef");
+      // Two data roots, neither the one the installed app uses: a test stays out of
+      // that namespace (#161). That the default data root has no scope in its entry
+      // names is stated above, without storing anything.
+      CredentialManagerVault one = NewTestVault();
+      CredentialManagerVault other = NewTestVault();
       try
       {
-         unscoped.Store(id, "ghp_default_profile");
-         Assert.Null(scoped.TryRetrieve(id)); // another data root never sees the default profile's token
+         one.Store(id, "ghp_one_profile");
+         Assert.Null(other.TryRetrieve(id)); // another data root never sees this one's token
 
-         scoped.Store(id, "ghp_isolated");
-         Assert.Equal("ghp_isolated", scoped.TryRetrieve(id));
-         Assert.Equal("ghp_default_profile", unscoped.TryRetrieve(id)); // and vice versa
+         other.Store(id, "ghp_isolated");
+         Assert.Equal("ghp_isolated", other.TryRetrieve(id));
+         Assert.Equal("ghp_one_profile", one.TryRetrieve(id)); // and vice versa
       }
       finally
       {
-         unscoped.Delete(id);
-         scoped.Delete(id);
+         one.Delete(id);
+         other.Delete(id);
       }
-      Assert.Null(unscoped.TryRetrieve(id));
-      Assert.Null(scoped.TryRetrieve(id));
+      Assert.Null(one.TryRetrieve(id));
+      Assert.Null(other.TryRetrieve(id));
    }
 
 

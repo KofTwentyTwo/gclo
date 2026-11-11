@@ -43,7 +43,7 @@ Reporters are credited in the advisory unless they ask not to be.
 
 | Version | Security fixes |
 | --- | --- |
-| 1.0.x (the latest release) | Yes |
+| 1.1.x (the latest release) | Yes |
 | Older | No; upgrade to the latest release |
 
 Only the latest MINOR of the latest MAJOR receives fixes; a line stops receiving

@@ -574,7 +574,7 @@ done
 
 ```console
 $ gclo --version
-1.0.0 (a893741d2)
+1.1.1 (a893741d2)
 ```
 
-Released builds print the semantic version and the short commit hash; local builds print the next-release version with a `-dev` suffix (e.g. `1.0.1-dev (<hash>)`).
+Released builds print the semantic version and the short commit hash; local builds print the next-release version with a `-dev` suffix (e.g. `1.1.2-dev (<hash>)`).

@@ -31,7 +31,8 @@ param(
 
    [string] $Sha256,
 
-   # Skips the check that the download is on the server (offline use, a rehearsal).
+   # Skips the check that the download is on the server and is the file that was hashed
+   # (offline use, a rehearsal).
    [switch] $SkipDownloadCheck
 )
 
@@ -83,18 +84,34 @@ $url = "https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v$Version/gclo
 
 ################################################################################
 ## The manifests name the download on git.kof22.com (ADR 0009). A package that ##
-## points at a file that is not there yet fails for everyone who installs it,  ##
-## so the release must be on that server before its manifests are written.     ##
+## points at a file that is not there yet, or that is not the file whose hash ##
+## the manifest carries, fails for everyone who installs it. So the release    ##
+## must be on that server, with the built file, before its manifests are       ##
+## written: the file is downloaded and its hash compared.                      ##
 ################################################################################
 if(-not $SkipDownloadCheck)
 {
+   $served = Join-Path ([System.IO.Path]::GetTempPath()) "gclo-manifest-check-$([System.Guid]::NewGuid().ToString('N')).zip"
    try
    {
-      $null = Invoke-WebRequest -Uri $url -Method Head -MaximumRedirection 5 -TimeoutSec 60 -ErrorAction Stop
+      try
+      {
+         Invoke-WebRequest -Uri $url -OutFile $served -MaximumRedirection 5 -TimeoutSec 300 -ErrorAction Stop
+      }
+      catch
+      {
+         throw "$url does not answer ($($_.Exception.Message)). Publish the release and its assets on git.kof22.com first, then run this again."
+      }
+
+      $servedSha256 = (Get-FileHash -LiteralPath $served -Algorithm SHA256).Hash.ToLowerInvariant()
+      if($servedSha256 -ne $Sha256)
+      {
+         throw "$url serves a file whose SHA-256 is $servedSha256; the manifests would name $Sha256. The asset on git.kof22.com is not the file that was built: replace it with the release's own, then run this again."
+      }
    }
-   catch
+   finally
    {
-      throw "$url does not answer ($($_.Exception.Message)). Publish the release and its assets on git.kof22.com first, then run this again."
+      Remove-Item -LiteralPath $served -Force -ErrorAction SilentlyContinue
    }
 }
 
@@ -106,7 +123,8 @@ $scoop = Get-Content -LiteralPath $scoopPath -Raw | ConvertFrom-Json
 $scoop.version = $Version
 $scoop.architecture.'64bit'.url = $url
 $scoop.architecture.'64bit'.hash = $Sha256
-$scoopJson = ($scoop | ConvertTo-Json -Depth 10) -replace '\\u0026', '&'
+# (ConvertTo-Json ends its lines the platform's way; the repository's text is LF.)
+$scoopJson = (($scoop | ConvertTo-Json -Depth 10) -replace '\\u0026', '&') -replace "`r`n", "`n"
 Write-FileText -Path $scoopPath -Text ($scoopJson + "`n")
 Write-Progress-Line "Scoop manifest -> $Version"
 

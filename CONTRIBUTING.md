@@ -25,18 +25,16 @@ Prerequisites:
 These are the commands CI runs; run them from the repository root before pushing:
 
 ```powershell
-# Build (packaged, as F5 in Visual Studio does). Zero warnings: -warnaserror is the gate.
+# Build. Zero warnings: -warnaserror is the gate. The app is always built unpackaged and
+# self-contained (gclo.csproj fixes WindowsPackageType=None): no MSIX deployment, no package identity.
 dotnet build gclo.slnx -p:Platform=x64 -warnaserror
-
-# Unpackaged build: runs without MSIX deployment or package identity. Must keep working.
-dotnet build gclo.slnx -p:Platform=x64 -p:WindowsPackageType=None
 
 # Tests (engine + view models, and the CLI), with coverage as CI measures it
 dotnet test gclo.Engine.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage"
 dotnet test gclo.Cli.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage"
 
 # UI end-to-end tests (build the app first, then drive the real exe)
-dotnet build gclo/gclo.csproj -p:Platform=x64 -p:WindowsPackageType=None
+dotnet build gclo/gclo.csproj -p:Platform=x64
 dotnet test gclo.UiTests/gclo.UiTests.csproj
 
 # Format and style gate
@@ -81,8 +79,7 @@ pre-commit install --hook-type pre-commit --hook-type commit-msg
 - Tests stay offline: engine tests use local fixture repositories and the fakes in
   `gclo.Engine.Tests/Fakes.cs`; UI tests use the offline fixture token. No network, no
   real tokens.
-- Unpackaged mode keeps working: no APIs that require package identity without a
-  fallback.
+- The app has no package identity: no APIs that require one.
 - User-visible changes update the docs (`README.md`, `docs/CLI.md`) in the same pull
   request; a change to the attack surface updates
   [the threat model](docs/security/threat-model.md); an expensive-to-reverse decision

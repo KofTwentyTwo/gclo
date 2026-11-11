@@ -50,7 +50,7 @@ its own channel:
 
 - Users who installed from a **stable** release (`gclo-stable-Setup.exe`) get
   updates only when you tag a new stable release.
-- Users who installed from a **dev** release (`gclo-dev-Setup.exe`) get every
+- Users who installed from a **dev** release (`gclo-dev-dev-Setup.exe`) get every
   prerelease you tag.
 
 A stable release `v1.2.3` carries:
@@ -173,10 +173,17 @@ Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
 .\wingetcreate.exe new https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v1.2.3/gclo-stable-Setup.exe --token <your GitHub PAT>
 ```
 
-Once that first PR is merged and the package is live, set the repository variable
-`WINGET_PACKAGE_ID=KofTwentyTwo.gclo` and the `WINGET_TOKEN` secret. Re-running the
-`winget` job of the bootstrapped release is not needed (it is already in winget);
-every later stable release updates the manifest automatically.
+Once that first PR is merged and the package is live, the `winget` job can update
+the manifest for every later stable release: it runs when the repository variable
+`WINGET_PACKAGE_ID=KofTwentyTwo.gclo` and the `WINGET_TOKEN` secret are set.
+
+**Leave `WINGET_PACKAGE_ID` unset for now.** The job submits the download URL of
+the GitHub release, and the downloads are on git.kof22.com (ADR 0009). Until the
+pipeline runs there (#197), update winget by hand for each stable release:
+
+```powershell
+.\wingetcreate.exe update KofTwentyTwo.gclo --version 1.2.3 --urls https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v1.2.3/gclo-stable-Setup.exe --submit --token <your GitHub PAT>
+```
 
 ## Scoop and Chocolatey
 
@@ -188,7 +195,12 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
   `autoupdate` entries keyed on `SHA256SUMS`, so `scoop update` works as
   soon as the manifest on `main` names the new version — which is why the
   `packages` job opens its pull request against `main` (three generated files,
-  nothing else). Merge it.
+  nothing else). The workflow runs on GitHub and opens that pull request on the
+  GitHub copy, which takes no changes of its own. Scoop reads the bucket from
+  `main` on `git.kof22.com`, so the same three files are committed there through
+  a pull request: run `Update-PackageManifests.ps1` by hand (below) on a branch
+  and merge it on Gitea. Until then Chocolatey can already hold the new version
+  while Scoop still names the old one.
 - **Chocolatey** needs a one-time account on chocolatey.org and its API key as
   `CHOCO_API_KEY`. The first version goes through Chocolatey's moderation queue
   (expect a few days); later versions are usually auto-approved. Users then run
@@ -197,8 +209,13 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
   403 (v1.1.0 hit this while 1.0.1 was queued). The `packages` job opens the
   manifests PR *before* the push so Scoop is never held up; re-run the failed job
   once the queued version is approved or rejected.
-- To re-point the manifests by hand (for example after a missed release):
+- To re-point the manifests by hand (for example after a missed release, and for
+  the commit on Gitea):
   `./.github/scripts/Update-PackageManifests.ps1 -Version 1.2.3 -CliZipPath <zip>`.
+  `<zip>` is the CLI zip downloaded from the GitHub release, where it was built,
+  after `gh attestation verify` has passed for it. The script compares the file
+  on git.kof22.com with the one it is given: given a zip taken from
+  git.kof22.com, it would compare the server's file with itself.
 
 ## The release on git.kof22.com
 
@@ -218,13 +235,19 @@ does on GitHub:
   because their feed file is not in it). A stable release copied with the flag is
   invisible to stable installs.
 - **Before the package manifests are written.** `Update-PackageManifests.ps1`
-  refuses to write a manifest whose download does not answer, so the `packages`
-  job fails until the copy is done; run it again afterwards.
+  downloads the CLI zip from git.kof22.com and refuses to write a manifest when it
+  does not answer or is not, by its SHA-256, the file that was built; so the
+  `packages` job fails until the copy is done and right. Run it again afterwards.
+- **winget by hand.** The workflow's winget step would submit the download on
+  GitHub, so it stays switched off ("First winget submission"); a version is
+  submitted to winget by hand, with the URL on git.kof22.com.
 - **No more than nine prereleases newer than the latest stable release.** The
   updater reads the ten newest releases and picks by channel; a longer run of betas
   hides the stable release from stable installs. Delete old prereleases.
 - **From the network the users are on.** Check the release page and one download
-  from outside the local network.
+  from outside the local network, without signing in. For the server as such this
+  is checked before anything is tagged (step 2 below): an install that has updated
+  to a version that reads git.kof22.com looks nowhere else.
 
 Releases on Gitea can be edited and their assets replaced; nothing there is
 immutable. Treat a published version as final anyway (see "A broken release").
@@ -239,16 +262,27 @@ immutable. Treat a published version as final anyway (see "A broken release").
    review (`docs/security/threat-model.md`).
 
 2. **Make sure `main` is green** and the `release` environment holds every
-   token the table above lists for the kind of release you are cutting.
+   token the table above lists for the kind of release you are cutting. Check,
+   from a machine outside the local network and without signing in, that
+   `https://git.kof22.com/KofTwentyTwo/gclo/releases` and one asset of an earlier
+   release answer. If they do not, stop: the updater of the version you are about
+   to publish reads only that server.
 
 3. **Rehearse on a prerelease.** Tag `vX.Y.Z-beta.N` first: it runs the whole
    pipeline except the stable-only publishers, on the `dev` channel. Install
-   `gclo-dev-Setup.exe` on a clean machine, run a Quick Sync, and let an
-   installed earlier prerelease self-update to it. Only then tag the stable
+   `gclo-dev-dev-Setup.exe` on a clean machine, run a Quick Sync, and let an
+   installed earlier prerelease self-update to it. Copy each prerelease to
+   git.kof22.com first ("The release on git.kof22.com"): the self-update is read
+   from there, and it is tried from a machine outside the local network. A
+   version that changes where updates are read (1.1.1 did) needs two prereleases
+   for this, one to install and one to be updated to. Only then tag the stable
    version.
 
 4. **Pick the version.** Follow semver: breaking change → major, new feature →
-   minor, fix → patch.
+   minor, fix → patch. The `gclo.Engine` package is judged by its own public
+   surface (`git diff <last tag>..HEAD -- gclo.Engine`): when a public member
+   changed and the app still ships as a patch, leave `NUGET_PUBLISH` off for that
+   release, or number the release for the package, and say which in the notes.
 
 5. **Tag and push** (the `protect-release-tags` ruleset lets only the
    repository admin create a `v*` tag):
@@ -283,16 +317,25 @@ immutable. Treat a published version as final anyway (see "A broken release").
    - **Scoop and Chocolatey**, **winget**, **NuGet** — the publishers described
      above; each fails loudly when it cannot publish.
 
-7. **Verify.** On the [releases page](https://git.kof22.com/KofTwentyTwo/gclo/releases)
-   every asset listed above is attached, with the same hashes as in `SHA256SUMS`
-   and the right prerelease flag (see "The release on git.kof22.com"). On GitHub,
-   where the release was built,
+7. **Copy the release to git.kof22.com.** On GitHub, where the release was built,
    `gh attestation verify <asset> --repo KofTwentyTwo/gclo --signer-repo KofTwentyTwo/standards`
-   passes. Install the previous version and let it update itself to this one.
-   Merge the packaging PR. Check the winget PR on microsoft/winget-pkgs.
-   Tick the "Ship" section of the checklist issue.
+   passes for each asset. Then create the release on Gitea with the same tag, the
+   same assets and the same prerelease flag ("The release on git.kof22.com").
+   For a stable release: re-run the `packages` job, which could not finish before
+   the download was there, and commit the three packaging files on Gitea through
+   a pull request (`Update-PackageManifests.ps1` with the CLI zip from the GitHub
+   release, see "Scoop and Chocolatey").
 
-8. **If something failed**, where it failed decides the recovery:
+8. **Verify.** On the [releases page](https://git.kof22.com/KofTwentyTwo/gclo/releases)
+   every asset listed above is attached, with the same hashes as in `SHA256SUMS`
+   and the right prerelease flag. Install the previous version and let it update
+   itself to this one; then, from a machine outside the local network, the
+   updated app answers "up to date" in **Help > Check for updates** (it reads
+   git.kof22.com from now on). The packaging pull request on Gitea is merged and
+   `scoop update` offers the version. winget is updated by hand ("First winget
+   submission"). Tick the "Ship" section of the checklist issue.
+
+9. **If something failed**, where it failed decides the recovery:
 
    - **In `verify`, `gates`, or inside `release` before "Publish release"**:
      nothing is public. Delete the draft release if one was created

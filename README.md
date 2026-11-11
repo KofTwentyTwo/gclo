@@ -33,7 +33,7 @@ All builds are published on the project's [**Releases** page](https://git.kof22.
 
 Plain version tags (`v1.2.3`) are **stable** releases; pre-release tags (`v1.2.3-beta.1`) publish to the **dev** channel, and an installed app only ever updates within its own channel.
 
-> **Upgrading from a beta?** Channels don't cross: a dev/beta install never auto-updates to a stable release (its **Check for updates** only looks at the dev channel). To move to stable, install `gclo-stable-Setup.exe` once — it takes over the existing install and self-updates within the stable channel from then on.
+> **Upgrading from a beta?** Channels don't cross: a dev/beta install never auto-updates to a stable release (its **Check for updates** only looks at the dev channel). The beta is a separate app, **gclo (dev)**, with its own accounts and settings. To move to stable, install `gclo-stable-Setup.exe` beside it, add your accounts again, then uninstall the beta; the stable app updates itself within the stable channel from then on.
 
 **Package managers (CLI):**
 
@@ -96,15 +96,15 @@ On launch, gclo shows a brief branded splash, then the **Quick Sync** connect ca
 1. **Paste your token first.** After a moment, the **Organization or account** dropdown fills with everything the token can sync — your personal account is listed first, then your organizations alphabetically. If the token cannot list organizations (a fine-grained PAT, or a classic PAT without `read:org`), the status line says so; the dropdown is editable, so just type the name.
 2. **Pick the organization or account** from the dropdown.
 3. **Choose a target folder** — type a path or click **Browse...**. Tick **Create a `<org>` subfolder** to keep several organizations under one root; the live preview line underneath always shows exactly where repositories will land (e.g. `C:\src\acme\my-repo`).
-4. **Set parallelism** if you like (1–64, default 8): how many git operations run at once.
-5. **Press Load repos.** The table fills with every repository of the organization — name, status, default branch, and an Archived marker — all selected. Click a column header to sort by it (click again to flip, a third time to return to the default order); use the funnel on any column to filter by name, status, branch, or archived state.
+4. **Press Load repositories.** The table fills with every repository of the organization — name, status, default branch, and an Archived marker — all selected. Click a column header to sort by it (click again to flip, a third time to return to the default order); use the funnel on any column to filter by name, status, branch, or archived state.
 
    <p align="center">
      <img src="docs/images/gclo-repos.png" width="820" alt="Loaded repository table: 59 repositories all selected, with sortable, filterable Name / Status / Branch / Archived columns and a Sync 59 repos button" />
    </p>
 
-6. **Uncheck anything you don't want.** The header checkbox selects or clears every row at once.
-7. **Press Sync selected.** Each row moves through its states live — Queued, Cloning (with a per-row progress bar and transfer percentage), Pulling, Done, Failed, or Canceled — while the overall progress bar and completed/total counter track the run, which ends in a summary (`Finished: 3 cloned, 41 updated, 1 failed, 0 canceled of 45.`). By default the table follows the sync, so what is happening is always in view: repositories in progress are on top, then the failed ones, then the finished ones with the latest first, then the ones still waiting. When the sync is over, the failed ones come first and the rest are in name order. A column you sorted by yourself stays as you set it.
+5. **Uncheck anything you don't want.** The header checkbox selects or clears every row at once.
+6. **Set parallelism** if you like: the gear button (**Sync options**) in the toolbar has **Parallel clones** (1–64, default 8), how many git operations run at once.
+7. **Press Sync** (the button names how many repositories are selected: **Sync 45 repos**). Each row moves through its states live — Queued, Cloning (with a per-row progress bar and transfer percentage), Pulling, Done, Failed, or Canceled — while the overall progress bar and completed/total counter track the run, which ends in a summary (`Finished: 3 cloned, 41 updated, 1 failed, 0 canceled of 45.`). By default the table follows the sync, so what is happening is always in view: repositories in progress are on top, then the failed ones, then the finished ones with the latest first, then the ones still waiting. When the sync is over, the failed ones come first and the rest are in name order. A column you sorted by yourself stays as you set it.
 
    <p align="center">
      <img src="docs/images/gclo-results.png" width="820" alt="Finished sync: every row Done, with the summary 58 cloned, 0 updated, 1 failed, 0 canceled of 59" />
@@ -201,11 +201,9 @@ Requirements: Windows 11 (or Windows 10 1809+), the [.NET 10 SDK](https://dotnet
 git clone https://git.kof22.com/KofTwentyTwo/gclo.git
 cd gclo
 
-# Desktop app (packaged build)
+# Everything, the desktop app included: a plain exe under gclo\bin\x64\Debug\ (the app is always
+# built unpackaged and self-contained; there is no MSIX deployment)
 dotnet build gclo.slnx -p:Platform=x64
-
-# Desktop app, unpackaged — a plain exe under gclo\bin\x64\Debug\, no MSIX deployment
-dotnet build gclo.slnx -p:Platform=x64 -p:WindowsPackageType=None
 
 # CLI only (plain net10.0 — also builds on Linux/macOS)
 dotnet run --project gclo.Cli -- sync --org contoso --target C:\src\contoso
@@ -214,13 +212,13 @@ dotnet run --project gclo.Cli -- sync --org contoso --target C:\src\contoso
 dotnet test
 ```
 
-To F5-debug the packaged app in Visual Studio, open `gclo.slnx`, set `gclo` as the startup project, select the `x64` platform, and make sure Windows **Developer Mode** is enabled (Settings > System > For developers) — packaged deployment requires it.
+To debug the app in Visual Studio, open `gclo.slnx`, set `gclo` as the startup project, select the `x64` platform, and press F5. Nothing is deployed as a package, so Windows Developer Mode is not needed.
 
 ## Project layout
 
 | Project | Description |
 | --- | --- |
-| `gclo` | WinUI 3 packaged desktop app — XAML, dialogs, pickers, and update plumbing only; no business logic |
+| `gclo` | WinUI 3 desktop app (unpackaged) — XAML, dialogs, pickers, and update plumbing only; no business logic |
 | `gclo.Cli` | Cross-platform command-line head over the engine ([docs/CLI.md](docs/CLI.md)) |
 | `gclo.Engine` | Core sync engine: `OrgSyncEngine`, Octokit-based listers, LibGit2Sharp git client, Windows path validation |
 | `gclo.ViewModels` | UI-framework-free view models and settings persistence, shared presentation logic |
