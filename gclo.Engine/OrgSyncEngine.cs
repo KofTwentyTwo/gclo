@@ -124,6 +124,19 @@ public sealed class OrgSyncEngine
             {
                token.ThrowIfCancellationRequested();
 
+               ///////////////////////////////////////////////////////////////////////////////
+               // A repository named as git's own folder ('.git', 'git~1', in any spelling  //
+               // Windows opens as that folder) would be cloned where the target folder's   //
+               // own '.git' is, or would be. That row fails, on every platform; the rest of//
+               // the run goes on (#184).                                                   //
+               ///////////////////////////////////////////////////////////////////////////////
+               if(WorkingTree.IsGitDirectoryName(repo.Name))
+               {
+                  throw new InvalidOperationException(
+                         $"Repository name '{repo.Name}' is the name git uses for its own folder, so there is no folder to clone it into. "
+                         + "Rename the repository on GitHub.");
+               }
+
                // A name that is one safe segment (RepositoryPathResolver) can still be
                // impossible as a Windows folder: GitHub allows repositories called
                // 'aux' or 'con'. Fail the row with a plain reason instead of an opaque

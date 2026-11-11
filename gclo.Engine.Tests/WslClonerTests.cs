@@ -342,6 +342,22 @@ public sealed class WslClonerTests
 
 
    [Theory]
+   [InlineData(".git", "repo")]
+   [InlineData("acme", ".git")]
+   [InlineData("acme", "GIT~1")]
+   [InlineData("acme", ".git.")]
+   public async Task Clone_UnderGitsOwnFolderName_IsRefused_WithoutStartingWsl(string organization, string repository)
+   {
+      WslCloneException ex = await Assert.ThrowsAsync<WslCloneException>(
+          () => Create().CloneAsync("https://github.com/acme/repo.git", organization, repository, Token, CancellationToken.None));
+
+      Assert.Contains("git uses for its own folder", ex.Message);
+      Assert.Empty(_runner.Calls);
+   }
+
+
+
+   [Theory]
    [InlineData(".gclo-tmp")]
    [InlineData(".GCLO-TMP")]
    public async Task Clone_IntoGclosOwnTemporaryFolder_IsRefused_WithoutStartingWsl(string organization)

@@ -553,11 +553,15 @@ public sealed class LibGit2GitClient : IGitClient
 
 
    /// <summary>
-   /// A folder's own git configuration must not decide where a sync's fetch goes. Two
-   /// settings could: <c>url.&lt;base&gt;.insteadOf</c>, which rewrites the URL of any
-   /// remote, and (see <see cref="RefuseSshCommandOfTheFolder"/>) the program used for
-   /// SSH. Both are refused when they come from the folder's own configuration; the
-   /// user's global configuration is theirs and is honored (#139).
+   /// A folder's own git configuration must not decide where a sync's fetch goes.
+   /// These settings could: <c>url.&lt;base&gt;.insteadOf</c>, which rewrites the URL
+   /// of any remote; a proxy (<c>http.proxy</c>, <c>http.&lt;url&gt;.proxy</c>,
+   /// <c>remote.&lt;name&gt;.proxy</c>), through which the connection would be made;
+   /// <c>http.followRedirects</c>, which says how far a server's redirects are
+   /// followed (#184); and (see <see cref="RefuseSshCommandOfTheFolder"/>) the
+   /// program used for SSH. All are refused when they come from the folder's own
+   /// configuration, whichever file of it they are written in; the user's global
+   /// configuration is theirs and is honored (#139).
    /// </summary>
    private static void RefuseUrlRewritesOfTheFolder(Repository repo)
    {
@@ -571,7 +575,30 @@ public sealed class LibGit2GitClient : IGitClient
                 "This folder's own git configuration rewrites remote URLs (a url.<base>.insteadOf entry in its .git/config), "
                 + "so a fetch could go somewhere other than the listed repository. Remove that entry, then sync again.");
          }
+
+         if(entry.Level >= ConfigurationLevel.Local && DecidesWhereAFetchIsMade(entry.Key))
+         {
+            throw new InvalidOperationException(
+                $"This folder's own git configuration has a setting that decides where a fetch is made ('{entry.Key}' in its .git/config: "
+                + "a proxy, or how redirects are followed). Remove that entry, then sync again; "
+                + "if it is a setting you need, it belongs in your global git configuration.");
+         }
       }
+   }
+
+
+
+   /// <summary>
+   /// True for a configuration key that names a proxy for HTTP remotes
+   /// (<c>http.proxy</c>, <c>http.&lt;url&gt;.proxy</c>, <c>remote.&lt;name&gt;.proxy</c>)
+   /// or says how redirects are followed (<c>http.followRedirects</c>,
+   /// <c>http.&lt;url&gt;.followRedirects</c>).
+   /// </summary>
+   private static bool DecidesWhereAFetchIsMade(string key)
+   {
+      bool http = key.StartsWith("http.", StringComparison.OrdinalIgnoreCase);
+      return (key.EndsWith(".proxy", StringComparison.OrdinalIgnoreCase) && (http || key.StartsWith("remote.", StringComparison.OrdinalIgnoreCase)))
+          || (http && key.EndsWith(".followredirects", StringComparison.OrdinalIgnoreCase));
    }
 
 

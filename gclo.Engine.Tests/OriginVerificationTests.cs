@@ -299,6 +299,38 @@ public sealed class OriginVerificationTests : IDisposable
 
 
 
+   [Theory]
+   [InlineData("http.proxy")]
+   [InlineData("HTTP.Proxy")]
+   [InlineData("http.https://example.test/.proxy")]
+   [InlineData("remote.origin.proxy")]
+   [InlineData("remote.gclo-sync.proxy")]
+   [InlineData("http.followRedirects")]
+   [InlineData("http.https://example.test/.followRedirects")]
+   public async Task Pull_FolderConfigurationNamesAProxy_OrSaysHowRedirectsAreFollowed_IsRefused_BeforeAnythingIsFetched(string key)
+   {
+      string source = CreateSourceRepo("source");
+      string target = Path.Combine(_root, "clone");
+      await _client.CloneAsync(source, target, Token, null, CancellationToken.None);
+      string trackingBefore = TrackingTip(target);
+      using(var repo = new Repository(target))
+      {
+         // The fetch would be made through, or be sent on to, a server the folder chose (#184).
+         repo.Config.Set(key, "http://127.0.0.1:9", ConfigurationLevel.Local);
+      }
+      CommitFile(source, "update.txt", "new content", "second commit");
+
+      InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(
+          () => _client.FetchAndPullAsync(source, target, Token, CancellationToken.None));
+
+      Assert.Contains("decides where a fetch is made", ex.Message);
+      Assert.Contains(key[(key.LastIndexOf('.') + 1)..], ex.Message, StringComparison.OrdinalIgnoreCase); // the setting is named
+      Assert.Equal(trackingBefore, TrackingTip(target));
+      Assert.False(File.Exists(Path.Combine(target, "update.txt")));
+   }
+
+
+
    [Fact]
    public async Task Pull_FolderConfigurationNamesAnSshProgram_IsRefused_WhenTheFetchIsNotHttps()
    {

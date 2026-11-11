@@ -955,8 +955,10 @@ public sealed class SyncAllCoordinatorTests : IDisposable
    public void AnAccountsPage_IsToldWhenItsTokenIsNoLongerMissing()
    {
       WorkspaceViewModel shared = CreateDefaultTokenWorkspace("shared", withDefaultToken: false);
-      var changed = new List<string?>();
-      shared.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+      // A token change also starts the organization lookup, whose changes arrive from
+      // another thread: the names are collected in something that takes that.
+      var changed = new System.Collections.Concurrent.ConcurrentQueue<string?>();
+      shared.PropertyChanged += (_, e) => changed.Enqueue(e.PropertyName);
       Assert.NotNull(shared.MissingTokenDescription);
 
       _vault.Store(AppSettings.DefaultTokenVaultId, "tok-default"); // saved in Settings meanwhile
@@ -964,8 +966,9 @@ public sealed class SyncAllCoordinatorTests : IDisposable
 
       Assert.Null(shared.MissingTokenDescription);
       Assert.Null(shared.MissingTokenAdvice);
-      Assert.Contains(changed, name => string.Equals(name, nameof(WorkspaceViewModel.MissingTokenDescription), StringComparison.Ordinal));
-      Assert.Contains(changed, name => string.Equals(name, nameof(WorkspaceViewModel.MissingTokenAdvice), StringComparison.Ordinal));
+      string?[] seen = [.. changed]; // the two are raised by the token's setter, on this thread, before it returns
+      Assert.Contains(seen, name => string.Equals(name, nameof(WorkspaceViewModel.MissingTokenDescription), StringComparison.Ordinal));
+      Assert.Contains(seen, name => string.Equals(name, nameof(WorkspaceViewModel.MissingTokenAdvice), StringComparison.Ordinal));
    }
 
 

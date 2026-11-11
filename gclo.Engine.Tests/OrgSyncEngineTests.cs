@@ -241,6 +241,28 @@ public sealed class OrgSyncEngineTests : IDisposable
 
 
 
+   [Theory]
+   [InlineData(".git")]
+   [InlineData(".GIT")]
+   [InlineData("git~1")]
+   [InlineData(".git.")]
+   public async Task Sync_RepoNamedAsGitsOwnFolder_FailsThatRowWithoutTouchingGit_OnEveryPlatform(string name)
+   {
+      _lister.Repositories = Repos("alpha", name, "bravo");
+
+      SyncSummary summary = await CreateEngine().SyncAsync(CreateRequest(), _progress);
+
+      Assert.Equal(new SyncSummary(Total: 3, Cloned: 2, Updated: 0, Failed: 1, Canceled: 0, WasCanceled: false), summary);
+      RepoProgress failed = _progress.LastFor(name)!;
+      Assert.Equal(SyncStatus.Failed, failed.Status);
+      Assert.Contains("git uses for its own folder", failed.Error);
+      Assert.Contains("Rename the repository", failed.Error);
+      Assert.DoesNotContain(name, _git.ClonedRepoNames, StringComparer.Ordinal);
+      Assert.DoesNotContain(_git.ValidityChecks, p => string.Equals(Path.GetFileName(p), name, StringComparison.Ordinal));
+   }
+
+
+
    [Fact]
    public async Task Sync_RepoNamedLikeAWindowsDevice_FailsThatRowWithoutTouchingGit()
    {

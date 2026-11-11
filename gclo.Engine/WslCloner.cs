@@ -153,6 +153,11 @@ public sealed class WslCloner : IWslCloner
          {
             throw new WslCloneException($"Clone in WSL refused: '{name}' cannot be used as a folder name ({reason}).");
          }
+         if(WorkingTree.IsGitDirectoryName(name))
+         {
+            // It would be cloned into, or as, the '.git' of a folder under ~/gclo (#184).
+            throw new WslCloneException($"Clone in WSL refused: '{name}' is the name git uses for its own folder.");
+         }
       }
       if(string.Equals(organization, TemporaryFolderName, StringComparison.OrdinalIgnoreCase))
       {
