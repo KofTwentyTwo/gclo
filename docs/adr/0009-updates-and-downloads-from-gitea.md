@@ -29,7 +29,8 @@ would install an old version for ever.
 
 - Versions up to 1.1.0 look for updates on GitHub. They find a later version only
   if it is also published there; otherwise they are updated once by hand. From
-  1.1.1 on the app looks on `git.kof22.com`.
+  1.2.0 on the app looks on `git.kof22.com` (the change was made for a 1.1.1
+  that was not released on its own; it ships in 1.2.0).
 - The availability and the integrity of updates now rest on a self-hosted server
   instead of GitHub's release hosting. The updater verifies a package against the
   hash in the feed, and the feed comes from the same server; it checks no signature

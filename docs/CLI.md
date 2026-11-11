@@ -537,7 +537,7 @@ its offset from UTC (`2026-11-10 14:03:22.123 -06:00 [INFO] ...`). Text that cam
 
 Codes 3 and 4 were part of code 2 before version 1.1; a script that tested
 `-eq 2` for "usage error" should treat `3` and `4` as distinct outcomes.
-Before version 1.1.1, a refusal of access other than an invisible organization
+Before version 1.2, a refusal of access other than an invisible organization
 (403), a rate limit answered with 429, a network failure, a timeout, and an
 error on GitHub's side ended with code 70; they now end with `3` (the refusal)
 or `4` (the rest).
@@ -653,7 +653,7 @@ done
 
 ```console
 $ gclo --version
-1.1.1 (a893741d2)
+1.2.0 (a893741d2)
 ```
 
 Released builds print the semantic version and the short commit hash; local builds print the next-release version with a `-dev` suffix (e.g. `1.1.2-dev (<hash>)`).
