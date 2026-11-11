@@ -54,8 +54,17 @@ public static class Program
       // was started by the user, so it may pass that right on), and this one    //
       // ends before any window or file of its own exists.                       //
       /////////////////////////////////////////////////////////////////////////////
-      Claim = WindowClaim.For(GcloPaths.DataRoot);
-      if(!Claim.IsTheOnlyOne)
+      try
+      {
+         Claim = WindowClaim.For(GcloPaths.DataRoot);
+      }
+      catch(Exception)
+      {
+         // No log exists yet, and nothing here is worth not opening for: without a claim the window opens as it always did.
+         Claim = null;
+      }
+
+      if(Claim is { IsTheOnlyOne: false })
       {
          _ = AllowSetForegroundWindow(AnyProcess);
          Claim.AskTheOtherToShowItself();

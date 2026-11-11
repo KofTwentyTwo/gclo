@@ -124,6 +124,26 @@ public sealed class WindowClaimTests : IDisposable
 
 
    [Fact]
+   public void WhenTheRequestToComeToTheFrontCannotBeMade_TheClaimStands_AndNothingFails()
+   {
+      // The name of the event is taken by something that is no event (it could as well be one this process may not use).
+      string folder = Path.Combine(_root, "data");
+      using var inTheWay = new Mutex(initiallyOwned: false, $@"Local\gclo-show-{WindowClaim.KeyFor(folder)}");
+
+      using var first = WindowClaim.For(folder);
+      using var second = WindowClaim.For(folder);
+      using var asked = new ManualResetEventSlim();
+      first.OnAskedToShow(asked.Set);
+      second.AskTheOtherToShowItself();
+
+      Assert.True(first.IsTheOnlyOne);
+      Assert.False(second.IsTheOnlyOne);
+      Assert.False(asked.Wait(TimeSpan.FromMilliseconds(300))); // nothing is asked, and nothing is heard
+   }
+
+
+
+   [Fact]
    public void TheKeyOfAFolder_IsTheSameForEverySpellingOfIt_AndAnotherForAnotherFolder()
    {
       string folder = Path.Combine(_root, "Data");

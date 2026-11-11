@@ -36,13 +36,14 @@ public sealed class WindowClaim : IDisposable
 
    private readonly FileStream? _held;
 
-   private readonly EventWaitHandle _show;
+   /// <summary>Null when the event could not be made or opened: nothing is asked then, and nothing heard.</summary>
+   private readonly EventWaitHandle? _show;
 
    private RegisteredWaitHandle? _waiting;
 
 
 
-   private WindowClaim(FileStream? held, bool isTheOnlyOne, EventWaitHandle show)
+   private WindowClaim(FileStream? held, bool isTheOnlyOne, EventWaitHandle? show)
    {
       _held = held;
       IsTheOnlyOne = isTheOnlyOne;
@@ -78,7 +79,21 @@ public sealed class WindowClaim : IDisposable
          // No claim can be made here (a read-only profile, a path that is no folder): the window opens all the same.
       }
 
-      var show = new EventWaitHandle(initialState: false, EventResetMode.AutoReset, $@"Local\gclo-show-{KeyFor(dataRoot)}");
+      EventWaitHandle? show = null;
+      try
+      {
+         show = new EventWaitHandle(initialState: false, EventResetMode.AutoReset, $@"Local\gclo-show-{KeyFor(dataRoot)}");
+      }
+      catch(Exception ex) when(ex is UnauthorizedAccessException or WaitHandleCannotBeOpenedException or IOException)
+      {
+         /////////////////////////////////////////////////////////////////////////////
+         // The name is taken by something this process may not use (a gclo that   //
+         // runs elevated made it), or by something that is no event. The claim on //
+         // the folder stands as the file said; only the request to come to the    //
+         // front is not made. This runs at every start: it must not end one.      //
+         /////////////////////////////////////////////////////////////////////////////
+      }
+
       return new WindowClaim(held, !anotherHoldsIt, show);
    }
 
@@ -103,7 +118,7 @@ public sealed class WindowClaim : IDisposable
 
 
    /// <summary>Asks the window that holds the data folder to come to the front.</summary>
-   public void AskTheOtherToShowItself() => _show.Set();
+   public void AskTheOtherToShowItself() => _show?.Set();
 
 
 
@@ -116,7 +131,9 @@ public sealed class WindowClaim : IDisposable
    {
       ArgumentNullException.ThrowIfNull(show);
       _waiting?.Unregister(null);
-      _waiting = ThreadPool.RegisterWaitForSingleObject(_show, (_, _) => show(), state: null, Timeout.Infinite, executeOnlyOnce: false);
+      _waiting = _show is null
+          ? null
+          : ThreadPool.RegisterWaitForSingleObject(_show, (_, _) => show(), state: null, Timeout.Infinite, executeOnlyOnce: false);
    }
 
 
@@ -126,7 +143,7 @@ public sealed class WindowClaim : IDisposable
    {
       _waiting?.Unregister(null);
       _waiting = null;
-      _show.Dispose();
+      _show?.Dispose();
       _held?.Dispose();
    }
 }

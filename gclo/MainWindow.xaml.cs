@@ -52,6 +52,9 @@ public sealed partial class MainWindow : Window
    /// <summary>Set once the root's theme-change subscription exists.</summary>
    private bool _themeHooked;
 
+   /// <summary>Set when the window has closed: a request to come to the front that arrives after that is dropped (#216).</summary>
+   private bool _closed;
+
    private readonly AppSettings _settings;
 
    private readonly UpdateService _updateService;
@@ -204,11 +207,13 @@ public sealed partial class MainWindow : Window
       }
 
       // Another start of gclo on this data folder ends at once and asks this window to come to the front (#216).
-      Program.Claim?.OnAskedToShow(() => DispatcherQueue.TryEnqueue(ComeToTheFront));
+      Program.Claim?.OnAskedToShow(() => queue.TryEnqueue(ComeToTheFront));
 
       Closed += (_, _) =>
       {
          // First: from here on a new start opens a window of its own, and does not ask one that is closing.
+         // A request that was already on its way finds the window closed and does nothing.
+         _closed = true;
          Program.Claim?.Dispose();
 
          // The workspace that is open now is where the next start opens: written here, whatever was written before.
@@ -1658,6 +1663,11 @@ public sealed partial class MainWindow : Window
    /// </summary>
    private void ComeToTheFront()
    {
+      if(_closed)
+      {
+         return;
+      }
+
       if(AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
       {
          presenter.Restore();

@@ -79,7 +79,17 @@ public partial class App : Application
    /// <param name="args">Details about the launch request and process.</param>
    protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
    {
-      _window = new MainWindow();
-      _window.Activate();
+      try
+      {
+         _window = new MainWindow();
+         _window.Activate();
+      }
+      catch
+      {
+         // No window came of it, and this process may live on (the handler above keeps it alive): it must not
+         // hold the data folder, or every later start would end at once with nothing to bring to the front (#216).
+         Program.Claim?.Dispose();
+         throw;
+      }
    }
 }
