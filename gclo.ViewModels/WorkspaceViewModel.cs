@@ -79,6 +79,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       set;
    }
 
+   /// <summary>Counts the starts and finishes of rows; see <see cref="RepoItemViewModel.LastActivity"/>.</summary>
+   private long _activityClock;
+
    /// <summary>Breaks the AllSelected &lt;-&gt; item.IsSelected feedback loop while one side updates the other.</summary>
    private bool _syncingSelection;
 
@@ -99,8 +102,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
    /// <summary>
    /// Production dependencies by default; pass fakes for testing. The default progress
-   /// factory is <see cref="Progress{T}"/>, which marshals via the SynchronizationContext
-   /// captured at construction (the UI thread in the app); tests inject a synchronous one.
+   /// factory is <see cref="BatchedRepoProgress"/>, which delivers on the
+   /// SynchronizationContext it is created on (the UI thread in the app), a few times a
+   /// second rather than once per report; tests inject a synchronous one.
    /// A non-null <paramref name="account"/> seeds the workspace from that profile — its
    /// organization, target folder, subfolder preference, and concurrency — and pulls the
    /// token from <paramref name="tokenVault"/> (the Token setter's org lookup fires
@@ -126,7 +130,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       _git = git ?? new LibGit2GitClient();
       _wsl = wsl ?? new WslCloner();
       _orgLister = orgLister ?? new GitHubOrganizationLister();
-      _progressFactory = progressFactory ?? (handler => new Progress<RepoProgress>(handler));
+      _progressFactory = progressFactory ?? DefaultProgress;
       _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
       _log = log ?? new FileActivityLog(GcloPaths.LogDirectory);
       _account = account;
@@ -206,13 +210,6 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// changes, a load completes, a run starts or ends, and on terminal row transitions.
    /// </summary>
    public ObservableCollection<RepoItemViewModel> FilteredRepos { get; } = new();
-
-   /// <summary>
-   /// Rows with a git operation in flight right now; feeds the pinned active strip.
-   /// Maintained incrementally from progress reports, so its size is bounded by
-   /// <see cref="MaxConcurrency"/>. Cleared when a run starts and again when it ends.
-   /// </summary>
-   public ObservableCollection<RepoItemViewModel> ActiveRepos { get; } = new();
 
    /// <summary>Organizations discovered from the current token; feeds the org dropdown.</summary>
    public ObservableCollection<string> Organizations { get; } = new();
@@ -338,7 +335,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    [ObservableProperty]
    public partial bool HasFailedRepos { get; set; }
 
-   /// <summary>Column the table is currently sorted by, or null for load order.</summary>
+   /// <summary>
+   /// Column the table is sorted by, or null for the default order: while a sync
+   /// runs, the repositories in flight, then the failed ones, then the finished ones
+   /// (the latest first), then the ones still waiting; otherwise the failed ones
+   /// first, then by name (#168).
+   /// </summary>
    [ObservableProperty]
    public partial string? SortColumn { get; set; }
 
@@ -658,8 +660,20 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
 
 
-   /// <summary>Records that the user opened the target folder from the results bar (#40).</summary>
+   /// <summary>Records that the user opened the target folder, from the toolbar or the results bar (#40).</summary>
    public void NoteFolderOpened() => _log.Info($"Opened folder '{EffectiveTargetRoot}'.");
+
+
+
+   /// <summary>
+   /// The user asked for the target folder and it does not exist: says so in the
+   /// status line. Nothing has been synced into it yet; the first sync creates it.
+   /// </summary>
+   public void NoteFolderNotThereYet()
+   {
+      StatusText = $"The folder '{EffectiveTargetRoot}' does not exist yet. The first sync creates it.";
+      _log.Info($"Folder '{EffectiveTargetRoot}' was asked for and does not exist yet.");
+   }
 
 
 
@@ -996,7 +1010,6 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    {
       IsRunning = true;
       ResetRunResult();
-      ActiveRepos.Clear();
       try
       {
          // First, before any row is touched: a sync that cannot start for want of a
@@ -1022,11 +1035,14 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          StatusText = $"Syncing {selected.Count} repositories...";
          _log.Info($"Sync started: {selected.Count} repositories into '{targetRoot}'.");
 
-         // Constructed on the UI thread: Progress<T> captures the WinUI
-         // SynchronizationContext, so HandleProgress always runs on the UI thread.
-         // Failure logging is layered in front of it so the per-entry file I/O
-         // happens on the engine's worker thread, never on the dispatcher (#30).
-         var progress = new FailureLoggingProgress(_progressFactory(HandleProgress), _log);
+         // Constructed on the UI thread: the delivery captures the WinUI
+         // SynchronizationContext, so HandleProgress always runs on the UI thread,
+         // a few times a second with each repository's latest state rather than
+         // once per report (#167). Failure logging is layered in front of it so the
+         // per-entry file I/O happens on the engine's worker thread, never on the
+         // dispatcher (#30).
+         IProgress<RepoProgress> delivery = _progressFactory(HandleProgress);
+         var progress = new FailureLoggingProgress(delivery, _log);
 
          var request = new SyncRequest(
              Organization.Trim(), token, targetRoot, MaxConcurrency);
@@ -1034,7 +1050,17 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
          Func<SyncRequest, IReadOnlyList<RepoDescriptor>, IProgress<RepoProgress>, CancellationToken, Task<SyncSummary>> run =
              SyncRunner ?? ((req, descs, prog, ct) => new OrgSyncEngine(_lister, _git).SyncAsync(req, descs, prog, ct));
-         SyncSummary summary = await run(request, descriptors, progress, cancellationToken);
+         SyncSummary summary;
+         try
+         {
+            summary = await run(request, descriptors, progress, cancellationToken);
+         }
+         finally
+         {
+            // Whatever still waits to be delivered reaches the rows now, before the
+            // outcome is stated.
+            (delivery as IDisposable)?.Dispose();
+         }
 
          string summaryText = (summary.WasCanceled ? "Canceled" : "Finished")
              + $": {summary.Cloned} cloned, {summary.Updated} updated, "
@@ -1080,11 +1106,16 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       {
          HasCompletedRun = true;
          IsRunning = false;
-         ActiveRepos.Clear();
          RebuildFilteredRepos();
          ResultOpen = true;
       }
    }
+
+
+
+   /// <summary>How progress reaches the window when nothing else was asked for: in batches (#167).</summary>
+   internal static IProgress<RepoProgress> DefaultProgress(Action<RepoProgress> handler)
+       => new BatchedRepoProgress(handler);
 
 
 
@@ -1211,7 +1242,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          IsResolvingPaths = false;
       }
       RecomputeCompletedCount();
-      UpdateFilteredMembership(item);
+      PlaceInTable(item);
       RetryFailedCommand.NotifyCanExecuteChanged();
    }
 
@@ -1225,17 +1256,17 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          _log.Info($"{item.Name}: applying path recovery "
              + $"({recovery.SegmentRenames.Count} renamed, {recovery.SkippedPaths.Count} skipped).");
          // Pulling shows the row's indeterminate bar while the checkout runs.
-         item.Status = SyncStatus.Pulling;
+         SetStatus(item, SyncStatus.Pulling);
          await _git.ApplyRecoveryAsync(path, recovery, _lifetimeCts.Token);
 
-         item.Status = SyncStatus.Done;
+         SetStatus(item, SyncStatus.Done);
          item.Error = null;
          item.InvalidPaths = null;
          _log.Info($"{item.Name}: path recovery applied; repository checked out.");
       }
       catch(Exception ex)
       {
-         item.Status = SyncStatus.Failed;
+         SetStatus(item, SyncStatus.Failed);
          item.Error = ex.Message;
          // A still-invalid or colliding mapping keeps the row resolvable with the
          // fresh path list; any other failure clears the payload (renaming again
@@ -1260,13 +1291,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       try
       {
          _log.Info($"{item.Name}: cloning in WSL instead.");
-         item.Status = SyncStatus.Pulling; // indeterminate bar; git in WSL reports no percentage here
+         SetStatus(item, SyncStatus.Pulling); // indeterminate bar; git in WSL reports no percentage here
          // The organization the table was loaded for, not whatever the box says now:
          // the row belongs to that organization, and its folder under ~/gclo should too.
          WslCloneResult result = await _wsl.CloneAsync(
              item.Descriptor.CloneUrl, LoadedOrganization ?? Organization.Trim(), item.Name, TokenToUseNow(), _lifetimeCts.Token);
 
-         item.Status = SyncStatus.Done;
+         SetStatus(item, SyncStatus.Done);
          item.Error = null;
          item.InvalidPaths = null;
          item.Note = $"Cloned in WSL ({result.Distribution}): {result.WindowsPath}";
@@ -1274,7 +1305,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       }
       catch(Exception ex)
       {
-         item.Status = SyncStatus.Failed;
+         SetStatus(item, SyncStatus.Failed);
          item.Error = ex.Message;
          _log.Error($"{item.Name}: clone in WSL failed: {ex.Message}", ex);
       }
@@ -1286,7 +1317,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
    /// <summary>
    /// Sorts the table by a column ("Name", "Status", "Branch", or "Archived"); a second
-   /// click on the same column flips the direction. The re-order is stable and in place.
+   /// click on the same column flips the direction, and a third puts the table back
+   /// in its default order (see <see cref="SortColumn"/>). The re-order is stable.
    /// </summary>
    [RelayCommand]
    private void Sort(string column)
@@ -1298,7 +1330,14 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
       if(string.Equals(SortColumn, column, StringComparison.Ordinal))
       {
-         SortDescending = !SortDescending;
+         if(SortDescending)
+         {
+            SortColumn = null;
+            SortDescending = false;
+            RebuildFilteredRepos();
+            return;
+         }
+         SortDescending = true;
       }
       else
       {
@@ -1365,22 +1404,6 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          item.InvalidPaths = report.InvalidPaths;
       }
 
-      // Active-strip membership is maintained incrementally: a full rescan per report
-      // would cost O(rows) on every progress tick. Contains/Remove stay cheap because
-      // the collection is bounded by MaxConcurrency.
-      bool isActive = item.Status is SyncStatus.Cloning or SyncStatus.Pulling;
-      if(isActive)
-      {
-         if(!ActiveRepos.Contains(item))
-         {
-            ActiveRepos.Add(item);
-         }
-      }
-      else
-      {
-         ActiveRepos.Remove(item);
-      }
-
       if(report.Status == SyncStatus.Failed)
       {
          // Logged already by FailureLoggingProgress on the worker thread. Failures
@@ -1397,10 +1420,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       if(statusBefore != item.Status)
       {
          // Status-dependent filters follow every transition (a row entering Cloning
-         // leaves Pending and joins Active immediately). Only this one row can have
-         // changed membership, so it is inserted or removed in place — no O(n)
-         // rebuild, no Reset notification, no scroll jump (#30).
-         UpdateFilteredMembership(item);
+         // leaves Pending and joins Active immediately), and a row in flight sits
+         // at the top of the table (#168). Only this one row can have changed its
+         // membership or its place, so it alone is inserted, removed, or moved — no
+         // O(n) rebuild, no Reset notification, no scroll jump (#30).
+         item.LastActivity = ++_activityClock;
+         PlaceInTable(item);
       }
    }
 
@@ -1471,12 +1496,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// table's current sort order, then re-derives the header checkbox from the
    /// visible rows. Used when the filter, the table contents, or the sort order
    /// change; single-row status transitions go through
-   /// <see cref="UpdateFilteredMembership"/> instead. A no-op when the visible set
+   /// <see cref="PlaceInTable"/> instead. A no-op when the visible set
    /// is already correct, so list controls keep their scroll position.
    /// </summary>
    private void RebuildFilteredRepos()
    {
       var desired = Repos.Where(MatchesFilter).ToList();
+      desired.Sort(CompareForTable);
       if(!desired.SequenceEqual(FilteredRepos))
       {
          FilteredRepos.Clear();
@@ -1492,31 +1518,119 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
 
 
+   /// <summary>True while a git operation is running for the row.</summary>
+   private static bool IsInFlight(RepoItemViewModel repo)
+       => repo.Status is SyncStatus.Cloning or SyncStatus.Pulling;
+
+
+
    /// <summary>
-   /// Applies one row's current filter match to <see cref="FilteredRepos"/>: inserts it
-   /// at its table position (binary search on <see cref="_reposIndex"/>) when it became
-   /// visible, removes it when it became hidden, and does nothing when its membership
-   /// did not change. O(log n) instead of the former O(n) rebuild per progress report.
+   /// Which group a row belongs to in the default order: the ones in flight (0), the
+   /// failed ones (1), while a sync runs the finished ones (2), and the rest (3).
    /// </summary>
-   private void UpdateFilteredMembership(RepoItemViewModel item)
+   private int GroupOf(RepoItemViewModel repo)
    {
+      if(IsInFlight(repo))
+      {
+         return 0;
+      }
+      if(repo.Status == SyncStatus.Failed)
+      {
+         return 1;
+      }
+      return IsRunning && repo.Status is SyncStatus.Done or SyncStatus.Canceled ? 2 : 3;
+   }
+
+
+
+   /// <summary>
+   /// The table's order, as a comparison (negative: <paramref name="a"/> comes first).
+   /// With a column chosen by the user it is that column's order, which
+   /// <see cref="Repos"/> holds. Otherwise it is the default order (#168): what is
+   /// happening now is on top and the list moves as the sync goes. While a sync runs:
+   /// the rows in flight (the one that started first on top), the failed ones and
+   /// then the finished ones (the latest first in each), then the ones still waiting,
+   /// by name. With no sync running: the failed ones, then everything else, by name.
+   /// Never 0 for two different rows, so every row has exactly one place.
+   /// </summary>
+   private int CompareForTable(RepoItemViewModel a, RepoItemViewModel b)
+   {
+      if(SortColumn is null)
+      {
+         int groupA = GroupOf(a);
+         int groupB = GroupOf(b);
+         if(groupA != groupB)
+         {
+            return groupA.CompareTo(groupB);
+         }
+
+         int byActivity = groupA switch
+         {
+            0 => a.LastActivity.CompareTo(b.LastActivity),
+            1 or 2 when IsRunning => b.LastActivity.CompareTo(a.LastActivity),
+            _ => 0,
+         };
+         if(byActivity != 0)
+         {
+            return byActivity;
+         }
+
+         // A table holds one row per name, whatever its case (the load sees to it).
+         return StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name);
+      }
+      return _reposIndex[a].CompareTo(_reposIndex[b]);
+   }
+
+
+
+   /// <summary>Sets a row's status outside a sync run (a recovery) and puts the row where it now belongs.</summary>
+   private void SetStatus(RepoItemViewModel item, SyncStatus status)
+   {
+      item.Status = status;
+      item.LastActivity = ++_activityClock;
+      PlaceInTable(item);
+   }
+
+
+
+   /// <summary>
+   /// Brings one row's presence and place in <see cref="FilteredRepos"/> in line with
+   /// its current state: inserted where it belongs when it now matches the filter,
+   /// removed when it no longer does, moved when its place changed (it started,
+   /// finished, or failed), and left alone otherwise. One row, not the former O(n)
+   /// rebuild per progress report.
+   /// </summary>
+   private void PlaceInTable(RepoItemViewModel item)
+   {
+      if(!_reposIndex.ContainsKey(item))
+      {
+         // A row from before a reload (its path recovery was still open when the
+         // table was loaded again): it has no place in this table.
+         return;
+      }
+
       bool visible = MatchesFilter(item);
-      bool wasVisible = _filteredSet.Contains(item);
-      if(visible == wasVisible)
+      int current = _filteredSet.Contains(item) ? FilteredRepos.IndexOf(item) : -1;
+      if(!visible && current < 0)
       {
          return;
       }
 
-      int slot = FindFilteredSlot(item);
+      int slot = visible ? FindFilteredSlot(item, current) : -1;
+      if(slot == current)
+      {
+         return;
+      }
+
+      if(current >= 0)
+      {
+         FilteredRepos.RemoveAt(current);
+         _filteredSet.Remove(item);
+      }
       if(visible)
       {
          FilteredRepos.Insert(slot, item);
          _filteredSet.Add(item);
-      }
-      else
-      {
-         FilteredRepos.RemoveAt(slot);
-         _filteredSet.Remove(item);
       }
       UpdateAllSelectedFromItems();
    }
@@ -1524,18 +1638,20 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
 
    /// <summary>
-   /// Index in <see cref="FilteredRepos"/> where <paramref name="item"/> sits (when
-   /// present) or belongs (when absent), by its position in <see cref="Repos"/>.
+   /// Index at which <paramref name="item"/> belongs in <see cref="FilteredRepos"/>,
+   /// counted without the item itself (<paramref name="current"/> is where it sits
+   /// now, or -1 when it is not in the list), by <see cref="CompareForTable"/>. The
+   /// other rows are in that order already, so a binary search finds it.
    /// </summary>
-   private int FindFilteredSlot(RepoItemViewModel item)
+   private int FindFilteredSlot(RepoItemViewModel item, int current)
    {
-      int position = _reposIndex[item];
       int low = 0;
-      int high = FilteredRepos.Count;
+      int high = current < 0 ? FilteredRepos.Count : FilteredRepos.Count - 1;
       while(low < high)
       {
          int mid = (low + high) / 2;
-         if(_reposIndex[FilteredRepos[mid]] < position)
+         RepoItemViewModel other = FilteredRepos[current >= 0 && mid >= current ? mid + 1 : mid];
+         if(CompareForTable(other, item) < 0)
          {
             low = mid + 1;
          }

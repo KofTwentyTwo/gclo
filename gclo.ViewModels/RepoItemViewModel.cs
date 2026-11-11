@@ -23,6 +23,13 @@ public sealed partial class RepoItemViewModel : ObservableObject
 
 
 
+   /// <summary>
+   /// When the row last started or finished an operation, as a count that grows with
+   /// every such change in its workspace (0 = never). The table's default order uses
+   /// it: of two finished rows, the one that finished later comes first (#168).
+   /// </summary>
+   internal long LastActivity { get; set; }
+
    /// <summary>The repository this row represents; never changes after construction.</summary>
    public RepoDescriptor Descriptor { get; }
 

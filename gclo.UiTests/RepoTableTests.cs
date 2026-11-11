@@ -67,8 +67,8 @@ public sealed class RepoTableTests : UiTestBase
       header.Patterns.Invoke.Pattern.Invoke();
       Session.WaitFor(() => ColumnHeader("Branch, sorted descending"), "the header after a second sort");
 
-      header.Patterns.Invoke.Pattern.Invoke(); // the control's third step is "clear"; the view model starts over
-      Session.WaitFor(() => ColumnHeader("Branch, sorted ascending"), "the header after a third sort");
+      header.Patterns.Invoke.Pattern.Invoke(); // the third step gives the column up: the table's default order is back
+      Session.WaitFor(() => ColumnHeader("Branch, not sorted"), "the header after a third sort");
    }
 
 

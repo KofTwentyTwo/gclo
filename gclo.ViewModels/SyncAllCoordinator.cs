@@ -29,6 +29,12 @@ public sealed class SyncAllCoordinator(IActivityLog log)
    /// </summary>
    public Action<Guid, SyncAllAccountState>? AccountStateChanged { get; set; }
 
+   /// <summary>
+   /// Told where the pass stands, from its start to its end, so a status bar can show
+   /// it whichever workspace is on screen (#167). Updated on the caller's context.
+   /// </summary>
+   public SyncAllStatus? Status { get; set; }
+
 
 
    /// <summary>
@@ -43,6 +49,27 @@ public sealed class SyncAllCoordinator(IActivityLog log)
    {
       ArgumentNullException.ThrowIfNull(accountWorkspaces);
 
+      Status?.Begin(accountWorkspaces.Count);
+      try
+      {
+         SyncAllResult result = await RunQueueAsync(accountWorkspaces, ct);
+         Status?.End(result);
+         return result;
+      }
+      catch(Exception ex)
+      {
+         // Not expected (every account's trouble is a skip, not a throw), but a bar
+         // that says 'running' for ever would be worse than the error itself.
+         Status?.Stop(ex.Message);
+         throw;
+      }
+   }
+
+
+
+   private async Task<SyncAllResult> RunQueueAsync(
+       IReadOnlyList<WorkspaceViewModel> accountWorkspaces, CancellationToken ct)
+   {
       foreach(WorkspaceViewModel workspace in accountWorkspaces)
       {
          Announce(workspace, SyncAllAccountState.Queued);
@@ -52,6 +79,7 @@ public sealed class SyncAllCoordinator(IActivityLog log)
 
       int ran = 0;
       int skipped = 0;
+      int failed = 0;
 
       for(int i = 0; i < accountWorkspaces.Count; i++)
       {
@@ -67,7 +95,7 @@ public sealed class SyncAllCoordinator(IActivityLog log)
                Announce(accountWorkspaces[rest], SyncAllAccountState.Skipped);
             }
             _log.Info("Sync all: canceled — remaining accounts were not started.");
-            return new SyncAllResult(ran, skipped, WasCanceled: true);
+            return new SyncAllResult(ran, skipped, WasCanceled: true, failed);
          }
 
          if(workspace.IsRunning || workspace.IsLoadingRepos || workspace.IsResolvingPaths)
@@ -92,6 +120,7 @@ public sealed class SyncAllCoordinator(IActivityLog log)
          }
 
          Announce(workspace, SyncAllAccountState.Running);
+         Status?.Enter(i + 1, workspace);
 
          if(!workspace.HasLoadedRepos)
          {
@@ -123,19 +152,24 @@ public sealed class SyncAllCoordinator(IActivityLog log)
             // used, its token went away at that moment): that is not a success with
             // nothing to report.
             skipped++;
+            failed++;
             Announce(workspace, SyncAllAccountState.Failed);
             _log.Info($"Sync all: '{workspace.DisplayName}' could not be synced — {workspace.ResultMessage}");
             continue;
          }
 
          ran++;
+         if(workspace.HasFailedRepos)
+         {
+            failed++;
+         }
          Announce(
              workspace,
              workspace.HasFailedRepos ? SyncAllAccountState.Failed : SyncAllAccountState.Succeeded);
          _log.Info($"Sync all: finished '{workspace.DisplayName}'.");
       }
 
-      return new SyncAllResult(ran, skipped, WasCanceled: false);
+      return new SyncAllResult(ran, skipped, WasCanceled: false, failed);
    }
 
 

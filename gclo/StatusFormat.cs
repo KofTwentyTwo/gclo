@@ -149,6 +149,21 @@ public static class StatusFormat
 
 
 
+   /// <summary>
+   /// Icon and its color for a sync-all pass: the sync glyph while it runs, then how
+   /// it ended, in the same glyphs and colors the table uses for a row's status.
+   /// </summary>
+   public static (string Glyph, Brush Brush) IconFor(SyncAllOutcome outcome) => outcome switch
+   {
+      SyncAllOutcome.Finished => ("\uE73E", ThemedBrush("SystemFillColorSuccessBrush")),
+      SyncAllOutcome.FinishedWithFailures => ("\uE7BA", ThemedBrush("SystemFillColorCautionBrush")),
+      SyncAllOutcome.Canceled => ("\uE711", ThemedBrush("TextFillColorSecondaryBrush")),
+      SyncAllOutcome.Stopped => ("\uEA39", ThemedBrush("SystemFillColorCriticalBrush")),
+      _ => ("\uE895", ThemedBrush("SystemFillColorAttentionBrush")), // Running, None
+   };
+
+
+
    /// <summary>Short InfoBar title for a run outcome; empty for <see cref="RunResultKind.None"/>.</summary>
    public static string TitleFor(RunResultKind kind) => kind switch
    {
@@ -179,7 +194,7 @@ public static class StatusFormat
 
 
 
-   /// <summary>Screen-reader name for a repository's progress bar in the active strip.</summary>
+   /// <summary>Screen-reader name for a repository's progress bar in its table row.</summary>
    public static string ProgressAutomationName(string repoName)
        => $"{repoName} sync progress";
 

@@ -22,8 +22,8 @@ namespace gclo;
 /// <summary>
 /// One sync workspace in two visual states: a centered connect card until the first
 /// successful load, then a connection chip plus the hero repository table with its
-/// attached toolbar (filter, options, refresh, sync), the pinned active strip, and
-/// the results InfoBar. Hosted by <see cref="MainWindow"/>'s navigation shell —
+/// attached toolbar (filter, options, refresh, sync) and the results InfoBar; the
+/// rows in flight sit at the top of the table. Hosted by <see cref="MainWindow"/>'s navigation shell —
 /// one instance per saved account plus one for the pinned Quick Sync entry. Pages
 /// (and their view models) are cached by the shell, so a running sync keeps going
 /// while another workspace is displayed.
@@ -146,8 +146,9 @@ public sealed partial class WorkspacePage : UserControl
    // ---- TableView bridge (#33): the control raises sort requests, the view model
    // decides. Sorting (first and second click) and ClearSorting (the control's
    // third-click "unsorted" step) both hand the column to SortCommand, which
-   // cycles ascending <-> descending; the indicator and the header's automation
-   // name are then written back from SortColumn/SortDescending.
+   // goes ascending, descending, then back to the table's default order; the
+   // indicator and the header's automation name are then written back from
+   // SortColumn/SortDescending.
 
    private void RepoTable_Sorting(object sender, TableViewSortingEventArgs e)
    {
@@ -496,6 +497,38 @@ public sealed partial class WorkspacePage : UserControl
 
 
 
+   /// <summary>Label of the result bar's one action: retry when something failed, otherwise the folder.</summary>
+   public string ResultActionLabel(bool hasFailedRepos) => hasFailedRepos ? "Retry failed" : "Open folder";
+
+
+
+   /// <summary>
+   /// Whether the result bar's action can be used now: a retry cannot while a sync, a
+   /// load, or a path recovery is running (the same rule as the retry command's own);
+   /// the folder always can.
+   /// </summary>
+   public bool ResultActionEnabled(bool hasFailedRepos, bool isRunning, bool isLoadingRepos, bool isResolvingPaths)
+       => !hasFailedRepos || !(isRunning || isLoadingRepos || isResolvingPaths);
+
+
+
+   /// <summary>The result bar's action, as labeled by <see cref="ResultActionLabel"/>.</summary>
+   private void ResultActionButton_Click(object sender, RoutedEventArgs e)
+   {
+      if(!ViewModel.HasFailedRepos)
+      {
+         OpenFolderButton_Click(sender, e);
+      }
+      else if(ViewModel.RetryFailedCommand.CanExecute(null))
+      {
+         // Execute alone does not ask: a retry during a path recovery would start a
+         // sync beside the checkout that recovery is running.
+         ViewModel.RetryFailedCommand.Execute(null);
+      }
+   }
+
+
+
    private async void OpenFolderButton_Click(object sender, RoutedEventArgs e)
    {
       string root = ViewModel.EffectiveTargetRoot;
@@ -503,6 +536,10 @@ public sealed partial class WorkspacePage : UserControl
       {
          ViewModel.NoteFolderOpened();
          await Windows.System.Launcher.LaunchFolderPathAsync(root);
+      }
+      else
+      {
+         ViewModel.NoteFolderNotThereYet(); // said in the status line: a button that does nothing explains nothing
       }
    }
 }

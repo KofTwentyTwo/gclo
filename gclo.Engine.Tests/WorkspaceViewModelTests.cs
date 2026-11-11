@@ -454,41 +454,165 @@ public sealed class WorkspaceViewModelTests : IDisposable
 
 
 
-   // ---------------------------------------------------------------- active strip
+   // ---------------------------------------------------------------- the table's default order (#168)
 
-   [Fact]
-   public async Task ActiveRepos_TracksInFlightRows_AndEmptiesWhenTheRunEnds()
+   /// <summary>
+   /// Waits until the table reads <paramref name="names"/>, top to bottom. The table
+   /// changes on the engine's thread in these tests, a moment after the status that
+   /// the test waited for: asking for the order once could catch it mid-move.
+   /// </summary>
+   private static Task TableReadsAsync(WorkspaceViewModel vm, params string[] names)
+       => WaitUntilAsync(
+           () =>
+           {
+              try
+              {
+                 return vm.FilteredRepos.Select(r => r.Name).SequenceEqual(names, StringComparer.Ordinal);
+              }
+              catch(InvalidOperationException)
+              {
+                 return false; // changed while it was read: look again
+              }
+           },
+           "the table to read " + string.Join(", ", names));
+
+
+
+   /// <summary>A clone per repository that waits until the test lets that repository go (or fails it).</summary>
+   private Dictionary<string, TaskCompletionSource> GateEachClone(params string[] names)
    {
-      var gateAlpha = new TaskCompletionSource();
-      var gateBravo = new TaskCompletionSource();
+      Dictionary<string, TaskCompletionSource> gates = names.ToDictionary(n => n, _ => new TaskCompletionSource(), StringComparer.Ordinal);
       _git.CloneHandler = async (url, path, token, onProgress, ct) =>
       {
-         Task gate = string.Equals(Path.GetFileName(path), "alpha", StringComparison.Ordinal) ? gateAlpha.Task : gateBravo.Task;
          // CancellationToken.None: the gates must not be cancelable — the timeout is the safety valve.
-         await gate.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+         await gates[Path.GetFileName(path)].Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
       };
-      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo")); // concurrency 1
+      return gates;
+   }
+
+
+
+   [Fact]
+   public async Task WhileASyncRuns_TheRowInFlightIsOnTop_ThenTheFinishedOnes_TheLatestFirst_ThenTheOnesWaiting()
+   {
+      Dictionary<string, TaskCompletionSource> gates = GateEachClone("alpha", "bravo", "charlie", "delta");
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie"), Repo("delta")); // concurrency 1
       var byName = vm.Repos.ToDictionary(r => r.Name, StringComparer.Ordinal);
-      Assert.Empty(vm.ActiveRepos);
 
       Task run = vm.SyncCommand.ExecuteAsync(null);
-      await WaitUntilAsync(
-          () => byName["alpha"].Status == SyncStatus.Cloning && vm.ActiveRepos.Count == 1,
-          "alpha to enter the active strip");
-      Assert.Equal("alpha", Assert.Single(vm.ActiveRepos).Name); // bounded by parallelism (1)
+      await WaitUntilAsync(() => byName["alpha"].Status == SyncStatus.Cloning, "alpha to start");
+      await TableReadsAsync(vm, "alpha", "bravo", "charlie", "delta");
 
-      gateAlpha.SetResult();
-      await WaitUntilAsync(
-          () => byName["bravo"].Status == SyncStatus.Cloning && vm.ActiveRepos.Count == 1,
-          "alpha to leave and bravo to enter the active strip");
-      Assert.Equal("bravo", Assert.Single(vm.ActiveRepos).Name); // alpha was removed on Done
+      gates["alpha"].SetResult();
+      await WaitUntilAsync(() => byName["bravo"].Status == SyncStatus.Cloning, "bravo to start");
+      await TableReadsAsync(vm, "bravo", "alpha", "charlie", "delta"); // in flight, finished, waiting
 
-      gateBravo.SetResult();
+      gates["bravo"].SetResult();
+      await WaitUntilAsync(() => byName["charlie"].Status == SyncStatus.Cloning, "charlie to start");
+      await TableReadsAsync(vm, "charlie", "bravo", "alpha", "delta"); // bravo finished after alpha: it is above it
+
+      gates["charlie"].SetResult();
+      gates["delta"].SetResult();
       await run;
 
-      Assert.Empty(vm.ActiveRepos); // cleared when the run ends
+      // The run is over: by name again, and every row is in the table exactly once.
+      await TableReadsAsync(vm, "alpha", "bravo", "charlie", "delta");
       Assert.All(vm.Repos, r => Assert.Equal(SyncStatus.Done, r.Status));
+   }
 
+
+
+   [Fact]
+   public async Task AFailedRow_IsBelowTheOnesInFlight_WhileTheSyncRuns_AndFirstWhenItIsOver()
+   {
+      Dictionary<string, TaskCompletionSource> gates = GateEachClone("alpha", "bravo", "charlie");
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie")); // concurrency 1
+      var byName = vm.Repos.ToDictionary(r => r.Name, StringComparer.Ordinal);
+
+      Task run = vm.SyncCommand.ExecuteAsync(null);
+      await WaitUntilAsync(() => byName["alpha"].Status == SyncStatus.Cloning, "alpha to start");
+      gates["alpha"].SetResult();
+      await WaitUntilAsync(() => byName["bravo"].Status == SyncStatus.Cloning, "bravo to start");
+      gates["bravo"].SetException(new InvalidOperationException("boom"));
+      await WaitUntilAsync(() => byName["charlie"].Status == SyncStatus.Cloning, "charlie to start");
+
+      await TableReadsAsync(vm, "charlie", "bravo", "alpha"); // in flight, failed, finished
+
+      gates["charlie"].SetResult();
+      await run;
+
+      await TableReadsAsync(vm, "bravo", "alpha", "charlie"); // the failed one first, then by name
+   }
+
+
+
+   [Fact]
+   public async Task TheDefaultOrder_IsByName_WhateverOrderTheRepositoriesWereListedIn()
+   {
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("charlie"), Repo("Alpha"), Repo("bravo"));
+
+      await TableReadsAsync(vm, "Alpha", "bravo", "charlie");
+      Assert.Null(vm.SortColumn);
+   }
+
+
+
+   [Fact]
+   public async Task AColumnTheUserChose_Wins_AndAThirdClickOnIt_ReturnsToTheDefaultOrder()
+   {
+      Dictionary<string, TaskCompletionSource> gates = GateEachClone("alpha", "bravo", "charlie");
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie")); // concurrency 1
+      var byName = vm.Repos.ToDictionary(r => r.Name, StringComparer.Ordinal);
+
+      vm.SortCommand.Execute("Name");
+      vm.SortCommand.Execute("Name");
+      Assert.Equal("Name", vm.SortColumn);
+      Assert.True(vm.SortDescending);
+      await TableReadsAsync(vm, "charlie", "bravo", "alpha");
+
+      // With a column chosen, a sync does not move the rows. It takes them in the
+      // table's order, so charlie is first, and when it is done bravo runs where it is.
+      Task run = vm.SyncCommand.ExecuteAsync(null);
+      await WaitUntilAsync(() => byName["charlie"].Status == SyncStatus.Cloning, "charlie to start");
+      gates["charlie"].SetResult();
+      await WaitUntilAsync(() => byName["bravo"].Status == SyncStatus.Cloning, "bravo to start");
+      await TableReadsAsync(vm, "charlie", "bravo", "alpha");
+
+      // The third click gives the column up: the default order is back, with the row
+      // in flight on top, then the finished one, then the one still waiting.
+      vm.SortCommand.Execute("Name");
+      Assert.Null(vm.SortColumn);
+      Assert.False(vm.SortDescending);
+      await TableReadsAsync(vm, "bravo", "charlie", "alpha");
+
+      gates["bravo"].SetResult();
+      gates["alpha"].SetResult();
+      await run;
+      await TableReadsAsync(vm, "alpha", "bravo", "charlie");
+   }
+
+
+
+   [Fact]
+   public async Task AFilter_KeepsTheDefaultOrder_AndARowThatLeavesItAndReturns_ComesBackInItsPlace()
+   {
+      Dictionary<string, TaskCompletionSource> gates = GateEachClone("alpha", "bravo", "charlie");
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"), Repo("charlie")); // concurrency 1
+      var byName = vm.Repos.ToDictionary(r => r.Name, StringComparer.Ordinal);
+
+      vm.Filter = RepoFilter.Pending;
+      Task run = vm.SyncCommand.ExecuteAsync(null);
+      await WaitUntilAsync(() => byName["alpha"].Status == SyncStatus.Cloning, "alpha to start");
+      await TableReadsAsync(vm, "bravo", "charlie"); // alpha is no longer waiting
+
+      vm.Filter = RepoFilter.All;
+      await TableReadsAsync(vm, "alpha", "bravo", "charlie");
+
+      gates["alpha"].SetResult();
+      gates["bravo"].SetResult();
+      gates["charlie"].SetResult();
+      await run;
+      await TableReadsAsync(vm, "alpha", "bravo", "charlie");
    }
 
 
@@ -1364,8 +1488,9 @@ public sealed class WorkspaceViewModelTests : IDisposable
       vm.Filter = RepoFilter.Pending;
       Assert.Equal(["delta"], vm.FilteredRepos.Select(r => r.Name), StringComparer.Ordinal);
 
+      // Everything again, in the default order: in flight, failed, then the rest (#168).
       vm.Filter = RepoFilter.All;
-      Assert.Equal(["alpha", "bravo", "charlie", "delta"], vm.FilteredRepos.Select(r => r.Name), StringComparer.Ordinal);
+      Assert.Equal(["bravo", "charlie", "alpha", "delta"], vm.FilteredRepos.Select(r => r.Name), StringComparer.Ordinal);
    }
 
 
@@ -1408,8 +1533,12 @@ public sealed class WorkspaceViewModelTests : IDisposable
       actions.Clear();
       await vm.SyncCommand.ExecuteAsync(null);
 
+      // Each failure was inserted as it happened. Only when the run is over does the
+      // table change its order as a whole (the latest first becomes by name, #168).
       Assert.Equal(["alpha", "delta"], vm.FilteredRepos.Select(r => r.Name), StringComparer.Ordinal);
-      Assert.DoesNotContain(System.Collections.Specialized.NotifyCollectionChangedAction.Reset, actions);
+      Assert.Equal(
+          [System.Collections.Specialized.NotifyCollectionChangedAction.Add, System.Collections.Specialized.NotifyCollectionChangedAction.Add],
+          actions.Take(2));
    }
 
 
@@ -2812,5 +2941,128 @@ public sealed class WorkspaceViewModelTests : IDisposable
       Assert.Equal(RunResultKind.Error, vm.ResultKind);
       Assert.Equal("There is no token: enter one in the token box.", vm.ResultMessage);
       Assert.Empty(_git.CloneCalls);
+   }
+
+
+
+   // ---------------------------------------------------------------- progress in batches (#167)
+
+   [Fact]
+   public void ByDefault_ProgressReachesTheWindowInBatches()
+   {
+      IProgress<RepoProgress> progress = WorkspaceViewModel.DefaultProgress(_ => { });
+
+      using BatchedRepoProgress batched = Assert.IsType<BatchedRepoProgress>(progress);
+   }
+
+
+
+   [Fact]
+   public async Task WithBatchedProgress_EveryRowIsFinal_WhenTheRunIsOver_WithoutWaitingForTheNextBatch()
+   {
+      // A batch that would only be delivered in an hour, to a window that never gets
+      // to it: whatever the rows show at the end, the end of the run put there.
+      var time = new ManualTime();
+      var window = new PumpedContext();
+      _lister.Repositories = [Repo("alpha"), Repo("bravo"), Repo("charlie")];
+      _git.CloneHandler = (_, path, _, _, _) =>
+          string.Equals(Path.GetFileName(path), "bravo", StringComparison.Ordinal)
+              ? Task.FromException(new InvalidOperationException("boom"))
+              : Task.CompletedTask;
+      WorkspaceViewModel vm = Track(new WorkspaceViewModel(
+          _lister, _git, _orgs,
+          handler => new BatchedRepoProgress(handler, window, TimeSpan.FromHours(1), time),
+          TimeSpan.FromMilliseconds(1), new NullActivityLog(), wsl: _wsl));
+      vm.Organization = "acme";
+      vm.Token = "token-1234567890";
+      await WaitUntilAsync(() => vm.StatusText.Length > 0, "org lookup to settle");
+      vm.TargetFolder = NewTempFolder();
+      await vm.LoadReposCommand.ExecuteAsync(null);
+
+      await vm.SyncCommand.ExecuteAsync(null);
+
+      Assert.Equal(0, window.Waiting);
+      Assert.True(Assert.Single(time.Timers).IsDisposed);
+      Assert.Equal(
+          [("bravo", SyncStatus.Failed), ("alpha", SyncStatus.Done), ("charlie", SyncStatus.Done)],
+          vm.FilteredRepos.Select(r => (r.Name, r.Status)));
+      Assert.Equal(3, vm.CompletedCount);
+      Assert.True(vm.HasFailedRepos);
+      Assert.Equal(RunResultKind.PartialFailure, vm.ResultKind);
+   }
+
+
+
+   // ---------------------------------------------------------------- review of #169
+
+   [Fact]
+   public async Task AFolderThatDoesNotExistYet_IsSaidInTheStatusLine_WhenItIsAskedFor()
+   {
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"));
+
+      vm.NoteFolderNotThereYet();
+
+      Assert.Equal($"The folder '{vm.EffectiveTargetRoot}' does not exist yet. The first sync creates it.", vm.StatusText);
+   }
+
+
+
+   [Fact]
+   public async Task ARowInPathRecovery_IsOnTopWhileItRuns_AndBackInItsPlaceAfterwards()
+   {
+      MakeAlphaFailWithInvalidPaths();
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("aardvark"), Repo("alpha"), Repo("charlie"));
+      await vm.SyncCommand.ExecuteAsync(null);
+      var byName = vm.Repos.ToDictionary(r => r.Name, StringComparer.Ordinal);
+      byName["aardvark"].Status = SyncStatus.Failed; // a failed row that comes before alpha by name
+      vm.Filter = RepoFilter.Failed;
+      vm.Filter = RepoFilter.All;
+      Assert.Equal(["aardvark", "alpha", "charlie"], vm.FilteredRepos.Select(r => r.Name), StringComparer.Ordinal);
+
+      var inRecovery = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var letGo = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      _git.ApplyRecoveryHandler = async (_, _, _) =>
+      {
+         inRecovery.SetResult();
+         await letGo.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+      };
+      vm.RecoveryInteraction = _ => Task.FromResult<PathRecoveryDecision?>(new PathRecoveryDecision.Apply(
+          new PathRecovery(new Dictionary<string, string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal))));
+
+      Task resolve = vm.ResolvePathsCommand.ExecuteAsync(byName["alpha"]);
+      await inRecovery.Task.WaitAsync(TimeSpan.FromSeconds(30));
+      Assert.Equal(SyncStatus.Pulling, byName["alpha"].Status);
+      Assert.Equal(["alpha", "aardvark", "charlie"], vm.FilteredRepos.Select(r => r.Name), StringComparer.Ordinal); // in flight: above the failed row
+
+      letGo.SetResult();
+      await resolve;
+
+      Assert.Equal(SyncStatus.Done, byName["alpha"].Status);
+      Assert.Equal(["aardvark", "alpha", "charlie"], vm.FilteredRepos.Select(r => r.Name), StringComparer.Ordinal); // the failed row first, then by name
+   }
+
+
+
+   [Fact]
+   public async Task ARowWhoseRecoveryWasOpen_WhenTheTableWasLoadedAgain_DoesNotComeBackAsAGhost()
+   {
+      MakeAlphaFailWithInvalidPaths();
+      WorkspaceViewModel vm = await CreateLoadedViewModelAsync(Repo("alpha"), Repo("bravo"));
+      await vm.SyncCommand.ExecuteAsync(null);
+      RepoItemViewModel old = vm.Repos.Single(r => r.HasPathIssue);
+      vm.SortCommand.Execute("Name"); // with a column chosen the old row was looked up in the new table's index
+      vm.RecoveryInteraction = async _ =>
+      {
+         // The dialog is open; the user reloads the table behind it, then applies.
+         await vm.LoadReposCommand.ExecuteAsync(null);
+         return new PathRecoveryDecision.Apply(
+             new PathRecovery(new Dictionary<string, string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal)));
+      };
+
+      await vm.ResolvePathsCommand.ExecuteAsync(old);
+
+      Assert.DoesNotContain(old, vm.FilteredRepos);
+      Assert.Equal(["alpha", "bravo"], vm.FilteredRepos.Select(r => r.Name), StringComparer.Ordinal);
+      Assert.Equal(vm.Repos, vm.FilteredRepos);
    }
 }

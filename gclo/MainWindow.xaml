@@ -108,6 +108,104 @@
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- Sync all (#167): one row above the workspace, there for the whole pass
+                     whichever workspace is on screen - which account, which of how many,
+                     how far along - laid out like the workspace's own toolbar (progress
+                     and Cancel on the right) and on the same left and right edges as the
+                     workspace's cards. Afterwards it holds the result until it is closed.
+                     Filled from SyncAllStatus in code-behind. -->
+                <Grid
+                    x:Name="SyncAllBar"
+                    Grid.Row="0"
+                    Margin="20,20,20,0"
+                    MinHeight="48"
+                    Padding="12,8,12,8"
+                    Background="{ThemeResource LayerFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon
+                        x:Name="SyncAllIcon"
+                        Grid.Column="0"
+                        Margin="0,0,12,0"
+                        FontSize="16"
+                        VerticalAlignment="Center"
+                        AutomationProperties.AccessibilityView="Raw"
+                        Glyph="&#xE895;" />
+                    <TextBlock
+                        x:Name="SyncAllTitleText"
+                        Grid.Column="1"
+                        Margin="0,0,12,0"
+                        VerticalAlignment="Center"
+                        AutomationProperties.AutomationId="SyncAllTitle"
+                        AutomationProperties.LiveSetting="Polite"
+                        FontWeight="SemiBold" />
+                    <TextBlock
+                        x:Name="SyncAllMessageText"
+                        Grid.Column="2"
+                        VerticalAlignment="Center"
+                        AutomationProperties.AutomationId="SyncAllMessage"
+                        AutomationProperties.LiveSetting="Polite"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextTrimming="CharacterEllipsis" />
+                    <!-- A StackPanel, so a hidden control leaves no gap behind. -->
+                    <StackPanel
+                        Grid.Column="3"
+                        Margin="12,0,0,0"
+                        Orientation="Horizontal"
+                        Spacing="8">
+                        <ProgressBar
+                            x:Name="SyncAllProgressBar"
+                            Width="100"
+                            Margin="0,0,4,0"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Progress of the account that is syncing"
+                            Maximum="1" />
+                        <Button
+                            x:Name="SyncAllShowAccountButton"
+                            AutomationProperties.AutomationId="SyncAllShowAccount"
+                            Content="Show account"
+                            ToolTipService.ToolTip="Go to the account that is syncing now"
+                            Click="SyncAllShowAccount_Click" />
+                        <Button
+                            x:Name="SyncAllCancelButton"
+                            AutomationProperties.AutomationId="SyncAllCancel"
+                            Content="Cancel sync all"
+                            ToolTipService.ToolTip="Stop after the account that is syncing now"
+                            Click="SyncAllCancel_Click" />
+                        <Button
+                            x:Name="SyncAllCloseButton"
+                            Width="32"
+                            Height="32"
+                            Padding="0"
+                            AutomationProperties.AutomationId="SyncAllClose"
+                            AutomationProperties.Name="Close"
+                            ToolTipService.ToolTip="Close"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="SyncAllClose_Click">
+                            <FontIcon FontSize="10" Glyph="&#xE8BB;" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <!-- The selected workspace's page, set from code-behind. -->
+                <ContentPresenter x:Name="WorkspaceHost" Grid.Row="1" />
+            </Grid>
         </NavigationView>
 
         <!-- Branded startup splash: covers the whole window until MainWindow dismisses

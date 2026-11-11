@@ -86,6 +86,15 @@ public sealed partial class MainWindow : Window
 
 
 
+   /// <summary>Where a sync-all pass stands; the bar above the workspaces shows it (#167).</summary>
+   private readonly SyncAllStatus _syncAllStatus = new();
+
+   /// <summary>
+   /// Tells the responsiveness monitor what is running, so its reports in the activity
+   /// log can name it (#167). The monitor itself lives from the constructor to Closed.
+   /// </summary>
+   private readonly Action<string?> _reportActivity;
+
    /// <summary>Workspaces created so far, keyed by account id (Guid.Empty = Quick Sync).</summary>
    private readonly Dictionary<Guid, WorkspaceEntry> _workspaces = new();
 
@@ -142,6 +151,13 @@ public sealed partial class MainWindow : Window
          WorkspaceNav.MenuItems.Add(CreateAccountNavItem(account));
       }
       UpdateSyncAllEnabled();
+      _syncAllStatus.PropertyChanged += (_, _) => RenderSyncAllBar();
+
+      // Answers on this thread, measured from a timer thread: the log then says when
+      // the window stopped responding instead of leaving that to be guessed.
+      Microsoft.UI.Dispatching.DispatcherQueue queue = DispatcherQueue;
+      var responsiveness = new ResponsivenessMonitor(answer => queue.TryEnqueue(() => answer()), _log);
+      _reportActivity = activity => responsiveness.Activity = activity;
 
       _settings = AppSettings.Load(_log);
 
@@ -182,6 +198,7 @@ public sealed partial class MainWindow : Window
 
       Closed += (_, _) =>
       {
+         responsiveness.Dispose();
          _logWindow?.Close(); // a log-only process would linger otherwise
          DisposeWorkspaces();
          _log.Info("gclo closing.");
@@ -380,6 +397,7 @@ public sealed partial class MainWindow : Window
          if(_workspaces.TryGetValue(id, out WorkspaceEntry? shown))
          {
             _currentWorkspaceId = id;
+            RenderSyncAllBar(); // the link to the syncing account depends on what is on screen
             _log.Info($"Showing workspace '{shown.ViewModel.DisplayName}'.");
          }
       }
@@ -419,7 +437,7 @@ public sealed partial class MainWindow : Window
       if(EnsureWorkspace(id) is { } workspace)
       {
          workspace.Page ??= CreatePage(workspace.ViewModel);
-         WorkspaceNav.Content = workspace.Page;
+         WorkspaceHost.Content = workspace.Page;
          AutoLoadAccountRepositories(workspace.ViewModel);
       }
    }
@@ -494,6 +512,11 @@ public sealed partial class MainWindow : Window
                 or nameof(WorkspaceViewModel.HasFailedRepos))
          {
             OnWorkspaceStateChanged(id);
+         }
+         if(e.PropertyName is nameof(WorkspaceViewModel.IsRunning)
+                or nameof(WorkspaceViewModel.IsLoadingRepos))
+         {
+            _reportActivity(DescribeActivity());
          }
          else if(e.PropertyName is nameof(WorkspaceViewModel.CompletedCount)
                 && viewModel.IsRunning)
@@ -967,6 +990,7 @@ public sealed partial class MainWindow : Window
       workspace.Page?.Detach();
       workspace.ViewModel.Dispose();
       _workspaces.Remove(id);
+      _reportActivity(DescribeActivity()); // its sync, if one ran, is no longer what is running
 
       if(_navItems.TryGetValue(id, out NavigationViewItem? item))
       {
@@ -980,7 +1004,8 @@ public sealed partial class MainWindow : Window
 
    /// <summary>
    /// The 'Sync all' footer command: runs every account workspace sequentially in
-   /// pane order via <see cref="SyncAllCoordinator"/>, then shows a short summary.
+   /// pane order via <see cref="SyncAllCoordinator"/>; the bar above the workspace
+   /// says where the pass stands and, afterwards, how it ended.
    /// A second activation while running cancels the queue after the in-flight
    /// account (that account's own sync is left to finish).
    /// </summary>
@@ -988,8 +1013,7 @@ public sealed partial class MainWindow : Window
    {
       if(_cancelSyncAll is not null)
       {
-         _log.Info("Sync all: cancel requested; the account in flight will finish.");
-         _cancelSyncAll();
+         RequestSyncAllCancel();
          return;
       }
       _log.Info("Sync all requested.");
@@ -1021,26 +1045,24 @@ public sealed partial class MainWindow : Window
          _syncAllStates.Clear();
          var coordinator = new SyncAllCoordinator(_log)
          {
+            Status = _syncAllStatus,
             AccountStateChanged = (accountId, state) =>
             {
                _syncAllStates[accountId] = state;
                OnWorkspaceStateChanged(accountId);
             },
          };
-         SyncAllResult result = await coordinator.RunAsync(accountWorkspaces, cts.Token);
 
-         string accounts = result.Ran == 1 ? "1 account" : $"{result.Ran} accounts";
-         string message = result.WasCanceled
-             ? $"Sync all was canceled: {accounts} synced, {result.Skipped} skipped."
-             : $"Sync all finished: {accounts} synced, {result.Skipped} skipped.";
-         await ShowMessageAsync("Sync all", message);
+         // The bar says where the pass stands while it runs and how it ended
+         // afterwards, so nothing has to be confirmed in a dialog (#167).
+         await coordinator.RunAsync(accountWorkspaces, cts.Token);
+         _log.Info($"{_syncAllStatus.Title}: {_syncAllStatus.Message}");
       }
       catch(Exception ex)
       {
          // Unexpected only: the coordinator reports per-account trouble by
-         // skipping, and DialogGuard turns a blocked summary dialog into a
-         // no-op instead of a throw; the activity log carries the
-         // per-account outcomes either way.
+         // skipping. The bar already says that the pass stopped; the activity
+         // log carries the per-account outcomes either way.
          _log.Error($"Sync all did not finish cleanly: {ex.Message}", ex);
       }
       finally
@@ -1049,6 +1071,116 @@ public sealed partial class MainWindow : Window
          SyncAllNavItem.Content = "Sync all";
          UpdateSyncAllEnabled();
       }
+   }
+
+
+
+   /// <summary>Stops the sync-all queue after the account in flight, and says so in the bar.</summary>
+   private void RequestSyncAllCancel()
+   {
+      if(_cancelSyncAll is null || _syncAllStatus.IsCancelRequested)
+      {
+         return;
+      }
+      _log.Info("Sync all: cancel requested; the account in flight will finish.");
+      _cancelSyncAll();
+      _syncAllStatus.RequestCancel();
+   }
+
+
+
+   /// <summary>
+   /// Puts <see cref="_syncAllStatus"/> on the bar; runs on every change of it and
+   /// when another workspace comes on screen (the link to the syncing account is
+   /// only offered while that account is not the one being looked at).
+   /// </summary>
+   private void RenderSyncAllBar()
+   {
+      SyncAllStatus status = _syncAllStatus;
+      bool headlineChanged = !string.Equals(SyncAllTitleText.Text, status.Title, StringComparison.Ordinal);
+      SyncAllTitleText.Text = status.Title;
+      SyncAllMessageText.Text = status.Message;
+      (SyncAllIcon.Glyph, SyncAllIcon.Foreground) = StatusFormat.IconFor(status.Outcome);
+
+      SyncAllProgressBar.Visibility = status.IsRunning ? Visibility.Visible : Visibility.Collapsed;
+      SyncAllProgressBar.IsIndeterminate = status.IsRunning && status.Fraction is null;
+      SyncAllProgressBar.Value = status.Fraction ?? 0;
+
+      SyncAllShowAccountButton.Visibility =
+          status.CurrentAccountId is Guid running && running != _currentWorkspaceId
+              ? Visibility.Visible
+              : Visibility.Collapsed;
+      SyncAllCancelButton.Visibility = status.IsRunning ? Visibility.Visible : Visibility.Collapsed;
+      SyncAllCancelButton.IsEnabled = !status.IsCancelRequested;
+      SyncAllCloseButton.Visibility = status.IsRunning ? Visibility.Collapsed : Visibility.Visible;
+
+      SyncAllBar.Visibility = status.IsOpen ? Visibility.Visible : Visibility.Collapsed;
+
+      if(headlineChanged && status.IsOpen)
+      {
+         // The headline changes when the pass moves on or ends, not with every
+         // repository: that is when a screen reader should speak, and then it reads
+         // the detail too (which account; how the pass ended). Raised once the bar is
+         // on screen, or there is nothing to read.
+         AnnounceLiveRegion(SyncAllTitleText);
+         AnnounceLiveRegion(SyncAllMessageText);
+      }
+   }
+
+
+
+   /// <summary>Tells assistive technology that a live region's text changed; XAML never does so by itself.</summary>
+   private static void AnnounceLiveRegion(TextBlock text)
+   {
+      Microsoft.UI.Xaml.Automation.Peers.AutomationPeer? peer =
+          Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(text)
+          ?? Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(text);
+      peer?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged);
+   }
+
+
+
+   /// <summary>The bar's close button: the result of the last pass has been read.</summary>
+   private void SyncAllClose_Click(object sender, RoutedEventArgs e) => _syncAllStatus.IsOpen = false;
+
+
+
+   /// <summary>The bar's Cancel button: the same as activating 'Cancel sync all' in the pane.</summary>
+   private void SyncAllCancel_Click(object sender, RoutedEventArgs e) => RequestSyncAllCancel();
+
+
+
+   /// <summary>The bar's link to the account that is syncing: puts its workspace on screen.</summary>
+   private void SyncAllShowAccount_Click(object sender, RoutedEventArgs e)
+   {
+      if(_syncAllStatus.CurrentAccountId is Guid id && _navItems.TryGetValue(id, out NavigationViewItem? item))
+      {
+         WorkspaceNav.SelectedItem = item; // SelectionChanged shows the workspace
+      }
+   }
+
+
+
+   /// <summary>
+   /// What is running, in words that follow "while", for the responsiveness report in
+   /// the activity log; null when every workspace is idle.
+   /// </summary>
+   private string? DescribeActivity()
+   {
+      var busy = new List<string>();
+      foreach(WorkspaceEntry workspace in _workspaces.Values)
+      {
+         WorkspaceViewModel viewModel = workspace.ViewModel;
+         if(viewModel.IsRunning)
+         {
+            busy.Add($"syncing '{viewModel.DisplayName}'");
+         }
+         else if(viewModel.IsLoadingRepos)
+         {
+            busy.Add($"listing the repositories of '{viewModel.DisplayName}'");
+         }
+      }
+      return busy.Count == 0 ? null : string.Join(" and ", busy);
    }
 
 

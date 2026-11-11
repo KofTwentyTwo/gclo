@@ -273,7 +273,7 @@
                 </InfoBar.ActionButton>
             </InfoBar>
 
-            <!-- Hero table card: toolbar, active strip, results InfoBar, header, rows. -->
+            <!-- Hero table card: toolbar, results InfoBar, header, rows (the ones in flight on top). -->
             <Grid
                 Grid.Row="2"
                 Padding="12"
@@ -282,7 +282,6 @@
                 BorderThickness="1"
                 CornerRadius="8">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -313,6 +312,7 @@
                         x:Name="FilterSelectorBar"
                         AutomationProperties.AutomationId="RepoFilterBar"
                         Grid.Column="0"
+                        Margin="-8,0,0,0"
                         VerticalAlignment="Center"
                         SelectionChanged="FilterSelectorBar_SelectionChanged">
                         <SelectorBarItem x:Name="FilterAllItem" Text="All" Tag="All" ToolTipService.ToolTip="Show every loaded repository" />
@@ -337,6 +337,13 @@
                         Spacing="8"
                         SizeChanged="Toolbar_SizeChanged"
                         Visibility="{x:Bind local:StatusFormat.VisibleIfNot(ViewModel.IsRunning), Mode=OneWay}">
+                        <Button
+                            AutomationProperties.AutomationId="OpenFolderButton"
+                            AutomationProperties.Name="Open folder"
+                            ToolTipService.ToolTip="Open the folder the repositories are cloned into"
+                            Click="OpenFolderButton_Click">
+                            <FontIcon FontSize="16" Glyph="&#xE838;" />
+                        </Button>
                         <Button
                             x:Name="OptionsButton"
                             AutomationProperties.AutomationId="SyncOptionsButton"
@@ -426,79 +433,25 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- Active strip: exactly the repos cloning/pulling right now, bounded by
-                     the parallelism setting, so the table never moves under the user.
-                     Three whole rows of chips are visible; beyond that (parallelism up
-                     to 64) it scrolls instead of clipping chips to a sliver (#31). -->
-                <ScrollViewer
-                    Grid.Row="1"
-                    Margin="0,8,0,0"
-                    MaxHeight="102"
-                    VerticalScrollBarVisibility="Auto"
-                    Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.IsRunning), Mode=OneWay}">
-                <ItemsControl
-                    x:Name="ActiveStrip"
-                    AutomationProperties.Name="Repositories syncing now"
-                    ItemsSource="{x:Bind ViewModel.ActiveRepos, Mode=OneTime}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <VariableSizedWrapGrid Orientation="Horizontal" ItemWidth="208" ItemHeight="30" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:RepoItemViewModel">
-                            <Border
-                                Margin="0,0,8,4"
-                                Padding="10,4"
-                                Background="{ThemeResource ControlFillColorDefaultBrush}"
-                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="1"
-                                CornerRadius="13">
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock
-                                        Grid.Column="0"
-                                        VerticalAlignment="Center"
-                                        Style="{ThemeResource CaptionTextBlockStyle}"
-                                        TextTrimming="CharacterEllipsis"
-                                        Text="{x:Bind Name, Mode=OneTime}" />
-                                    <ProgressBar
-                                        Grid.Column="1"
-                                        Width="56"
-                                        VerticalAlignment="Center"
-                                        AutomationProperties.Name="{x:Bind local:StatusFormat.ProgressAutomationName(Name), Mode=OneTime}"
-                                        Maximum="1"
-                                        Value="{x:Bind ProgressValue, Mode=OneWay}"
-                                        IsIndeterminate="{x:Bind IsIndeterminate, Mode=OneWay}" />
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                </ScrollViewer>
-
                 <!-- Run results: opens when a run ends, user-dismissable (two-way IsOpen). -->
                 <InfoBar
-                    Grid.Row="2"
+                    Grid.Row="1"
                     AutomationProperties.AutomationId="ResultInfoBar"
                     Margin="0,8,0,0"
                     IsOpen="{x:Bind ViewModel.ResultOpen, Mode=TwoWay}"
                     Severity="{x:Bind local:StatusFormat.SeverityFor(ViewModel.ResultKind), Mode=OneWay}"
                     Title="{x:Bind local:StatusFormat.TitleFor(ViewModel.ResultKind), Mode=OneWay}"
                     Message="{x:Bind ViewModel.ResultMessage, Mode=OneWay}">
-                    <StackPanel
-                        Margin="0,0,0,12"
-                        Orientation="Horizontal"
-                        Spacing="8">
+                    <!-- One action, beside the message, so the bar stays one row: retry
+                         when something failed, otherwise the folder. The folder is always
+                         in the toolbar as well. -->
+                    <InfoBar.ActionButton>
                         <Button
-                            Content="Retry failed"
-                            Command="{x:Bind ViewModel.RetryFailedCommand, Mode=OneTime}"
-                            Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.HasFailedRepos), Mode=OneWay}" />
-                        <Button Content="Open folder" Click="OpenFolderButton_Click" />
-                    </StackPanel>
+                            AutomationProperties.AutomationId="ResultActionButton"
+                            Content="{x:Bind ResultActionLabel(ViewModel.HasFailedRepos), Mode=OneWay}"
+                            IsEnabled="{x:Bind ResultActionEnabled(ViewModel.HasFailedRepos, ViewModel.IsRunning, ViewModel.IsLoadingRepos, ViewModel.IsResolvingPaths), Mode=OneWay}"
+                            Click="ResultActionButton_Click" />
+                    </InfoBar.ActionButton>
                 </InfoBar>
 
                 <!-- Repository table: WinUI.TableView (#33). The view model owns sort and
@@ -515,7 +468,7 @@
                     x:Name="RepoTable"
                     AutomationProperties.AutomationId="RepoListView"
                     AutomationProperties.Name="Repositories"
-                    Grid.Row="3"
+                    Grid.Row="2"
                     Grid.RowSpan="2"
                     Margin="0,8,0,0"
                     DataContext="{x:Bind ViewModel, Mode=OneTime}"
@@ -536,6 +489,21 @@
                     Sorting="RepoTable_Sorting"
                     ClearSorting="RepoTable_ClearSorting"
                     Loaded="RepoTable_Loaded">
+                    <!-- A row of this table costs about 20 ms to build. The default keeps
+                         two viewports of rows ready on each side, which made showing a
+                         large account take over a second; half a viewport on each side
+                         is enough for scrolling to stay smooth (#167). -->
+                    <tv:TableView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsStackPanel CacheLength="1" />
+                        </ItemsPanelTemplate>
+                    </tv:TableView.ItemsPanel>
+                    <!-- Rows go to the top while they are in flight and back when they
+                         are done, several a second in a large run: they take their new
+                         place at once instead of each one sliding and fading (#168). -->
+                    <tv:TableView.ItemContainerTransitions>
+                        <TransitionCollection />
+                    </tv:TableView.ItemContainerTransitions>
                     <tv:TableView.Columns>
 
                         <!-- Select: header checkbox acts on the VISIBLE rows (AllSelected). -->
@@ -662,7 +630,7 @@
                             </tv:TableViewTemplateColumn.Header>
                             <tv:TableViewTemplateColumn.CellTemplate>
                                 <DataTemplate x:DataType="vm:RepoItemViewModel">
-                                    <StackPanel VerticalAlignment="Center" Spacing="2">
+                                    <StackPanel Margin="10,0,12,0" VerticalAlignment="Center" Spacing="3">
                                         <StackPanel Orientation="Horizontal" Spacing="6">
                                             <FontIcon
                                                 FontSize="12"
@@ -827,7 +795,7 @@
                 <!-- Shown when the current filter hides everything the table has. -->
                 <TextBlock
                     x:Name="EmptyFilterText"
-                    Grid.Row="4"
+                    Grid.Row="3"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -840,7 +808,7 @@
                 <TextBlock
                     x:Name="EmptyTableText"
                     AutomationProperties.AutomationId="EmptyTableText"
-                    Grid.Row="4"
+                    Grid.Row="3"
                     MaxWidth="480"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
