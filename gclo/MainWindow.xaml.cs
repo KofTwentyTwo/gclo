@@ -168,7 +168,8 @@ public sealed partial class MainWindow : Window
 
       // The start screen is where the user left off; with nothing recorded, their
       // first account, and Quick Sync when there is none (#209).
-      Guid start = StartWorkspace.Choose(_accountsStore.GetAll(), _settings.LastWorkspace);
+      Guid? workspaceAtStart = _settings.LastWorkspace;
+      Guid start = StartWorkspace.Choose(_accountsStore.GetAll(), workspaceAtStart);
       WorkspaceNav.SelectedItem = WorkspaceNav.MenuItems
           .OfType<NavigationViewItem>()
           .FirstOrDefault(item => item.Tag is Guid id && id == start) ?? QuickSyncNavItem;
@@ -204,6 +205,10 @@ public sealed partial class MainWindow : Window
 
       Closed += (_, _) =>
       {
+         if(_settings.LastWorkspace != workspaceAtStart)
+         {
+            _settings.SaveWhatWasRemembered(_log);
+         }
          responsiveness.Dispose();
          _logWindow?.Close(); // a log-only process would linger otherwise
          DisposeWorkspaces();
@@ -405,12 +410,8 @@ public sealed partial class MainWindow : Window
             _currentWorkspaceId = id;
             RenderSyncAllBar(); // the link to the syncing account depends on what is on screen
             _log.Info($"Showing workspace '{shown.ViewModel.DisplayName}'.");
-            if(_settings.LastWorkspace != id)
-            {
-               // Where the next start opens (#209).
-               _settings.LastWorkspace = id;
-               _settings.Save(_log);
-            }
+            // Where the next start opens (#209); written when the window closes.
+            _settings.LastWorkspace = id;
          }
       }
    }
@@ -570,7 +571,7 @@ public sealed partial class MainWindow : Window
             Connected = connection =>
             {
                _settings.RememberQuickSync(connection);
-               _settings.Save(_log);
+               _settings.SaveWhatWasRemembered(_log);
             },
          };
          if(_settings.RememberedQuickSync() is { } remembered)

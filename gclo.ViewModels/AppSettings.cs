@@ -112,10 +112,34 @@ public sealed class AppSettings
       {
          // Settings must never prevent startup; fall through to defaults.
          log?.Error($"Settings could not be loaded ({ex.Message}); the defaults are used.", ex);
+         return new AppSettings { CouldNotBeRead = true };
       }
 
       return new AppSettings();
    }
+
+
+
+   /// <summary>
+   /// True when the settings file was there and could not be read, so these are the
+   /// defaults in its place. What the app remembers by itself is then not written
+   /// (<see cref="SaveWhatWasRemembered"/>): the file is left for the user to mend,
+   /// as it was before the app remembered anything. Saving the Settings dialog
+   /// still writes.
+   /// </summary>
+   [System.Text.Json.Serialization.JsonIgnore]
+   public bool CouldNotBeRead { get; private set; }
+
+
+
+   /// <summary>
+   /// Writes the settings because the app remembered something by itself (the
+   /// workspace that was open, Quick Sync's last connection), not because the user
+   /// saved them. Does nothing when the file could not be read at start: that file
+   /// is not written over with defaults on the app's own account.
+   /// </summary>
+   public bool SaveWhatWasRemembered(IActivityLog? log = null, string? directory = null)
+       => !CouldNotBeRead && Save(log, directory);
 
 
 

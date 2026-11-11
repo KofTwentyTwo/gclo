@@ -130,7 +130,7 @@ were the two lister implementations and the failure type they throw.
   was normalized, in full, where the token is asked for: that is the address the
   token goes to. An edit shows where the
   account is and that it stays there. A Quick Sync connection saved as an account
-  is a GitHub account: Quick Sync itself connects to GitHub only.
+  is an account on the place the connection was on (#209).
 - **The wizard has the lister of one place at a time.** The shell gives it a
   lister per place; step 1 takes the lister of the place that was chosen, and step
   2 has no other to send the token to. A wizard that was given one lister (an
@@ -159,6 +159,9 @@ matters most.
   its place.
 - **A server address is taken when its box is left**, not while it is typed, so no
   token is sent to half an address; the card then shows it as it was normalized.
+  While the box holds another text than the address that was taken, and while
+  the card names no usable address, nothing can be looked up, loaded or synced,
+  whatever starts it (a button, a keyboard shortcut).
 - **What belongs to one place is forgotten when another is chosen:** the token,
   the organization, and the table. The repositories of the table have clone
   addresses on the other host; they are not left there to be synced with a token

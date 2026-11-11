@@ -266,13 +266,14 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       {
          if((value != _isOnGitea || !_placeChosen) && _listersOf is { } listersOf && CanEditInputs)
          {
-            bool otherKind = value != _isOnGitea;
+            ///////////////////////////////////////////////////////////////////////
+            // Another kind of forge, or the first choice at all: what is on the //
+            // card was entered for the other place, or for no place. Neither is  //
+            // carried to the place that is chosen now.                           //
+            ///////////////////////////////////////////////////////////////////////
             _isOnGitea = value;
             _placeChosen = true;
-            if(otherKind)
-            {
-               ForgetTheOtherPlace();
-            }
+            ForgetTheOtherPlace();
             TakeThePlace(listersOf);
          }
 
@@ -317,13 +318,57 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       set
       {
          string typed = value ?? "";
-         if(!string.Equals(typed, _server, StringComparison.Ordinal) && _listersOf is { } listersOf && CanEditInputs)
+         if((!string.Equals(typed, _server, StringComparison.Ordinal) || !_placeIsUsable) && _listersOf is { } listersOf && CanEditInputs)
          {
             _server = typed;
             TakeThePlace(listersOf);
          }
          OnPropertyChanged();
       }
+   }
+
+
+
+   /// <summary>
+   /// Told by the shell that the address box is being typed into and holds another
+   /// text than <see cref="Server"/>. Until the address is set again (the box is
+   /// left, or Enter is pressed), the card names no place that can be used: nothing
+   /// can be loaded, looked up or synced with the address that is no longer the one
+   /// on screen, whatever starts it (a button, a keyboard shortcut).
+   /// </summary>
+   public void ServerIsBeingEdited()
+   {
+      if(AsksForServer && _placeIsUsable)
+      {
+         _placeIsUsable = false;
+         SayWhatThePlaceAllows();
+      }
+   }
+
+
+
+   /// <summary>
+   /// Says what follows from the place the card names: its texts, and what can be
+   /// done with it. While it names no usable place, a lookup that is on its way is
+   /// ended and the connection is not offered as an account.
+   /// </summary>
+   private void SayWhatThePlaceAllows()
+   {
+      if(!_placeIsUsable)
+      {
+         _orgLoadCts?.Cancel();
+         SaveAsAccountOffered = false;
+      }
+      OnPropertyChanged(nameof(PlaceName));
+      OnPropertyChanged(nameof(ConnectTitle));
+      OnPropertyChanged(nameof(TokenHeader));
+      OnPropertyChanged(nameof(TokenPlaceholder));
+      OnPropertyChanged(nameof(TokenPage));
+      LoadReposCommand.NotifyCanExecuteChanged();
+      FindOrganizationsCommand.NotifyCanExecuteChanged();
+      SyncCommand.NotifyCanExecuteChanged();
+      RetryFailedCommand.NotifyCanExecuteChanged();
+      ResolvePathsCommand.NotifyCanExecuteChanged();
    }
 
    /// <summary>What is wrong with <see cref="Server"/>; empty when it can be used, and while none was entered yet.</summary>
@@ -404,13 +449,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          _server = place.Server.AbsoluteUri;
          OnPropertyChanged(nameof(Server));
       }
-      OnPropertyChanged(nameof(PlaceName));
-      OnPropertyChanged(nameof(ConnectTitle));
-      OnPropertyChanged(nameof(TokenHeader));
-      OnPropertyChanged(nameof(TokenPlaceholder));
-      OnPropertyChanged(nameof(TokenPage));
-      LoadReposCommand.NotifyCanExecuteChanged();
-      FindOrganizationsCommand.NotifyCanExecuteChanged();
+      SayWhatThePlaceAllows();
       FillInTheDefaultToken();
    }
 
@@ -494,17 +533,17 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          TargetFolder = connection.TargetFolder;
          CreateOrgSubfolder = connection.CreateOrgSubfolder;
       }
-      FillInTheDefaultToken();
    }
 
 
 
    /// <summary>
    /// What the account wizard needs to save this Quick Sync connection as an
-   /// account, the place included: the token was used with that place.
+   /// account, the place included: the token was used with that place. Null while
+   /// the card names no place that can be used: there is no connection to save.
    /// </summary>
-   public AccountWizardSeed ToAccountSeed()
-       => new(Token, Organization, TargetFolder, CreateOrgSubfolder, MaxConcurrency, _quickSyncPlace);
+   public AccountWizardSeed? ToAccountSeed()
+       => _placeIsUsable ? new AccountWizardSeed(Token, Organization, TargetFolder, CreateOrgSubfolder, MaxConcurrency, _quickSyncPlace) : null;
 
    /// <summary>
    /// True for an account workspace whose token is the default token from Settings
@@ -721,7 +760,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
    /// <summary>
    /// True once this workspace has completed its first successful repository load;
-   /// drives the connect-card vs workspace visibility switch. Never reset.
+   /// drives the connect-card vs workspace visibility switch. Set back only when
+   /// Quick Sync is put on another place, which empties the table.
    /// </summary>
    [ObservableProperty]
    public partial bool HasLoadedRepos { get; set; }
@@ -1320,6 +1360,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    [RelayCommand(CanExecute = nameof(CanLoadRepos))]
    private async Task LoadReposAsync()
    {
+      if(!_placeIsUsable)
+      {
+         // Whatever started it: there is no place to ask. No token is sent to a place nobody chose.
+         return;
+      }
+
+      bool firstLoad = !HasLoadedRepos;
       IsLoadingRepos = true;
       ResetRunResult();
       LoadErrorOpen = false;
@@ -1365,9 +1412,21 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          _log.Info($"Loaded {Repos.Count} repositories for organization '{organization}'.");
          if(_account is null)
          {
-            // The connection works: worth keeping as an account, and worth opening on next time.
-            SaveAsAccountOffered = true;
-            Connected?.Invoke(new QuickSyncConnection(_quickSyncPlace, organization, TargetFolder.Trim(), CreateOrgSubfolder));
+            ///////////////////////////////////////////////////////////////////////
+            // The connection works: worth keeping as an account, said once (a   //
+            // refresh does not bring a dismissed offer back), and worth opening //
+            // on next time. Remembering it is not part of loading: it failing    //
+            // does not make the load a failure.                                  //
+            ///////////////////////////////////////////////////////////////////////
+            SaveAsAccountOffered = SaveAsAccountOffered || firstLoad;
+            try
+            {
+               Connected?.Invoke(new QuickSyncConnection(_quickSyncPlace, organization, TargetFolder.Trim(), CreateOrgSubfolder));
+            }
+            catch(Exception ex)
+            {
+               _log.Error($"The connection could not be remembered for the next start: {ex.Message}", ex);
+            }
          }
       }
       catch(Exception ex)
@@ -1398,6 +1457,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
        !IsRunning
        && !IsLoadingRepos
        && !IsResolvingPaths
+       && _placeIsUsable
        && !IsTableStale
        && !string.IsNullOrWhiteSpace(TargetFolder)
        && Repos.Any(r => r.IsSelected);
@@ -1408,6 +1468,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    [RelayCommand(CanExecute = nameof(CanSync), IncludeCancelCommand = true)]
    private async Task SyncAsync(CancellationToken cancellationToken)
    {
+      if(!_placeIsUsable)
+      {
+         // Whatever started it: the table is of a place the card no longer names.
+         return;
+      }
+
       IsRunning = true;
       ResetRunResult();
       try
@@ -1525,6 +1591,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
        !IsRunning
        && !IsLoadingRepos
        && !IsResolvingPaths
+       && _placeIsUsable
        && Repos.Any(r => r.Status == SyncStatus.Failed);
 
 
@@ -1604,7 +1671,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
 
    private bool CanResolvePaths(RepoItemViewModel item)
-       => item is not null && item.HasPathIssue && !IsRunning && !IsResolvingPaths;
+       => item is not null && item.HasPathIssue && !IsRunning && !IsResolvingPaths && _placeIsUsable;
 
 
 
@@ -1615,7 +1682,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    [RelayCommand(CanExecute = nameof(CanResolvePaths))]
    private async Task ResolvePathsAsync(RepoItemViewModel item)
    {
-      if(item is null || RecoveryInteraction is not { } interaction)
+      if(item is null || !_placeIsUsable || RecoveryInteraction is not { } interaction)
       {
          return;
       }

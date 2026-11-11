@@ -453,7 +453,10 @@ public sealed partial class WorkspacePage : UserControl
       EditFlyout.Hide();
       if(SaveAsAccountRequested is { } save)
       {
-         await save(ViewModel.ToAccountSeed());
+         if(ViewModel.ToAccountSeed() is { } seed)
+         {
+            await save(seed);
+         }
       }
    }
 

@@ -110,25 +110,13 @@ public sealed partial class ConnectionFormControl : UserControl
          // Quick Sync's place is chosen on this form (#209). What the form says  //
          // about the token follows it, and so does the token box: the view model //
          // empties the token when another place is chosen, and fills in a saved  //
-         // default; the box is mirrored by hand, so it is brought along here.     //
+         // default; the box is mirrored by hand, so it is brought along here.    //
+         // Followed only while the form is in the tree (see OnUnloaded): a form   //
+         // that is not shown must not answer for one that is.                     //
          ///////////////////////////////////////////////////////////////////////////
+         StopFollowing();
          _followed = ViewModel;
-         ViewModel.PropertyChanged += (_, args) =>
-         {
-            switch(args.PropertyName)
-            {
-               case nameof(WorkspaceViewModel.Token):
-                  FollowTheToken();
-                  break;
-               case nameof(WorkspaceViewModel.PlaceIndex):
-                  ShowThePlace();
-                  break;
-               case nameof(WorkspaceViewModel.TokenHeader) or nameof(WorkspaceViewModel.TokenPage) or nameof(WorkspaceViewModel.TokenPlaceholder)
-                   or nameof(WorkspaceViewModel.IsPlaceChosen):
-                  ApplyThePlace();
-                  break;
-            }
-         };
+         _followed.PropertyChanged += OnViewModelChanged;
       }
       // The organization placeholder must not ask for a token the box already has, or cannot take.
       OrgBox.PlaceholderText = ViewModel?.CanChoosePlace == true ? "Type a name, or press Find to list them"
@@ -148,6 +136,43 @@ public sealed partial class ConnectionFormControl : UserControl
 
    /// <summary>The view model whose place and token this control already follows.</summary>
    private WorkspaceViewModel? _followed;
+
+   /// <summary>True while <see cref="FollowTheToken"/> changes the token box itself: that is not somebody typing.</summary>
+   private bool _followingTheToken;
+
+
+
+   private void OnUnloaded(object sender, RoutedEventArgs e) => StopFollowing();
+
+
+
+   private void StopFollowing()
+   {
+      if(_followed is not null)
+      {
+         _followed.PropertyChanged -= OnViewModelChanged;
+         _followed = null;
+      }
+   }
+
+
+
+   private void OnViewModelChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+   {
+      switch(args.PropertyName)
+      {
+         case nameof(WorkspaceViewModel.Token):
+            FollowTheToken();
+            break;
+         case nameof(WorkspaceViewModel.PlaceIndex):
+            ShowThePlace();
+            break;
+         case nameof(WorkspaceViewModel.TokenHeader) or nameof(WorkspaceViewModel.TokenPage) or nameof(WorkspaceViewModel.TokenPlaceholder)
+             or nameof(WorkspaceViewModel.IsPlaceChosen):
+            ApplyThePlace();
+            break;
+      }
+   }
 
    /// <summary>True while <see cref="ShowThePlace"/> checks the radio buttons itself: that is not the user choosing.</summary>
    private bool _showingThePlace;
@@ -239,15 +264,23 @@ public sealed partial class ConnectionFormControl : UserControl
 
       string token = ViewModel.Token;
       string shown = TokenBox.Password;
-      if(token.Length == 0 && shown.Length > 0)
+      _followingTheToken = true;
+      try
       {
-         TokenBox.Password = "";
+         if(token.Length == 0 && shown.Length > 0)
+         {
+            TokenBox.Password = "";
+         }
+         else if(token.Length > 0
+             && !string.Equals(shown, token, StringComparison.Ordinal)
+             && !string.Equals(shown, SettingsTokenState.Mask, StringComparison.Ordinal))
+         {
+            TokenBox.Password = SettingsTokenState.Mask;
+         }
       }
-      else if(token.Length > 0
-          && !string.Equals(shown, token, StringComparison.Ordinal)
-          && !string.Equals(shown, SettingsTokenState.Mask, StringComparison.Ordinal))
+      finally
       {
-         TokenBox.Password = SettingsTokenState.Mask;
+         _followingTheToken = false;
       }
    }
 
@@ -260,9 +293,25 @@ public sealed partial class ConnectionFormControl : UserControl
    /// </summary>
    private void CommitTheServer()
    {
-      if(ViewModel is not null && ViewModel.AsksForServer && !string.Equals(ServerBox.Text, ViewModel.Server, StringComparison.Ordinal))
+      if(ViewModel is not null && ViewModel.AsksForServer)
       {
          ViewModel.Server = ServerBox.Text;
+      }
+   }
+
+
+
+   /// <summary>
+   /// The address box holds another text than the view model's address: it is being
+   /// typed into. The view model is told, so that nothing uses the address that is
+   /// no longer the one on screen until the box is left (a keyboard shortcut moves
+   /// no focus).
+   /// </summary>
+   private void ServerBox_TextChanged(object sender, TextChangedEventArgs e)
+   {
+      if(ViewModel is not null && !string.Equals(ServerBox.Text, ViewModel.Server, StringComparison.Ordinal))
+      {
+         ViewModel.ServerIsBeingEdited();
       }
    }
 
@@ -288,7 +337,7 @@ public sealed partial class ConnectionFormControl : UserControl
    private void TokenBox_PasswordChanged(object sender, RoutedEventArgs e)
    {
       string typed = ((PasswordBox)sender).Password;
-      if(ViewModel is not null && ViewModel.AccountId is null && !_takingWhatWasTyped
+      if(ViewModel is not null && ViewModel.AccountId is null && !_takingWhatWasTyped && !_followingTheToken
           && !string.Equals(typed, SettingsTokenState.Mask, StringComparison.Ordinal))
       {
          ///////////////////////////////////////////////////////////////////////////

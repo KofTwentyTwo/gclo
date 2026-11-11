@@ -33,6 +33,9 @@ public sealed class QuickSyncPlaceTests : IDisposable
 
    private readonly List<WorkspaceViewModel> _workspaces = [];
 
+   /// <summary>The git client of every Quick Sync made by <see cref="QuickSync"/>: what it was asked to clone.</summary>
+   private readonly FakeGitClient _git = new();
+
    /// <summary>How many organizations a lister lists; one means "only your own account".</summary>
    private int _organizations = 2;
 
@@ -80,7 +83,8 @@ public sealed class QuickSyncPlaceTests : IDisposable
        Func<ForgeEndpoint, (IRepositoryLister Repositories, IOrganizationLister Organizations)>? listersOf = null)
    {
       var workspace = new WorkspaceViewModel(
-          git: new FakeGitClient(),
+          git: _git,
+          progressFactory: handler => new Progress(handler),
           orgLookupDebounce: TimeSpan.FromMilliseconds(1),
           log: new NullActivityLog(),
           wsl: new FakeWslCloner(),
@@ -150,6 +154,31 @@ public sealed class QuickSyncPlaceTests : IDisposable
       Assert.False(workspace.IsPlaceChosen);
       Assert.False(workspace.FindOrganizationsCommand.CanExecute(null));
       Assert.False(workspace.LoadReposCommand.CanExecute(null));
+      Assert.Null(workspace.ToAccountSeed()); // no connection to save
+
+      // And when something runs the commands without asking whether they can: still nothing.
+      await workspace.LoadReposCommand.ExecuteAsync(null);
+      await workspace.FindOrganizationsCommand.ExecuteAsync(null);
+
+      Assert.Empty(_sent);
+      Assert.False(workspace.HasLoadedRepos);
+   }
+
+
+
+   [Fact]
+   public void WhatWasPutOnTheCardBeforeAPlaceWasChosen_IsNotKeptForThePlaceThatIs()
+   {
+      // The shell's token box takes no token before a place is chosen; the view model does not rely on that.
+      WorkspaceViewModel workspace = QuickSync();
+      workspace.Token = "a-token-0123456789";
+      workspace.Organization = "typed-by-hand";
+
+      workspace.PlaceIndex = 0;
+
+      Assert.Equal("", workspace.Token);
+      Assert.Equal("", workspace.Organization);
+      Assert.Empty(_sent);
    }
 
 
@@ -429,6 +458,143 @@ public sealed class QuickSyncPlaceTests : IDisposable
 
 
    [Fact]
+   public async Task AnAddressThatIsBeingTyped_IsNoPlace_UntilItIsTakenAgain()
+   {
+      // The card shows another text than the address that was taken: a keyboard shortcut moves no focus, so the
+      // box was not left. Nothing uses the address that is no longer on screen.
+      WorkspaceViewModel workspace = QuickSync();
+      workspace.IsOnGitea = true;
+      workspace.Server = Server;
+      await TypeTokenAsync(workspace, "gitea-token-0123456789");
+      workspace.Organization = "org-at-git.example.test";
+      workspace.TargetFolder = @"C:\mirror";
+      await workspace.LoadReposCommand.ExecuteAsync(null);
+      int sentSoFar = _sent.Count;
+      Assert.True(workspace.SyncCommand.CanExecute(null));
+
+      workspace.ServerIsBeingEdited();
+
+      Assert.False(workspace.LoadReposCommand.CanExecute(null));
+      Assert.False(workspace.FindOrganizationsCommand.CanExecute(null));
+      Assert.False(workspace.SyncCommand.CanExecute(null));
+      Assert.Null(workspace.ToAccountSeed());
+      Assert.False(workspace.SaveAsAccountOffered);
+      Assert.Equal("Connect to Gitea", workspace.ConnectTitle);
+
+      await workspace.LoadReposCommand.ExecuteAsync(null);
+      await workspace.FindOrganizationsCommand.ExecuteAsync(null);
+      await workspace.SyncCommand.ExecuteAsync(null);
+
+      Assert.Equal(sentSoFar, _sent.Count);
+      Assert.Empty(_git.CloneCalls);
+
+      // The same address after all: the place is taken again, and nothing was forgotten.
+      workspace.Server = Server;
+
+      Assert.Equal("gitea-token-0123456789", workspace.Token);
+      Assert.Equal("Connect to git.example.test", workspace.ConnectTitle);
+      Assert.True(workspace.SyncCommand.CanExecute(null));
+      Assert.NotNull(workspace.ToAccountSeed());
+
+      workspace.ServerIsBeingEdited();
+      workspace.ServerIsBeingEdited(); // said for every keystroke
+      workspace.Server = "https://other.example.test"; // another address after all
+
+      Assert.Equal("", workspace.Token);
+      Assert.Empty(workspace.Repos);
+   }
+
+
+
+   [Fact]
+   public async Task AfterALoad_AnAddressThatCannotBeUsedAnyMore_LeavesNothingOfTheOldPlaceToRun()
+   {
+      WorkspaceViewModel workspace = QuickSync();
+      workspace.IsOnGitea = true;
+      workspace.Server = Server;
+      await TypeTokenAsync(workspace, "gitea-token-0123456789");
+      workspace.Organization = "org-at-git.example.test";
+      workspace.TargetFolder = @"C:\mirror";
+      await workspace.LoadReposCommand.ExecuteAsync(null);
+      workspace.Repos[0].Status = SyncStatus.Failed;
+      workspace.RetryFailedCommand.NotifyCanExecuteChanged();
+      Assert.True(workspace.SyncCommand.CanExecute(null));
+      Assert.True(workspace.RetryFailedCommand.CanExecute(null));
+      int sentSoFar = _sent.Count;
+
+      workspace.Server = "http://x"; // no address that can be used; the table still shows the old server's repositories
+
+      Assert.False(workspace.SyncCommand.CanExecute(null));
+      Assert.False(workspace.RetryFailedCommand.CanExecute(null));
+      Assert.False(workspace.ResolvePathsCommand.CanExecute(workspace.Repos[0]));
+      Assert.False(workspace.LoadReposCommand.CanExecute(null));
+      Assert.Null(workspace.ToAccountSeed());
+      Assert.False(workspace.SaveAsAccountOffered);
+
+      // A token typed now is for no place: nothing clones the old server's repositories with it.
+      workspace.Token = "a-token-typed-now-0123456789";
+      await workspace.SyncCommand.ExecuteAsync(null);
+      await workspace.RetryFailedCommand.ExecuteAsync(null);
+      await workspace.ResolvePathsCommand.ExecuteAsync(workspace.Repos[0]);
+
+      Assert.Empty(_git.CloneCalls);
+      Assert.Equal(sentSoFar, _sent.Count);
+   }
+
+
+
+   [Fact]
+   public async Task ALookupThatIsOnItsWay_IsEnded_WhenTheAddressIsEdited()
+   {
+      var answer = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+      WorkspaceViewModel workspace = QuickSync(listersOf: place => (ListersOf(place).Repositories, new FakeOrganizationLister
+      {
+         Handler = (_, canceled) =>
+         {
+            canceled.Register(() => answer.TrySetCanceled(canceled));
+            return answer.Task;
+         },
+      }));
+      workspace.IsOnGitea = true;
+      workspace.Server = Server;
+      workspace.Token = "gitea-token-0123456789";
+      Task asking = workspace.FindOrganizationsCommand.ExecuteAsync(null);
+
+      workspace.ServerIsBeingEdited();
+      await asking;
+
+      Assert.True(answer.Task.IsCanceled);
+      Assert.Empty(workspace.Organizations);
+      Assert.False(workspace.IsLoadingOrgs);
+   }
+
+
+
+   [Fact]
+   public async Task TheOfferToSaveTheConnection_IsMadeOnce_AndRememberingItFailingDoesNotFailTheLoad()
+   {
+      WorkspaceViewModel workspace = QuickSyncOnGitHub();
+      workspace.Connected = _ => throw new InvalidOperationException("the settings could not be written");
+      await TypeTokenAsync(workspace, "ghp_token_0123456789");
+      workspace.Organization = "org-at-GitHub";
+
+      await workspace.LoadReposCommand.ExecuteAsync(null);
+
+      Assert.True(workspace.HasLoadedRepos);
+      Assert.False(workspace.LoadErrorOpen);
+      Assert.Equal("2 repositories loaded.", workspace.StatusText);
+      Assert.True(workspace.SaveAsAccountOffered);
+
+      // Dismissed, it stays dismissed when the list is refreshed.
+      workspace.SaveAsAccountOffered = false;
+      await workspace.LoadReposCommand.ExecuteAsync(null);
+
+      Assert.False(workspace.SaveAsAccountOffered);
+   }
+
+
+
+   [Fact]
    public async Task TheSameServer_SpelledAnotherWay_IsTheSamePlace_AndNothingIsForgotten()
    {
       WorkspaceViewModel workspace = QuickSync();
@@ -561,9 +727,9 @@ public sealed class QuickSyncPlaceTests : IDisposable
    public void TheDefaultToken_DoesNotReplaceATokenThatWasTyped_AndIsNotForAnAccount()
    {
       WorkspaceViewModel workspace = QuickSync(defaultTokenOf: _ => "ghp_default_0123456789");
+      workspace.PlaceIndex = 0;
       workspace.Token = "ghp_typed_0123456789";
 
-      workspace.PlaceIndex = 0;
       workspace.FillInTheDefaultToken();
 
       Assert.Equal("ghp_typed_0123456789", workspace.Token);
@@ -692,7 +858,7 @@ public sealed class QuickSyncPlaceTests : IDisposable
       workspace.Organization = "org-at-git.example.test";
       workspace.TargetFolder = @"C:\mirror";
 
-      AccountWizardSeed seed = workspace.ToAccountSeed();
+      AccountWizardSeed seed = Assert.IsType<AccountWizardSeed>(workspace.ToAccountSeed());
 
       Assert.Equal(s_gitea, seed.Place);
       Assert.Equal("gitea-token-0123456789", seed.Token);
@@ -817,6 +983,34 @@ public sealed class QuickSyncPlaceTests : IDisposable
 
 
 
+   [Fact]
+   public void WhatTheAppRemembersByItself_IsNotWrittenOverASettingsFileThatCouldNotBeRead()
+   {
+      Directory.CreateDirectory(_root);
+      string file = Path.Combine(_root, "settings.json");
+      File.WriteAllText(file, "{ \"Theme\": \"Dark\", this is where the file went wrong");
+
+      var settings = AppSettings.Load(directory: _root);
+      settings.RememberQuickSync(new QuickSyncConnection(ForgeEndpoint.GitHub, "acme", "", CreateOrgSubfolder: false));
+
+      Assert.True(settings.CouldNotBeRead);
+      Assert.False(settings.SaveWhatWasRemembered(directory: _root));
+      Assert.Contains("this is where the file went wrong", File.ReadAllText(file), StringComparison.Ordinal); // left for the user to mend
+
+      // The Settings dialog's Save is the user's own doing, and writes.
+      Assert.True(settings.Save(directory: _root));
+      Assert.DoesNotContain("went wrong", File.ReadAllText(file), StringComparison.Ordinal);
+
+      // A file that was read, or was not there, is written.
+      var read = AppSettings.Load(directory: _root);
+      Assert.False(read.CouldNotBeRead);
+      read.LastWorkspace = StartWorkspace.QuickSync;
+      Assert.True(read.SaveWhatWasRemembered(directory: _root));
+      Assert.Equal(StartWorkspace.QuickSync, AppSettings.Load(directory: _root).LastWorkspace);
+   }
+
+
+
    // ---------------------------------------------------------------- which workspace the app opens on
 
    [Fact]
@@ -879,6 +1073,13 @@ public sealed class QuickSyncPlaceTests : IDisposable
          ];
          return Task.FromResult(listed);
       }
+   }
+
+
+
+   private sealed class Progress(Action<RepoProgress> handler) : IProgress<RepoProgress>
+   {
+      public void Report(RepoProgress value) => handler(value);
    }
 
 
