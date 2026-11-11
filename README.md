@@ -7,15 +7,15 @@
 <p align="center">
   <a href="https://scorecard.dev/viewer/?uri=github.com/KofTwentyTwo/gclo"><img src="https://api.scorecard.dev/projects/github.com/KofTwentyTwo/gclo/badge" alt="OpenSSF Scorecard" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" /></a>
-  <a href="https://github.com/KofTwentyTwo/gclo"><img src="https://img.shields.io/badge/platform-Windows%2011-blue" alt="Platform: Windows 11" /></a>
+  <a href="https://git.kof22.com/KofTwentyTwo/gclo"><img src="https://img.shields.io/badge/platform-Windows%2011-blue" alt="Platform: Windows 11" /></a>
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-10-blueviolet" alt=".NET 10" /></a>
 </p>
 
 | | |
 | --- | --- |
 | **Tier** | Product (see the [KofTwentyTwo standards scope](https://github.com/KofTwentyTwo/standards/blob/main/policies/README.md#scope)) |
-| **Standards** | Conforms to [KofTwentyTwo standards](https://github.com/KofTwentyTwo/standards) `main@855cf44` (pre-1.0 draft); conformance tracked in [#62](https://github.com/KofTwentyTwo/gclo/issues/62) |
-| **Latest release** | [Releases](https://github.com/KofTwentyTwo/gclo/releases/latest) |
+| **Standards** | Conforms to [KofTwentyTwo standards](https://github.com/KofTwentyTwo/standards) `main@855cf44` (pre-1.0 draft); conformance tracked in [#62](https://git.kof22.com/KofTwentyTwo/gclo/issues/62) |
+| **Latest release** | [Releases](https://git.kof22.com/KofTwentyTwo/gclo/releases/latest) |
 
 **gclo** (**G**it **C**lone **L**arge **O**rganizations) mirrors every repository of a GitHub organization or user account into a local folder in one pass: it clones the repositories that are missing and fast-forwards the ones that already exist, with live per-repo progress and bounded parallelism. It ships as a Windows 11 desktop app (WinUI 3) and a scriptable CLI built on the same engine.
 
@@ -25,7 +25,7 @@
 
 ## Download & install
 
-All builds are published on the [**GitHub Releases** page](https://github.com/KofTwentyTwo/gclo/releases).
+All builds are published on the project's [**Releases** page](https://git.kof22.com/KofTwentyTwo/gclo/releases).
 
 **Desktop app (GUI)** — download and run `gclo-stable-Setup.exe`. It installs per-user (no admin rights needed) and updates itself in-app via **Help > Check for updates**. A portable build (`gclo-stable-Portable.zip`) is also attached to each release; portable builds do not self-update.
 
@@ -39,12 +39,12 @@ Plain version tags (`v1.2.3`) are **stable** releases; pre-release tags (`v1.2.3
 
 ```powershell
 # Scoop: this repository is its own bucket
-scoop bucket add gclo https://github.com/KofTwentyTwo/gclo
+scoop bucket add gclo https://git.kof22.com/KofTwentyTwo/gclo
 scoop install gclo
 
 ```
 
-**Chocolatey is not available yet.** The only version submitted, 1.0.1, is still in community moderation with the status "Waiting for Maintainer to take corrective action", so `choco install gclo` does not find it. 1.1.0 has not been submitted. `winget` support for the desktop app is not available either. Both are tracked in [#7](https://github.com/KofTwentyTwo/gclo/issues/7), and this section will be updated when a package is approved.
+**Chocolatey is not available yet.** The only version submitted, 1.0.1, is still in community moderation with the status "Waiting for Maintainer to take corrective action", so `choco install gclo` does not find it. 1.1.0 has not been submitted. `winget` support for the desktop app is not available either. Both are tracked in [#7](https://git.kof22.com/KofTwentyTwo/gclo/issues/7), and this section will be updated when a package is approved.
 
 The channels available today (GitHub Releases, the in-app updater and Scoop) are all served over HTTPS.
 
@@ -198,7 +198,7 @@ The engine lists every repository through the GitHub REST API (Octokit, paginate
 Requirements: Windows 11 (or Windows 10 1809+), the [.NET 10 SDK](https://dotnet.microsoft.com/), and — for the desktop app — Visual Studio 2026 with the Windows App SDK / WinUI workload.
 
 ```powershell
-git clone https://github.com/KofTwentyTwo/gclo.git
+git clone https://git.kof22.com/KofTwentyTwo/gclo.git
 cd gclo
 
 # Desktop app (packaged build)

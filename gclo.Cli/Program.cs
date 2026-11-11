@@ -144,7 +144,7 @@ internal static class Program
       {
          Terminal.Error($"Details: {details}");
       }
-      Terminal.Error("This looks like a bug in gclo; please report it at https://github.com/KofTwentyTwo/gclo/issues.");
+      Terminal.Error("This looks like a bug in gclo; please report it at https://git.kof22.com/KofTwentyTwo/gclo/issues.");
       return ExitCodes.Unexpected;
    }
 

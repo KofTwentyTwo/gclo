@@ -2,7 +2,7 @@
 
 > **Status: approved** by the owner on 2026-10-10; step 1 is #104. Delivers #101
 > (Settings shows a saved default token as a masked value) and #102 (Add account
-> uses the default token by reference). Tracker of record: GitHub Issues; this
+> uses the default token by reference). Tracker of record: the project's issue tracker; this
 > document is the design.
 
 ## The problem, as the owner sees it

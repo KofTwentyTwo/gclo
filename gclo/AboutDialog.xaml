@@ -61,8 +61,8 @@
 
             <HyperlinkButton
                 Padding="0"
-                Content="https://github.com/KofTwentyTwo/gclo"
-                NavigateUri="https://github.com/KofTwentyTwo/gclo" />
+                Content="https://git.kof22.com/KofTwentyTwo/gclo"
+                NavigateUri="https://git.kof22.com/KofTwentyTwo/gclo" />
 
             <!-- License -->
             <StackPanel Spacing="4">

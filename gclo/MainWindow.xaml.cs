@@ -33,7 +33,8 @@ namespace gclo;
 /// </summary>
 public sealed partial class MainWindow : Window
 {
-   private const string RepoUrl = "https://github.com/KofTwentyTwo/gclo";
+   /// <summary>The project's public home: where its page, its releases, and its issue tracker are.</summary>
+   private const string RepoUrl = "https://git.kof22.com/KofTwentyTwo/gclo";
 
    // Smallest logical (DPI-independent) size at which the workspace toolbar,
    // connect card, and repo table remain usable WITH the navigation pane open:
@@ -1147,20 +1148,20 @@ public sealed partial class MainWindow : Window
 
 
 
-   private async void GitHubMenuItem_Click(object sender, RoutedEventArgs e)
+   private async void ProjectPageMenuItem_Click(object sender, RoutedEventArgs e)
        => await OpenRepositoryPageAsync("");
 
 
 
-   /// <summary>Help > Submit an issue: GitHub's new-issue chooser (bug report / feature request templates).</summary>
+   /// <summary>Help > Submit an issue: the project's new-issue chooser (bug report / feature request templates).</summary>
    private async void SubmitIssueMenuItem_Click(object sender, RoutedEventArgs e)
        => await OpenRepositoryPageAsync("/issues/new/choose");
 
 
 
-   /// <summary>Help > Community support: the repository's GitHub Discussions.</summary>
+   /// <summary>Help > Community support: the project's issue list, where questions are asked and answered.</summary>
    private async void CommunitySupportMenuItem_Click(object sender, RoutedEventArgs e)
-       => await OpenRepositoryPageAsync("/discussions");
+       => await OpenRepositoryPageAsync("/issues");
 
 
 
@@ -1288,12 +1289,23 @@ public sealed partial class MainWindow : Window
 
 
 
-   /// <summary>Opens a page of the repository in the default browser; the log names the page, never a token.</summary>
+   /// <summary>
+   /// Opens a page of the repository in the default browser; the log names the page,
+   /// never a token. A browser that cannot be started is said in the log: the callers
+   /// are event handlers, where an exception that escapes ends the process.
+   /// </summary>
    private async Task OpenRepositoryPageAsync(string path)
    {
       string url = RepoUrl + path;
-      _log.Info($"Opening {url} in the browser.");
-      await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
+      try
+      {
+         bool opened = await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
+         _log.Info(opened ? $"Opened {url} in the browser." : $"No browser took {url}.");
+      }
+      catch(Exception ex)
+      {
+         _log.Error($"{url} could not be opened in the browser ({ex.Message}).", ex);
+      }
    }
 
 

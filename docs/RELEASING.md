@@ -170,7 +170,7 @@ Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
 
 # Interactive: prompts for package id (use KofTwentyTwo.gclo), publisher,
 # license, description, etc., then opens a PR against microsoft/winget-pkgs.
-.\wingetcreate.exe new https://github.com/KofTwentyTwo/gclo/releases/download/v1.2.3/gclo-stable-Setup.exe --token <your GitHub PAT>
+.\wingetcreate.exe new https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v1.2.3/gclo-stable-Setup.exe --token <your GitHub PAT>
 ```
 
 Once that first PR is merged and the package is live, set the repository variable
@@ -183,7 +183,7 @@ every later stable release updates the manifest automatically.
 Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-256.
 
 - **Scoop** needs no account: this repository is its own bucket. Users run
-  `scoop bucket add gclo https://github.com/KofTwentyTwo/gclo` once, then
+  `scoop bucket add gclo https://git.kof22.com/KofTwentyTwo/gclo` once, then
   `scoop install gclo`. The manifest (`bucket/gclo.json`) carries `checkver` and
   `autoupdate` entries keyed on `SHA256SUMS`, so `scoop update` works as
   soon as the manifest on `main` names the new version — which is why the
@@ -254,7 +254,7 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
    - **Scoop and Chocolatey**, **winget**, **NuGet** — the publishers described
      above; each fails loudly when it cannot publish.
 
-7. **Verify.** On the [releases page](https://github.com/KofTwentyTwo/gclo/releases)
+7. **Verify.** On the [releases page](https://git.kof22.com/KofTwentyTwo/gclo/releases)
    every asset listed above is attached and
    `gh attestation verify <asset> --repo KofTwentyTwo/gclo --signer-repo KofTwentyTwo/standards`
    passes. Merge the packaging PR. Check the winget PR on microsoft/winget-pkgs.
@@ -280,7 +280,7 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
      choco push artifacts\gclo.1.2.3.nupkg --source https://push.chocolatey.org/ --api-key <CHOCO_API_KEY>
 
      # winget manifest update (stable releases only)
-     .\wingetcreate.exe update KofTwentyTwo.gclo --urls https://github.com/KofTwentyTwo/gclo/releases/download/v1.2.3/gclo-stable-Setup.exe --version 1.2.3 --submit --token <WINGET_TOKEN>
+     .\wingetcreate.exe update KofTwentyTwo.gclo --urls https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v1.2.3/gclo-stable-Setup.exe --version 1.2.3 --submit --token <WINGET_TOKEN>
      ```
 
    - **The published release itself is broken**: do not fix it in place and do

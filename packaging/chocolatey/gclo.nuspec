@@ -11,11 +11,11 @@
     <authors>James Maes</authors>
     <owners>KofTwentyTwo</owners>
     <!-- Moderation guideline: projectUrl is the product page, projectSourceUrl the source. -->
-    <projectUrl>https://github.com/KofTwentyTwo/gclo#readme</projectUrl>
-    <projectSourceUrl>https://github.com/KofTwentyTwo/gclo</projectSourceUrl>
-    <packageSourceUrl>https://github.com/KofTwentyTwo/gclo/tree/main/packaging/chocolatey</packageSourceUrl>
-    <docsUrl>https://github.com/KofTwentyTwo/gclo/blob/main/docs/CLI.md</docsUrl>
-    <bugTrackerUrl>https://github.com/KofTwentyTwo/gclo/issues</bugTrackerUrl>
+    <projectUrl>https://git.kof22.com/KofTwentyTwo/gclo#readme</projectUrl>
+    <projectSourceUrl>https://git.kof22.com/KofTwentyTwo/gclo</projectSourceUrl>
+    <packageSourceUrl>https://git.kof22.com/KofTwentyTwo/gclo/src/branch/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://git.kof22.com/KofTwentyTwo/gclo/src/branch/main/docs/CLI.md</docsUrl>
+    <bugTrackerUrl>https://git.kof22.com/KofTwentyTwo/gclo/issues</bugTrackerUrl>
     <licenseUrl>https://raw.githubusercontent.com/KofTwentyTwo/gclo/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <iconUrl>https://raw.githubusercontent.com/KofTwentyTwo/gclo/main/gclo/Assets/Brand/gclo-icon.svg</iconUrl>

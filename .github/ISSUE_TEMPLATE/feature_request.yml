@@ -6,7 +6,7 @@ body:
     attributes:
       value: >-
         Before filing, please check the
-        [development roadmap (#11)](https://github.com/KofTwentyTwo/gclo/issues/11) —
+        [development roadmap (#11)](https://git.kof22.com/KofTwentyTwo/gclo/issues/11) —
         your idea may already be planned, or deliberately out of scope.
 
   - type: textarea

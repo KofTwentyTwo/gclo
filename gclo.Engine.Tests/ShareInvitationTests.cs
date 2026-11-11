@@ -16,7 +16,7 @@ namespace gclo.Engine.Tests;
 /// </summary>
 public sealed class ShareInvitationTests
 {
-   private const string Repository = "https://github.com/KofTwentyTwo/gclo";
+   private const string Repository = "https://git.kof22.com/KofTwentyTwo/gclo";
 
    private static ShareInvitation Invitation() => ShareInvitation.Create(Repository, "1.2.3 (abc1234)");
 

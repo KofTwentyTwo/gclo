@@ -2,11 +2,11 @@
 
 > **Status: shipped.** Delivered across the v0.1.0 betas and released in
 > **v1.0.0** (issues #16 and #22 closed). This document is kept as the historical
-> execution plan; the tracker of record is GitHub Issues.
+> execution plan; the tracker of record is the project's issue tracker.
 
 Delivers issue #16 (Accounts mode) built directly into the layout redesign
 direction recorded on that issue, with issue #22's findings reconciled along the
-way. Tracker of record: GitHub Issues; this document is the executable plan.
+way. Tracker of record: the project's issue tracker; this document is the executable plan.
 
 **Decisions already made (owner-confirmed on #16):** Windows Credential Manager
 for tokens · one account = one org · Sync All · CLI parity (`--account`).

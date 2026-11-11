@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/KofTwentyTwo/gclo/security/advisories/new
     about: Please report security issues privately, never as a public issue.
   - name: Development roadmap
-    url: https://github.com/KofTwentyTwo/gclo/issues/11
+    url: https://git.kof22.com/KofTwentyTwo/gclo/issues/11
     about: Check the roadmap before filing a feature request; it may already be planned.

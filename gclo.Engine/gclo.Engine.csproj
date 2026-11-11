@@ -16,8 +16,8 @@
     <Description>Core engine for gclo (Git Clone Large Organizations): lists every repository in a GitHub organization or user account and clones or fast-forward-pulls them all in parallel, with Windows path validation and rename/skip recovery.</Description>
     <Authors>James Maes</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/KofTwentyTwo/gclo</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/KofTwentyTwo/gclo</PackageProjectUrl>
+    <RepositoryUrl>https://git.kof22.com/KofTwentyTwo/gclo</RepositoryUrl>
+    <PackageProjectUrl>https://git.kof22.com/KofTwentyTwo/gclo</PackageProjectUrl>
     <PackageTags>github;git;clone;mirror;organization;libgit2sharp;octokit</PackageTags>
     <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
     <!-- Publish-quality package: SourceLink to the public repo, symbols in a

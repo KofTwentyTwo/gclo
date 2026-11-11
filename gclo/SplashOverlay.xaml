@@ -87,7 +87,7 @@
                 Opacity="0.85"
                 HorizontalAlignment="Center" />
             <TextBlock
-                Text="james@kof22.com&#x2002;·&#x2002;github.com/KofTwentyTwo&#x2002;·&#x2002;kof22.com"
+                Text="james@kof22.com&#x2002;·&#x2002;git.kof22.com/KofTwentyTwo&#x2002;·&#x2002;kof22.com"
                 FontSize="12"
                 Foreground="White"
                 Opacity="0.6"

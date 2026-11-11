@@ -53,7 +53,7 @@ branches beyond that.
 
 Installed desktop builds update in place via **Help → Check for updates**; the CLI is
 updated by downloading the latest `gclo-cli-win-x64-<version>.zip` from the
-[releases page](https://github.com/KofTwentyTwo/gclo/releases) or through Scoop.
+[releases page](https://git.kof22.com/KofTwentyTwo/gclo/releases) or through Scoop.
 
 ## Published vulnerabilities
 

@@ -108,7 +108,7 @@ public sealed partial class SmokeTests : UiTestBase
          string invitation = text.Patterns.Value.Pattern.Value.Value;
 
          Assert.StartsWith("Subject: Try gclo", invitation, StringComparison.Ordinal);
-         Assert.Contains("https://github.com/KofTwentyTwo/gclo/releases/latest", invitation, StringComparison.Ordinal);
+         Assert.Contains("https://git.kof22.com/KofTwentyTwo/gclo/releases/latest", invitation, StringComparison.Ordinal);
          Assert.False(Session.App.HasExited);
 
          Session.ClickButton("Close");

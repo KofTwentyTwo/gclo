@@ -6,11 +6,11 @@ short version of what they ask of a contribution.
 
 ## Before you start
 
-Check the [development roadmap (#11)](https://github.com/KofTwentyTwo/gclo/issues/11):
+Check the [development roadmap (#11)](https://git.kof22.com/KofTwentyTwo/gclo/issues/11):
 it may already be planned, or deliberately out of scope. For anything beyond a small
 fix, open an issue first so the approach can be agreed before you invest time.
 Questions and proposals are welcome in
-[Issues](https://github.com/KofTwentyTwo/gclo/issues).
+[Issues](https://git.kof22.com/KofTwentyTwo/gclo/issues).
 
 ## Setup
 
