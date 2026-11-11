@@ -135,11 +135,21 @@ public sealed class RepoTableTests : UiTestBase
          return;
       }
 
-      AutomationElement tokenBox = Session.WaitForElement("ConnectTokenBox");
-      Session.EnterText(tokenBox, FixtureToken);
-      // The debounced org lookup is answered by the fixture (one organization); the
+      // Quick Sync asks where the repositories are first, and takes no token before
+      // that (#209). With the place chosen and the token entered nothing is sent yet:
+      // Find lists the organizations, answered by the fixture (one organization). The
       // log line is the oracle, then the org is picked from the combo box's list so
       // the selection commits to the view model's Organization, which enables Load.
+      Session.WaitForElement("ConnectPlaceGitHub").AsRadioButton().IsChecked = true;
+      AutomationElement tokenBox = Session.WaitFor(
+          () => Session.FindInApp(cf => cf.ByAutomationId("ConnectTokenBox")) is { IsEnabled: true } box ? box : null,
+          "the token box to take a token once a place is chosen");
+      Session.EnterText(tokenBox, FixtureToken);
+      Assert.False(Session.LogContains("Organization lookup started"), "entering a token must not send it anywhere by itself");
+      Session.WaitFor(
+          () => Session.FindInApp(cf => cf.ByAutomationId("ConnectFindOrgsButton")) is { IsEnabled: true } button ? button : null,
+          "the Find button to enable");
+      Session.ClickButton("Find");
       Session.WaitForLogLine("Organization lookup finished: 1 organizations", TimeSpan.FromSeconds(20));
       ComboBox orgBox = Session.WaitForElement("ConnectOrgBox").AsComboBox();
       Session.WaitFor(

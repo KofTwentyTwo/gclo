@@ -144,10 +144,14 @@ public sealed partial class AccountWizardViewModel : ObservableObject
       Name = "";
       Description = "";
       Token = seed.Token;
+      // The account is where the connection was: its token was used with that place.
+      _chosen = seed.Place ?? ForgeEndpoint.GitHub;
+
       // A Quick Sync connection that runs on the default token becomes a
       // default-token account; any other token is the account's own. Compared in
-      // memory only; neither value is logged.
+      // memory only; neither value is logged. The default token is a GitHub token.
       UseDefaultToken = HasDefaultToken
+          && _chosen.Kind == ForgeKind.GitHub
           && string.Equals(seed.Token.Trim(), _defaultToken?.Invoke()?.Trim(), StringComparison.Ordinal);
       Organization = seed.Organization;
       TargetRoot = seed.TargetRoot;

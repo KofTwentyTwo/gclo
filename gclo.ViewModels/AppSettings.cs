@@ -37,6 +37,32 @@ public sealed class AppSettings
    /// </summary>
    public static readonly Guid DefaultTokenVaultId = new("d0f0e0c0-9c40-4a5e-8f3a-5b1e6f7a2c11");
 
+   /// <summary>
+   /// The workspace that was open last: an account's id, or <see cref="StartWorkspace.QuickSync"/>.
+   /// Null when nothing is recorded yet. See <see cref="StartWorkspace.Choose"/>.
+   /// </summary>
+   public Guid? LastWorkspace { get; set; }
+
+   /// <summary>
+   /// The forge Quick Sync last connected to, by name; null for GitHub. With
+   /// <see cref="QuickSyncServer"/>, <see cref="QuickSyncOrganization"/>,
+   /// <see cref="QuickSyncTargetFolder"/> and <see cref="QuickSyncCreateOrgSubfolder"/>
+   /// it is what <see cref="RememberedQuickSync"/> gives back. No token is among them.
+   /// </summary>
+   public string? QuickSyncForge { get; set; }
+
+   /// <summary>The address of the Gitea server Quick Sync last connected to; null for GitHub.</summary>
+   public string? QuickSyncServer { get; set; }
+
+   /// <summary>The organization Quick Sync last loaded; empty when none.</summary>
+   public string QuickSyncOrganization { get; set; } = "";
+
+   /// <summary>The target folder of Quick Sync's last connection; empty when none.</summary>
+   public string QuickSyncTargetFolder { get; set; } = "";
+
+   /// <summary>Whether Quick Sync's last connection cloned under an organization subfolder.</summary>
+   public bool QuickSyncCreateOrgSubfolder { get; set; }
+
    /// <summary>Folder pre-filled as the sync target. Empty means "no default".</summary>
    public string DefaultTargetFolder { get; set; } = "";
 
@@ -86,10 +112,34 @@ public sealed class AppSettings
       {
          // Settings must never prevent startup; fall through to defaults.
          log?.Error($"Settings could not be loaded ({ex.Message}); the defaults are used.", ex);
+         return new AppSettings { CouldNotBeRead = true };
       }
 
       return new AppSettings();
    }
+
+
+
+   /// <summary>
+   /// True when the settings file was there and could not be read, so these are the
+   /// defaults in its place. What the app remembers by itself is then not written
+   /// (<see cref="SaveWhatWasRemembered"/>): the file is left for the user to mend,
+   /// as it was before the app remembered anything. Saving the Settings dialog
+   /// still writes.
+   /// </summary>
+   [System.Text.Json.Serialization.JsonIgnore]
+   public bool CouldNotBeRead { get; private set; }
+
+
+
+   /// <summary>
+   /// Writes the settings because the app remembered something by itself (the
+   /// workspace that was open, Quick Sync's last connection), not because the user
+   /// saved them. Does nothing when the file could not be read at start: that file
+   /// is not written over with defaults on the app's own account.
+   /// </summary>
+   public bool SaveWhatWasRemembered(IActivityLog? log = null, string? directory = null)
+       => !CouldNotBeRead && Save(log, directory);
 
 
 
@@ -170,10 +220,51 @@ public sealed class AppSettings
 
 
 
+   /// <summary>
+   /// Records a Quick Sync connection that worked, so the card opens the same way
+   /// next time. The caller saves. Never a token.
+   /// </summary>
+   public void RememberQuickSync(QuickSyncConnection connection)
+   {
+      ArgumentNullException.ThrowIfNull(connection);
+      QuickSyncForge = connection.Place.Kind == ForgeKind.GitHub ? null : connection.Place.Kind.ToString();
+      QuickSyncServer = connection.Place.Server?.AbsoluteUri;
+      QuickSyncOrganization = connection.Organization.Trim();
+      QuickSyncTargetFolder = connection.TargetFolder.Trim();
+      QuickSyncCreateOrgSubfolder = connection.CreateOrgSubfolder;
+   }
+
+
+
+   /// <summary>
+   /// The Quick Sync connection that was recorded. Null when none was (a first
+   /// run: a connection that worked has an organization), and when what is stored
+   /// names a place that cannot be used (a file edited by hand, or a forge of a
+   /// later version). The card then opens with no place chosen.
+   /// </summary>
+   public QuickSyncConnection? RememberedQuickSync()
+   {
+      if(QuickSyncOrganization.Length == 0)
+      {
+         return null;
+      }
+
+      ForgeKind? kind = QuickSyncForge is null ? ForgeKind.GitHub
+          : string.Equals(QuickSyncForge, nameof(ForgeKind.Gitea), StringComparison.OrdinalIgnoreCase) ? ForgeKind.Gitea
+          : null;
+      return kind is ForgeKind known && ForgeEndpoint.TryCreate(known, QuickSyncServer, out ForgeEndpoint? place, out _)
+          ? new QuickSyncConnection(place, QuickSyncOrganization, QuickSyncTargetFolder, QuickSyncCreateOrgSubfolder)
+          : null;
+   }
+
+
+
    private void Sanitize()
    {
       // The JSON deserializer can assign null despite the non-nullable annotation.
       DefaultTargetFolder ??= "";
+      QuickSyncOrganization ??= "";
+      QuickSyncTargetFolder ??= "";
       DefaultMaxConcurrency = Math.Clamp(DefaultMaxConcurrency, MinConcurrency, MaxConcurrency);
       // A file written before this setting existed has no such field, and the
       // property then keeps its default; whatever a file does say is brought into range.

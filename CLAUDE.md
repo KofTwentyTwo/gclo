@@ -109,7 +109,11 @@ together are the "Core": all logic lives there, under the coverage gate.
   (over `IProcessRunner`) is the alternative recovery.
 - **`gclo.ViewModels`** is UI-framework-free (CommunityToolkit.Mvvm, partial-property
   form). `WorkspaceViewModel` is one workspace (Quick Sync or a saved account): load,
-  filter and select, sync, retry, path recovery. Engine progress reaches it through
+  filter and select, sync, retry, path recovery. Quick Sync's place (GitHub, or a
+  Gitea server) is chosen on its card: no place is preselected, a token is sent
+  only when the user presses Find or Load and only to the listers of the place
+  on the card, and choosing another place forgets the token, the organization
+  and the table (ADR 0010). `StartWorkspace` picks the workspace the app opens on. Engine progress reaches it through
   `BatchedRepoProgress` (a few deliveries a second, the latest report per repository;
   one dispatcher callback per report froze the window on large runs). The table the
   view binds is `FilteredRepos`, kept in order row by row (`PlaceInTable`,

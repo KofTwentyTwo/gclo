@@ -130,7 +130,7 @@ were the two lister implementations and the failure type they throw.
   was normalized, in full, where the token is asked for: that is the address the
   token goes to. An edit shows where the
   account is and that it stays there. A Quick Sync connection saved as an account
-  is a GitHub account: Quick Sync itself connects to GitHub only.
+  is an account on the place the connection was on (#209).
 - **The wizard has the lister of one place at a time.** The shell gives it a
   lister per place; step 1 takes the lister of the place that was chosen, and step
   2 has no other to send the token to. A wizard that was given one lister (an
@@ -141,6 +141,37 @@ were the two lister implementations and the failure type they throw.
   neither offered nor preselected for a Gitea server.
 - **Texts follow the place.** The page a token is made on is the one of the
   chosen place (`ForgeTexts`); step 2 names the place the token is checked with.
+
+### Quick Sync and the start screen (#209)
+
+GitHub and Gitea are equal options wherever the app asks for a place, with the
+same two labels. Quick Sync, the card the app first opens on, is where that
+matters most.
+
+- **The place is chosen on the card, and nothing is chosen for the user.** On a
+  first run neither GitHub nor Gitea is selected, and the token box takes a token
+  only once one is. A token cannot be pasted for a place nobody chose.
+- **Nothing is sent until the user asks.** A token that is typed, pasted, or
+  filled in from a saved default goes nowhere by itself. It leaves the machine
+  when the user presses Find (the organization list) or Load repositories, and
+  it goes to the listers of the place that is on the card at that moment. An
+  account's page still lists and loads when it is opened: its token was saved for
+  its place.
+- **A server address is taken when its box is left**, not while it is typed, so no
+  token is sent to half an address; the card then shows it as it was normalized.
+  While the box holds another text than the address that was taken, and while
+  the card names no usable address, nothing can be looked up, loaded or synced,
+  whatever starts it (a button, a keyboard shortcut).
+- **What belongs to one place is forgotten when another is chosen:** the token,
+  the organization, and the table. The repositories of the table have clone
+  addresses on the other host; they are not left there to be synced with a token
+  of the new place.
+- **The card opens the way the last connection that worked left it:** place,
+  server address, organization, target folder, kept in `settings.json`. Never a
+  token. An older gclo that rewrites `settings.json` drops these fields; the card
+  then opens as on a first run, which costs a choice and nothing else.
+- **The app opens where it was left:** the workspace that was open last; with
+  nothing recorded, the first account; with no account, Quick Sync.
 
 ## Alternatives considered
 

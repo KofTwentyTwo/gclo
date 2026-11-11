@@ -8,19 +8,73 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
     IsTabStop="False"
-    Loaded="OnLoaded">
+    Loaded="OnLoaded"
+    Unloaded="OnUnloaded">
 
-    <!-- The one connection form: token, organization, target folder, subfolder
+    <!-- The one connection form: for Quick Sync the place (GitHub, or Gitea and the
+         server's address), then token, organization, target folder, subfolder
          preference, and the path preview. Hosted by the connect card and by the
          chip's Edit flyout (WorkspacePage), both over the same view model, so a
          change here lands in both places and the FlaUI suite can target either
          through its AutomationIdPrefix. -->
     <StackPanel Spacing="12">
+        <!-- Where the repositories are (#209). First on the form: the token below is
+             for this place. Asked on Quick Sync only; an account's place is fixed,
+             and its page says where it is in its title. -->
+        <!-- Two radio buttons of their own, not a RadioButtons group: that control
+             selects its first option as soon as keyboard focus lands on it, which
+             happens when the window opens. The place has to be chosen by an act
+             (a click, Space, an arrow key), never by focus: a token typed next goes
+             to the place that is chosen. -->
+        <StackPanel
+            Spacing="4"
+            Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.CanChoosePlace), Mode=OneWay}">
+            <TextBlock x:Name="PlaceQuestion" Text="Where are the repositories?" />
+            <StackPanel
+                AutomationProperties.AutomationId="{x:Bind Id('PlaceChoice')}"
+                AutomationProperties.LabeledBy="{x:Bind PlaceQuestion}"
+                Orientation="Horizontal"
+                Spacing="24">
+                <RadioButton
+                    x:Name="PlaceGitHub"
+                    AutomationProperties.AutomationId="{x:Bind Id('PlaceGitHub')}"
+                    MinWidth="0"
+                    Content="GitHub"
+                    Checked="Place_Checked" />
+                <RadioButton
+                    x:Name="PlaceGitea"
+                    AutomationProperties.AutomationId="{x:Bind Id('PlaceGitea')}"
+                    MinWidth="0"
+                    Content="Gitea"
+                    Checked="Place_Checked" />
+            </StackPanel>
+        </StackPanel>
+        <!-- Taken when the box is left (or Enter is pressed), never while it is
+             typed: no token is sent to half an address. -->
+        <TextBox
+            x:Name="ServerBox"
+            AutomationProperties.AutomationId="{x:Bind Id('ServerBox')}"
+            Header="Server address"
+            ToolTipService.ToolTip="The address of the Gitea (or Forgejo) server itself. HTTPS only; the token is sent to this address and nowhere else."
+            PlaceholderText="https://git.example.com"
+            Text="{x:Bind ViewModel.Server, Mode=OneWay}"
+            TextChanged="ServerBox_TextChanged"
+            LostFocus="ServerBox_LostFocus"
+            KeyDown="ServerBox_KeyDown"
+            Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.AsksForServer), Mode=OneWay}" />
+        <TextBlock
+            x:Name="ServerErrorText"
+            AutomationProperties.AutomationId="{x:Bind Id('ServerError')}"
+            AutomationProperties.LiveSetting="Polite"
+            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+            TextWrapping="Wrap"
+            Text="{x:Bind ViewModel.ServerError, Mode=OneWay}"
+            Visibility="{x:Bind local:StatusFormat.VisibleIfNotEmpty(ViewModel.ServerError), Mode=OneWay}" />
         <PasswordBox
             x:Name="TokenBox"
             AutomationProperties.AutomationId="{x:Bind Id('TokenBox')}"
             Header="Personal access token"
-            ToolTipService.ToolTip="Fine-grained or classic PAT with repository read access; used for the GitHub API and git over HTTPS. Never written to disk or logs."
+            ToolTipService.ToolTip="Needs read access to repositories. Never written to disk or logs."
             PlaceholderText="ghp_…"
             PasswordChanged="TokenBox_PasswordChanged" />
         <HyperlinkButton
@@ -32,6 +86,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <ComboBox
                 Grid.Column="0"
@@ -39,14 +94,25 @@
                 HorizontalAlignment="Stretch"
                 Header="Organization or account"
                 x:Name="OrgBox"
-                ToolTipService.ToolTip="The organization or user account whose repositories are synced. Populated from the token; typing a name also works."
+                ToolTipService.ToolTip="The organization or user account whose repositories are synced. Type its name, or list the ones the token can see."
                 IsEditable="True"
                 ItemsSource="{x:Bind ViewModel.Organizations, Mode=OneTime}"
-                PlaceholderText="Paste a token first, or type an org"
+                PlaceholderText="Type a name, or press Find to list them"
                 Loaded="OrgBox_Loaded"
                 Text="{x:Bind ViewModel.Organization, Mode=TwoWay}" />
-            <ProgressRing
+            <!-- Quick Sync sends a token nowhere by itself (#209): the list of
+                 organizations is fetched when this is pressed. An account's page
+                 lists them when it opens; its token was saved for its place. -->
+            <Button
                 Grid.Column="1"
+                AutomationProperties.AutomationId="{x:Bind Id('FindOrgsButton')}"
+                VerticalAlignment="Bottom"
+                Content="Find"
+                ToolTipService.ToolTip="Lists the organizations the token can see. Pressing this sends the token to the place chosen above; nothing is sent before."
+                Command="{x:Bind ViewModel.FindOrganizationsCommand, Mode=OneWay}"
+                Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.CanChoosePlace), Mode=OneWay}" />
+            <ProgressRing
+                Grid.Column="2"
                 Width="20"
                 Height="20"
                 Margin="0,0,0,8"

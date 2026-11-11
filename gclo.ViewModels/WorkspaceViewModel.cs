@@ -23,7 +23,8 @@ namespace gclo.ViewModels;
 /// </summary>
 public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 {
-   private readonly IRepositoryLister _lister;
+   /// <summary>The lister of the place this workspace is on. Quick Sync replaces it when another place is chosen.</summary>
+   private IRepositoryLister _lister;
 
    private readonly IGitClient _git;
 
@@ -32,7 +33,36 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// <summary>Result of the one-time WSL probe; null until the first path recovery asks for it.</summary>
    private WslAvailability? _wslAvailability;
 
-   private readonly IOrganizationLister _orgLister;
+   /// <summary>The organization lister of the place this workspace is on; replaced together with <see cref="_lister"/>.</summary>
+   private IOrganizationLister _orgLister;
+
+   /// <summary>The listers of a place, for a Quick Sync whose place can be chosen; null when the place is fixed.</summary>
+   private readonly Func<ForgeEndpoint, (IRepositoryLister Repositories, IOrganizationLister Organizations)>? _listersOf;
+
+   /// <summary>The default token saved for a place, which Quick Sync fills in; null when there is no such source.</summary>
+   private readonly Func<ForgeEndpoint, string?>? _defaultTokenOf;
+
+   /// <summary>Quick Sync's place, as it was last taken from the choice on its card. The listers are the ones of this place.</summary>
+   private ForgeEndpoint _quickSyncPlace = ForgeEndpoint.GitHub;
+
+   /// <summary>
+   /// False while the choice on Quick Sync's card names no place that can be used:
+   /// nothing was chosen yet, or a Gitea server without an address, or with one
+   /// that is refused. Nothing is sent anywhere meanwhile.
+   /// </summary>
+   private bool _placeIsUsable = true;
+
+   /// <summary>
+   /// Whether a place was chosen. A Quick Sync whose place is chosen on its card
+   /// starts with none: no place is taken for granted, so no token can be sent to a
+   /// place nobody chose. An account's place, and that of a Quick Sync without the
+   /// choice, is given.
+   /// </summary>
+   private bool _placeChosen = true;
+
+   private bool _isOnGitea;
+
+   private string _server = "";
 
    private readonly Func<Action<RepoProgress>, IProgress<RepoProgress>> _progressFactory;
 
@@ -113,6 +143,11 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// (<see cref="RefreshAccountToken"/>), so one that was replaced or removed since
    /// (the default token in Settings, the account's own in the wizard) takes effect
    /// without a restart.
+   /// <paramref name="listersOf"/> makes this a Quick Sync whose place is chosen on
+   /// its card (<see cref="CanChoosePlace"/>): it gives the listers of a place, and a
+   /// token is only ever handed to the listers of the place the card is on.
+   /// <paramref name="defaultTokenOf"/> gives the default token saved for a place,
+   /// which such a Quick Sync fills in when it is on that place.
    /// </summary>
    public WorkspaceViewModel(
        IRepositoryLister? lister = null,
@@ -124,13 +159,24 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
        Account? account = null,
        ITokenVault? tokenVault = null,
        AccountsStore? accountsStore = null,
-       IWslCloner? wsl = null)
+       IWslCloner? wsl = null,
+       Func<ForgeEndpoint, (IRepositoryLister Repositories, IOrganizationLister Organizations)>? listersOf = null,
+       Func<ForgeEndpoint, string?>? defaultTokenOf = null)
    {
+      // An account's place is its own and fixed. Quick Sync starts on GitHub, and takes the listers of whatever place is chosen.
+      _listersOf = account is null ? listersOf : null;
+      _defaultTokenOf = account is null ? defaultTokenOf : null;
+      _placeChosen = _listersOf is null;
+      _placeIsUsable = _placeChosen;
+      (IRepositoryLister Repositories, IOrganizationLister Organizations)? ofGitHub = _listersOf?.Invoke(ForgeEndpoint.GitHub);
+
       // Without listers of its own, a workspace gets those of its account's forge: Quick Sync is GitHub.
-      _lister = lister ?? (account is null ? new GitHubRepositoryLister() : AccountListers.RepositoryListerFor(account));
+      _lister = lister ?? ofGitHub?.Repositories
+          ?? (account is null ? new GitHubRepositoryLister() : AccountListers.RepositoryListerFor(account));
       _git = git ?? new LibGit2GitClient();
       _wsl = wsl ?? new WslCloner();
-      _orgLister = orgLister ?? (account is null ? new GitHubOrganizationLister() : AccountListers.OrganizationListerFor(account));
+      _orgLister = orgLister ?? ofGitHub?.Organizations
+          ?? (account is null ? new GitHubOrganizationLister() : AccountListers.OrganizationListerFor(account));
       _progressFactory = progressFactory ?? DefaultProgress;
       _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
       _log = log ?? new FileActivityLog(GcloPaths.LogDirectory);
@@ -146,6 +192,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       ResultMessage = "";
       LoadErrorTitle = "";
       LoadErrorMessage = "";
+      ServerError = "";
       AllSelected = true;
       CanEditInputs = true;
 
@@ -174,26 +221,329 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    public string DisplayName => _account?.Name ?? "Quick Sync";
 
    /// <summary>
-   /// How the place this workspace connects to is named: "GitHub" for Quick Sync
-   /// and a GitHub account, the server's host for an account on a Gitea server. For
-   /// an account whose stored place cannot be used, what <see cref="Account.DescribePlace"/> says.
+   /// How the place this workspace connects to is named: "GitHub", or the server's
+   /// host. For Quick Sync it follows the choice on its card, and is "Gitea" until an
+   /// address is there that can be used. For an account whose stored place cannot
+   /// be used, what <see cref="Account.DescribePlace"/> says.
    /// </summary>
-   public string PlaceName => _account is null ? ForgeEndpoint.GitHub.DisplayName : _account.DescribePlace();
+   public string PlaceName
+       => _account is not null ? _account.DescribePlace()
+           : !_placeChosen ? ""
+           : _placeIsUsable ? _quickSyncPlace.DisplayName
+           : nameof(ForgeKind.Gitea);
 
-   /// <summary>What the token of this workspace's forge is called: the header of its token box.</summary>
-   public string TokenHeader => ForgeTexts.TokenName(_account?.Forge ?? ForgeKind.GitHub);
+   /// <summary>The kind of forge this workspace is on; for Quick Sync, the one chosen on its card.</summary>
+   private ForgeKind PlaceKind => _account?.Forge ?? (_isOnGitea ? ForgeKind.Gitea : ForgeKind.GitHub);
 
-   /// <summary>The title of the connect card: where this workspace connects to.</summary>
-   public string ConnectTitle => $"Connect to {PlaceName}";
+   /// <summary>What the token of this workspace's forge is called: the header of its token box. Before a place is chosen, the plain name.</summary>
+   public string TokenHeader => _placeChosen ? ForgeTexts.TokenName(PlaceKind) : "Access token";
+
+   /// <summary>What Quick Sync's empty token box says: the shape of a GitHub token, and nothing for another forge or before a place is chosen.</summary>
+   public string TokenPlaceholder => _placeChosen && PlaceKind == ForgeKind.GitHub ? "ghp_…" : "";
+
+   /// <summary>
+   /// Whether a place was chosen. False for a Quick Sync that was just opened for
+   /// the first time: its card then asks first, and takes no token before.
+   /// </summary>
+   public bool IsPlaceChosen => _placeChosen;
+
+   /// <summary>
+   /// Whether this workspace's card asks where the repositories are: Quick Sync,
+   /// when it was given the listers of a place. An account's place is fixed.
+   /// </summary>
+   public bool CanChoosePlace => _listersOf is not null;
+
+   /// <summary>
+   /// The choice on Quick Sync's card: false is GitHub, true is a Gitea server whose
+   /// address is <see cref="Server"/>. Choosing the other kind empties what was
+   /// entered or loaded for this one: the token, the organization, the table. It
+   /// cannot be changed while the workspace is busy (<see cref="CanEditInputs"/>).
+   /// </summary>
+   public bool IsOnGitea
+   {
+      get => _isOnGitea;
+      set
+      {
+         if((value != _isOnGitea || !_placeChosen) && _listersOf is { } listersOf && CanEditInputs)
+         {
+            ///////////////////////////////////////////////////////////////////////
+            // Another kind of forge, or the first choice at all: what is on the //
+            // card was entered for the other place, or for no place. Neither is  //
+            // carried to the place that is chosen now.                           //
+            ///////////////////////////////////////////////////////////////////////
+            _isOnGitea = value;
+            _placeChosen = true;
+            ForgetTheOtherPlace();
+            TakeThePlace(listersOf);
+         }
+
+         // Always said, also when nothing was taken: a control that asked for a change that was refused shows the choice as it is.
+         OnPropertyChanged();
+         OnPropertyChanged(nameof(PlaceIndex));
+         OnPropertyChanged(nameof(AsksForServer));
+         OnPropertyChanged(nameof(IsPlaceChosen));
+      }
+   }
+
+   /// <summary>
+   /// <see cref="IsOnGitea"/> as the selected index of a two-item radio group:
+   /// 0 = GitHub, 1 = Gitea, and -1 while nothing was chosen. Setting any other
+   /// index than 0 or 1 (a radio group reports -1 while it has no selection)
+   /// changes nothing.
+   /// </summary>
+   public int PlaceIndex
+   {
+      get => !_placeChosen ? -1 : _isOnGitea ? 1 : 0;
+      set
+      {
+         if(value is 0 or 1)
+         {
+            IsOnGitea = value == 1;
+         }
+      }
+   }
+
+   /// <summary>Whether the card shows the box for the server's address.</summary>
+   public bool AsksForServer => CanChoosePlace && _placeChosen && _isOnGitea;
+
+   /// <summary>
+   /// The address of the Gitea server on Quick Sync's card. It is taken when it is
+   /// set, so the shell sets it when the box is left, not while it is typed: no
+   /// token is sent to half an address. Once taken it reads as it was normalized,
+   /// which is the address a token goes to.
+   /// </summary>
+   public string Server
+   {
+      get => _server;
+      set
+      {
+         string typed = value ?? "";
+         if((!string.Equals(typed, _server, StringComparison.Ordinal) || !_placeIsUsable) && _listersOf is { } listersOf && CanEditInputs)
+         {
+            _server = typed;
+            TakeThePlace(listersOf);
+         }
+         OnPropertyChanged();
+      }
+   }
+
+
+
+   /// <summary>
+   /// Told by the shell that the address box is being typed into and holds another
+   /// text than <see cref="Server"/>. Until the address is set again (the box is
+   /// left, or Enter is pressed), the card names no place that can be used: nothing
+   /// can be loaded, looked up or synced with the address that is no longer the one
+   /// on screen, whatever starts it (a button, a keyboard shortcut).
+   /// </summary>
+   public void ServerIsBeingEdited()
+   {
+      if(AsksForServer && _placeIsUsable)
+      {
+         _placeIsUsable = false;
+         SayWhatThePlaceAllows();
+      }
+   }
+
+
+
+   /// <summary>
+   /// Says what follows from the place the card names: its texts, and what can be
+   /// done with it. While it names no usable place, a lookup that is on its way is
+   /// ended and the connection is not offered as an account.
+   /// </summary>
+   private void SayWhatThePlaceAllows()
+   {
+      if(!_placeIsUsable)
+      {
+         _orgLoadCts?.Cancel();
+         SaveAsAccountOffered = false;
+      }
+      OnPropertyChanged(nameof(PlaceName));
+      OnPropertyChanged(nameof(ConnectTitle));
+      OnPropertyChanged(nameof(TokenHeader));
+      OnPropertyChanged(nameof(TokenPlaceholder));
+      OnPropertyChanged(nameof(TokenPage));
+      LoadReposCommand.NotifyCanExecuteChanged();
+      FindOrganizationsCommand.NotifyCanExecuteChanged();
+      SyncCommand.NotifyCanExecuteChanged();
+      RetryFailedCommand.NotifyCanExecuteChanged();
+      ResolvePathsCommand.NotifyCanExecuteChanged();
+   }
+
+   /// <summary>What is wrong with <see cref="Server"/>; empty when it can be used, and while none was entered yet.</summary>
+   [ObservableProperty]
+   public partial string ServerError { get; set; }
+
+   /// <summary>
+   /// True once Quick Sync loaded repositories: the connection works, and the page
+   /// offers to save it as an account (where its token is kept). Set back when the
+   /// offer is dismissed, and when another place is chosen.
+   /// </summary>
+   [ObservableProperty]
+   public partial bool SaveAsAccountOffered { get; set; }
+
+   /// <summary>
+   /// Told about a Quick Sync connection that just loaded its repositories, so the
+   /// shell can remember it for the next start. Never told a token.
+   /// </summary>
+   public Action<QuickSyncConnection>? Connected { get; set; }
+
+   /// <summary>The title of the connect card: where this workspace connects to; just "Connect" before a place is chosen.</summary>
+   public string ConnectTitle => _placeChosen ? $"Connect to {PlaceName}" : "Connect";
 
    /// <summary>The page a token for this workspace is made on; null when the account's place is not known.</summary>
    public Uri? TokenPage => ForgeTexts.TokenPage(Place);
 
-   /// <summary>The place this workspace connects to; null for an account whose stored forge and server cannot be used.</summary>
+   /// <summary>
+   /// The place this workspace connects to. Null for an account whose stored forge
+   /// and server cannot be used, and for Quick Sync while its card names no usable place.
+   /// </summary>
    private ForgeEndpoint? Place
-       => _account is null ? ForgeEndpoint.GitHub
+       => _account is null ? (_placeIsUsable ? _quickSyncPlace : null)
            : _account.TryGetEndpoint(out ForgeEndpoint? place, out _) ? place
            : null;
+
+
+
+   /// <summary>
+   /// Takes the place the card names, after the choice or the address changed. A
+   /// place that can be used and is another one than before brings its own listers,
+   /// and what belonged to the other place is forgotten first: the token typed for
+   /// it is not handed to the new listers, and the repositories loaded from it (whose
+   /// clone addresses are on its host) do not stay in the table to be synced with a
+   /// token of the new place.
+   /// </summary>
+   private void TakeThePlace(Func<ForgeEndpoint, (IRepositoryLister Repositories, IOrganizationLister Organizations)> listersOf)
+   {
+      ForgeEndpoint? place = null;
+      string error = "";
+      if(!_isOnGitea)
+      {
+         place = ForgeEndpoint.GitHub;
+      }
+      else if(!string.IsNullOrWhiteSpace(_server) && !ForgeEndpoint.TryCreate(ForgeKind.Gitea, _server, out place, out string? reason))
+      {
+         error = char.ToUpperInvariant(reason[0]) + reason[1..] + ".";
+      }
+      ServerError = error;
+
+      ///////////////////////////////////////////////////////////////////////////////
+      // Until the place is taken below, the card names no place that can be used: //
+      // if the listers of the new place cannot be made, nothing is sent to the    //
+      // listers of the old one while the card already shows the new address.      //
+      ///////////////////////////////////////////////////////////////////////////////
+      _placeIsUsable = false;
+      if(place is not null && !place.Equals(_quickSyncPlace))
+      {
+         (IRepositoryLister repositories, IOrganizationLister organizations) = listersOf(place);
+         ForgetTheOtherPlace();
+         _lister = repositories;
+         _orgLister = organizations;
+         _quickSyncPlace = place;
+      }
+
+      _placeIsUsable = _placeChosen && place is not null;
+      if(place?.Server is not null)
+      {
+         _server = place.Server.AbsoluteUri;
+         OnPropertyChanged(nameof(Server));
+      }
+      SayWhatThePlaceAllows();
+      FillInTheDefaultToken();
+   }
+
+
+
+   /// <summary>
+   /// Empties what was entered or loaded for the place Quick Sync was on: the token
+   /// (which also ends a lookup that is on its way and empties the organization
+   /// list), the organization, the table, and the offer to save the connection.
+   /// </summary>
+   private void ForgetTheOtherPlace()
+   {
+      Token = "";
+      Organization = "";
+      SaveAsAccountOffered = false;
+
+      foreach(RepoItemViewModel existing in Repos)
+      {
+         existing.PropertyChanged -= OnItemPropertyChanged;
+      }
+      Repos.Clear();
+      _itemsByName.Clear();
+      TotalCount = 0;
+      CompletedCount = 0;
+      _runSet = [];
+      SortColumn = null;
+      SortDescending = false;
+      _sampleRepoName = null;
+      RebuildReposIndex();
+      LoadedOrganization = null;
+      HasLoadedRepos = false;
+      StatusText = "";
+      ResetRunResult();
+      LoadErrorOpen = false;
+      NotifyTargetPathChanged();
+      RecomputeSelectedCount();
+      RebuildFilteredRepos();
+      SyncCommand.NotifyCanExecuteChanged();
+      RetryFailedCommand.NotifyCanExecuteChanged();
+      RecomputeHasFailedRepos();
+   }
+
+
+
+   /// <summary>
+   /// Quick Sync, on a place that can be used and with an empty token box: fills in
+   /// the default token saved for that place, if there is one. Nothing otherwise.
+   /// The token of one place is never filled in for another: the source is asked
+   /// for the place the card is on.
+   /// </summary>
+   public void FillInTheDefaultToken()
+   {
+      if(_account is null && _placeIsUsable && Token.Length == 0 && _defaultTokenOf?.Invoke(_quickSyncPlace) is { Length: > 0 } saved)
+      {
+         Token = saved;
+      }
+   }
+
+
+
+   /// <summary>
+   /// Puts Quick Sync back the way a connection that worked had it: the place, the
+   /// organization, the target folder. No token: one is filled in only from a saved
+   /// default (<see cref="FillInTheDefaultToken"/>), and nothing is loaded until
+   /// the user asks. Nothing happens for an account, or for a Quick Sync whose
+   /// place cannot be chosen.
+   /// </summary>
+   public void Restore(QuickSyncConnection connection)
+   {
+      ArgumentNullException.ThrowIfNull(connection);
+      if(_listersOf is null)
+      {
+         return;
+      }
+
+      IsOnGitea = connection.Place.Server is not null;
+      Server = connection.Place.Server?.AbsoluteUri ?? "";
+      Organization = connection.Organization;
+      if(connection.TargetFolder.Length > 0)
+      {
+         TargetFolder = connection.TargetFolder;
+         CreateOrgSubfolder = connection.CreateOrgSubfolder;
+      }
+   }
+
+
+
+   /// <summary>
+   /// What the account wizard needs to save this Quick Sync connection as an
+   /// account, the place included: the token was used with that place. Null while
+   /// the card names no place that can be used: there is no connection to save.
+   /// </summary>
+   public AccountWizardSeed? ToAccountSeed()
+       => _placeIsUsable ? new AccountWizardSeed(Token, Organization, TargetFolder, CreateOrgSubfolder, MaxConcurrency, _quickSyncPlace) : null;
 
    /// <summary>
    /// True for an account workspace whose token is the default token from Settings
@@ -410,7 +760,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
    /// <summary>
    /// True once this workspace has completed its first successful repository load;
-   /// drives the connect-card vs workspace visibility switch. Never reset.
+   /// drives the connect-card vs workspace visibility switch. Set back only when
+   /// Quick Sync is put on another place, which empties the table.
    /// </summary>
    [ObservableProperty]
    public partial bool HasLoadedRepos { get; set; }
@@ -564,8 +915,24 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
              ? $"Token cleared in workspace '{DisplayName}'."
              : $"Token entered in workspace '{DisplayName}' ({value.Length} characters).");
       }
-      _ = RefreshOrganizationsAsync();
+      FindOrganizationsCommand.NotifyCanExecuteChanged();
+      _ = RefreshOrganizationsAsync(asked: false);
    }
+
+
+
+   private bool CanFindOrganizations() => _placeIsUsable && Token.Trim().Length >= 10;
+
+
+
+   /// <summary>
+   /// Lists the organizations the token can see, because the user asked. On a Quick
+   /// Sync whose place is chosen on its card this is the only way the list is
+   /// fetched: a token that was typed, pasted or filled in is sent nowhere until
+   /// the user presses this (or Load repositories).
+   /// </summary>
+   [RelayCommand(CanExecute = nameof(CanFindOrganizations))]
+   private Task FindOrganizationsAsync() => RefreshOrganizationsAsync(asked: true);
 
 
 
@@ -665,8 +1032,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       {
          RefreshAccountToken();
       }
-      else if(string.Equals(Token, previous ?? "", StringComparison.Ordinal))
+      else if(_placeIsUsable && _quickSyncPlace.Kind == ForgeKind.GitHub && string.Equals(Token, previous ?? "", StringComparison.Ordinal))
       {
+         // The default token is a GitHub token: a Quick Sync that is on another place is not given it.
          SetTokenFromItsSource(current ?? "");
       }
    }
@@ -760,8 +1128,14 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
 
 
-   /// <summary>Debounced: each token edit cancels the previous lookup.</summary>
-   private async Task RefreshOrganizationsAsync()
+   /// <summary>
+   /// Looks the organizations of the token up; each token edit cancels the previous
+   /// lookup. <paramref name="asked"/> says the user asked for it. Without being
+   /// asked it runs (after a pause) for an account, whose token was saved for its
+   /// place, and never for a Quick Sync whose place is chosen on its card: there a
+   /// token leaves the machine only on the user's word.
+   /// </summary>
+   private async Task RefreshOrganizationsAsync(bool asked)
    {
       _orgLoadCts?.Cancel();
       _orgLoadCts?.Dispose();
@@ -777,8 +1151,14 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
       ///////////////////////////////////////////////////////////////////////////////
       bool quiet = _readingTokenFromItsSource;
 
+      ///////////////////////////////////////////////////////////////////////////////
+      // The lister is taken with the token, here: the token of this moment goes   //
+      // to the lister of this moment, whatever Quick Sync's place is by the time  //
+      // the pause below is over.                                                   //
+      ///////////////////////////////////////////////////////////////////////////////
+      IOrganizationLister lister = _orgLister;
       string token = Token.Trim();
-      if(token.Length < 10)
+      if(token.Length < 10 || !_placeIsUsable || (_listersOf is not null && !asked))
       {
          // The same capture and restore as below: the editable box loses its text
          // when its list changes, and an account's organization must survive its
@@ -795,10 +1175,14 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
       try
       {
-         await Task.Delay(_orgLookupDebounce, lookupToken); // debounce keystrokes / rapid pastes
+         if(!asked)
+         {
+            await Task.Delay(_orgLookupDebounce, lookupToken); // debounce keystrokes / rapid pastes
+         }
+         lookupToken.ThrowIfCancellationRequested(); // superseded just as the pause ended: nothing is sent
          IsLoadingOrgs = true;
          _log.Info("Organization lookup started.");
-         IReadOnlyList<string> orgs = await _orgLister.ListOrganizationsAsync(token, lookupToken);
+         IReadOnlyList<string> orgs = await lister.ListOrganizationsAsync(token, lookupToken);
          lookupToken.ThrowIfCancellationRequested();
          _log.Info($"Organization lookup finished: {orgs.Count} organizations and accounts visible.");
 
@@ -820,9 +1204,11 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
             LoadErrorOpen = false; // a lookup that works clears a stale lookup failure
             // The production lister always lists the token's own account first, so a
             // single entry means no organizations were visible.
-            StatusText = orgs.Count <= 1
-                ? "Only your personal account is visible — add read:org (classic) for organizations, or type an org name manually."
-                : $"Found {orgs.Count} organizations and accounts.";
+            // What a token that sees no organization lacks is called differently on each forge.
+            StatusText = orgs.Count > 1 ? $"Found {orgs.Count} organizations and accounts."
+                : PlaceKind == ForgeKind.GitHub
+                    ? "Only your personal account is visible — add read:org (classic) for organizations, or type an org name manually."
+                    : "Only your personal account is visible — allow the token read:organization for organizations, or type an org name manually.";
          }
       }
       catch(OperationCanceledException)
@@ -964,6 +1350,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
        !IsRunning
        && !IsLoadingRepos
        && !IsResolvingPaths
+       && _placeIsUsable
        && !string.IsNullOrWhiteSpace(Organization)
        && !string.IsNullOrWhiteSpace(Token);
 
@@ -973,6 +1360,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    [RelayCommand(CanExecute = nameof(CanLoadRepos))]
    private async Task LoadReposAsync()
    {
+      if(!_placeIsUsable)
+      {
+         // Whatever started it: there is no place to ask. No token is sent to a place nobody chose.
+         return;
+      }
+
+      bool firstLoad = !HasLoadedRepos;
       IsLoadingRepos = true;
       ResetRunResult();
       LoadErrorOpen = false;
@@ -1016,6 +1410,24 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
          HasLoadedRepos = true;
          StatusText = Repos.Count == 1 ? "1 repository loaded." : $"{Repos.Count} repositories loaded.";
          _log.Info($"Loaded {Repos.Count} repositories for organization '{organization}'.");
+         if(_account is null)
+         {
+            ///////////////////////////////////////////////////////////////////////
+            // The connection works: worth keeping as an account, said once (a   //
+            // refresh does not bring a dismissed offer back), and worth opening //
+            // on next time. Remembering it is not part of loading: it failing    //
+            // does not make the load a failure.                                  //
+            ///////////////////////////////////////////////////////////////////////
+            SaveAsAccountOffered = SaveAsAccountOffered || firstLoad;
+            try
+            {
+               Connected?.Invoke(new QuickSyncConnection(_quickSyncPlace, organization, TargetFolder.Trim(), CreateOrgSubfolder));
+            }
+            catch(Exception ex)
+            {
+               _log.Error($"The connection could not be remembered for the next start: {ex.Message}", ex);
+            }
+         }
       }
       catch(Exception ex)
       {
@@ -1045,6 +1457,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
        !IsRunning
        && !IsLoadingRepos
        && !IsResolvingPaths
+       && _placeIsUsable
        && !IsTableStale
        && !string.IsNullOrWhiteSpace(TargetFolder)
        && Repos.Any(r => r.IsSelected);
@@ -1055,6 +1468,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    [RelayCommand(CanExecute = nameof(CanSync), IncludeCancelCommand = true)]
    private async Task SyncAsync(CancellationToken cancellationToken)
    {
+      if(!_placeIsUsable)
+      {
+         // Whatever started it: the table is of a place the card no longer names.
+         return;
+      }
+
       IsRunning = true;
       ResetRunResult();
       try
@@ -1172,6 +1591,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
        !IsRunning
        && !IsLoadingRepos
        && !IsResolvingPaths
+       && _placeIsUsable
        && Repos.Any(r => r.Status == SyncStatus.Failed);
 
 
@@ -1251,7 +1671,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
 
 
    private bool CanResolvePaths(RepoItemViewModel item)
-       => item is not null && item.HasPathIssue && !IsRunning && !IsResolvingPaths;
+       => item is not null && item.HasPathIssue && !IsRunning && !IsResolvingPaths && _placeIsUsable;
 
 
 
@@ -1262,7 +1682,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    [RelayCommand(CanExecute = nameof(CanResolvePaths))]
    private async Task ResolvePathsAsync(RepoItemViewModel item)
    {
-      if(item is null || RecoveryInteraction is not { } interaction)
+      if(item is null || !_placeIsUsable || RecoveryInteraction is not { } interaction)
       {
          return;
       }

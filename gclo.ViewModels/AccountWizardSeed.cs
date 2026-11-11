@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+using gclo.Engine;
+
+
 namespace gclo.ViewModels;
 
 
@@ -16,15 +19,17 @@ namespace gclo.ViewModels;
 /// <param name="TargetRoot">The workspace's target folder (not the org subfolder).</param>
 /// <param name="CreateOrgSubfolder">Whether clones go under TargetRoot\Organization.</param>
 /// <param name="MaxConcurrency">The workspace's parallel clone count.</param>
+/// <param name="Place">Where the connection is: the place the token was used with. Null means GitHub.</param>
 public sealed record AccountWizardSeed(
     string Token,
     string Organization,
     string TargetRoot,
     bool CreateOrgSubfolder,
-    int MaxConcurrency)
+    int MaxConcurrency,
+    ForgeEndpoint? Place = null)
 {
    /// <summary>Redacts the token: this record must never print it.</summary>
    public override string ToString() =>
        $"AccountWizardSeed {{ Token = [redacted], Organization = {Organization}, TargetRoot = {TargetRoot}, "
-       + $"CreateOrgSubfolder = {CreateOrgSubfolder}, MaxConcurrency = {MaxConcurrency} }}";
+       + $"CreateOrgSubfolder = {CreateOrgSubfolder}, MaxConcurrency = {MaxConcurrency}, Place = {Place ?? ForgeEndpoint.GitHub} }}";
 }
