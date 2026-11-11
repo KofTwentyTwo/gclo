@@ -20,16 +20,34 @@
         <!-- Where the repositories are (#209). First on the form: the token below is
              for this place. Asked on Quick Sync only; an account's place is fixed,
              and its page says where it is in its title. -->
-        <RadioButtons
-            x:Name="PlaceChoice"
-            AutomationProperties.AutomationId="{x:Bind Id('PlaceChoice')}"
-            Header="Where are the repositories?"
-            MaxColumns="2"
-            SelectedIndex="{x:Bind ViewModel.PlaceIndex, Mode=TwoWay}"
+        <!-- Two radio buttons of their own, not a RadioButtons group: that control
+             selects its first option as soon as keyboard focus lands on it, which
+             happens when the window opens. The place has to be chosen by an act
+             (a click, Space, an arrow key), never by focus: a token typed next goes
+             to the place that is chosen. -->
+        <StackPanel
+            Spacing="4"
             Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.CanChoosePlace), Mode=OneWay}">
-            <RadioButton AutomationProperties.AutomationId="{x:Bind Id('PlaceGitHub')}" Content="GitHub" />
-            <RadioButton AutomationProperties.AutomationId="{x:Bind Id('PlaceGitea')}" Content="Gitea" />
-        </RadioButtons>
+            <TextBlock x:Name="PlaceQuestion" Text="Where are the repositories?" />
+            <StackPanel
+                AutomationProperties.AutomationId="{x:Bind Id('PlaceChoice')}"
+                AutomationProperties.LabeledBy="{x:Bind PlaceQuestion}"
+                Orientation="Horizontal"
+                Spacing="24">
+                <RadioButton
+                    x:Name="PlaceGitHub"
+                    AutomationProperties.AutomationId="{x:Bind Id('PlaceGitHub')}"
+                    MinWidth="0"
+                    Content="GitHub"
+                    Checked="Place_Checked" />
+                <RadioButton
+                    x:Name="PlaceGitea"
+                    AutomationProperties.AutomationId="{x:Bind Id('PlaceGitea')}"
+                    MinWidth="0"
+                    Content="Gitea"
+                    Checked="Place_Checked" />
+            </StackPanel>
+        </StackPanel>
         <!-- Taken when the box is left (or Enter is pressed), never while it is
              typed: no token is sent to half an address. -->
         <TextBox

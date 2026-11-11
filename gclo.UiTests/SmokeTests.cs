@@ -339,7 +339,39 @@ public sealed partial class SmokeTests : UiTestBase
 
 
 
-   // (11) Resizing below the minimum window size is intentionally not covered:
+   // (11) The button at the top of the pane closes the pane to its icons and opens
+   //      it again. It used to do nothing: the pane was set to stay open. The button
+   //      names what it does next, in the language of Windows, so the oracle is that
+   //      the name changes and changes back.
+   [Fact]
+   public void PaneButton_ClosesThePane_AndOpensItAgain()
+   {
+      string whenOpen = Session.WaitForElement("TogglePaneButton").Name;
+      try
+      {
+         Session.InvokeNavItem("TogglePaneButton");
+         Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByAutomationId("TogglePaneButton")) is { } button
+                   && !string.Equals(button.Name, whenOpen, StringComparison.Ordinal) ? button : null,
+             "the pane to close");
+         Assert.NotNull(Session.WaitForElement("NavQuickSync")); // still there, as its icon
+      }
+      finally
+      {
+         if(!string.Equals(Session.WaitForElement("TogglePaneButton").Name, whenOpen, StringComparison.Ordinal))
+         {
+            Session.InvokeNavItem("TogglePaneButton");
+         }
+         Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByAutomationId("TogglePaneButton")) is { } button
+                   && string.Equals(button.Name, whenOpen, StringComparison.Ordinal) ? button : null,
+             "the pane to open again");
+      }
+   }
+
+
+
+   // (12) Resizing below the minimum window size is intentionally not covered:
    //     driving OS-level resize through UIA transforms is flaky across DPI
    //     scales, and the minimum is already enforced by OverlappedPresenter.
 

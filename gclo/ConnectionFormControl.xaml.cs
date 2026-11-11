@@ -98,6 +98,12 @@ public sealed partial class ConnectionFormControl : UserControl
       TokenBox.IsEnabled = !savedWithAnAccount;
 
       ApplyThePlace();
+      if(PlaceGitHub.GroupName.Length == 0)
+      {
+         // A group of this form's own: the connect card and the Edit flyout each host one.
+         PlaceGitHub.GroupName = PlaceGitea.GroupName = "gclo-place-" + Guid.NewGuid().ToString("N");
+      }
+      ShowThePlace();
       if(ViewModel is not null && !ReferenceEquals(_followed, ViewModel))
       {
          ///////////////////////////////////////////////////////////////////////////
@@ -113,6 +119,9 @@ public sealed partial class ConnectionFormControl : UserControl
             {
                case nameof(WorkspaceViewModel.Token):
                   FollowTheToken();
+                  break;
+               case nameof(WorkspaceViewModel.PlaceIndex):
+                  ShowThePlace();
                   break;
                case nameof(WorkspaceViewModel.TokenHeader) or nameof(WorkspaceViewModel.TokenPage) or nameof(WorkspaceViewModel.TokenPlaceholder)
                    or nameof(WorkspaceViewModel.IsPlaceChosen):
@@ -139,6 +148,54 @@ public sealed partial class ConnectionFormControl : UserControl
 
    /// <summary>The view model whose place and token this control already follows.</summary>
    private WorkspaceViewModel? _followed;
+
+   /// <summary>True while <see cref="ShowThePlace"/> checks the radio buttons itself: that is not the user choosing.</summary>
+   private bool _showingThePlace;
+
+
+
+   /// <summary>
+   /// Checks the radio button of the place the view model is on, and neither while
+   /// no place was chosen.
+   /// </summary>
+   private void ShowThePlace()
+   {
+      if(ViewModel is null)
+      {
+         return;
+      }
+
+      _showingThePlace = true;
+      try
+      {
+         int index = ViewModel.PlaceIndex;
+         PlaceGitHub.IsChecked = index == 0;
+         PlaceGitea.IsChecked = index == 1;
+      }
+      finally
+      {
+         _showingThePlace = false;
+      }
+   }
+
+
+
+   /// <summary>
+   /// A radio button was checked by the user (click, Space, an arrow key, or UI
+   /// automation): that is the choice of the place. Focus alone checks nothing. If
+   /// the view model does not take the choice (the workspace is busy), the buttons
+   /// go back to what it is on.
+   /// </summary>
+   private void Place_Checked(object sender, RoutedEventArgs e)
+   {
+      if(_showingThePlace || ViewModel is null)
+      {
+         return;
+      }
+
+      ViewModel.PlaceIndex = ReferenceEquals(sender, PlaceGitea) ? 1 : 0;
+      ShowThePlace();
+   }
 
 
 
