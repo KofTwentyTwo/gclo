@@ -29,6 +29,7 @@ namespace gclo.Engine;
 /// (<see cref="CloneUrl"/>), not read from the server's answers: the git client
 /// gives the token to the host of the clone address.</item>
 /// <item>Answers are bounded in size, lists in length, and a request in time.</item>
+/// <item>Nothing a server sets is kept between requests: no cookies.</item>
 /// <item>The server's own words reach a message only as the reason of a refusal,
 /// on one line and cut to a length.</item>
 /// </list>
@@ -49,20 +50,23 @@ internal sealed class GiteaApi
 
    /// <summary>
    /// How the requests of production are carried: redirects are not followed (the
-   /// token stays on the host the account names), and certificates are validated by
-   /// the platform's own rules, with no callback that could accept another.
+   /// token stays on the host the account names), certificates are validated by the
+   /// platform's own rules, with no callback that could accept another, and cookies
+   /// are neither kept nor sent (one account's requests leave nothing that another's
+   /// would carry).
    /// </summary>
    internal static readonly SocketsHttpHandler SharedHandler = new()
    {
       AllowAutoRedirect = false,
+      UseCookies = false,
       PooledConnectionLifetime = TimeSpan.FromMinutes(5),
    };
 
    /// <summary>
-   /// One client for every server: connections are pooled per host, and nothing that
-   /// belongs to one account (its token) is kept on it.
+   /// One client for every server, over <see cref="SharedHandler"/>: connections are
+   /// pooled per host, and nothing that belongs to one account is kept on it.
    /// </summary>
-   private static readonly HttpClient s_shared = new(SharedHandler)
+   internal static readonly HttpClient SharedClient = new(SharedHandler)
    {
       Timeout = Timeout.InfiniteTimeSpan, // each request has its own limit, which also covers reading the answer
    };
@@ -93,13 +97,17 @@ internal sealed class GiteaApi
       ArgumentNullException.ThrowIfNull(server);
       if(!GiteaServerUrl.TryNormalize(server.OriginalString, out Uri? normalized, out string? reason))
       {
-         throw new ArgumentException($"'{server.OriginalString}' cannot be the address of a Gitea server: {reason}.", nameof(server));
+         ///////////////////////////////////////////////////////////////////////////
+         // The address itself is not repeated: one that was refused for having  //
+         // a password or a token in it would put that into the message.         //
+         ///////////////////////////////////////////////////////////////////////////
+         throw new ArgumentException($"This cannot be the address of a Gitea server: {reason}.", nameof(server));
       }
 
       Server = normalized;
       Host = normalized.Authority;
       _api = new Uri(normalized, "api/v1/");
-      _http = http ?? s_shared;
+      _http = http ?? SharedClient;
       _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(100);
    }
 
@@ -132,7 +140,11 @@ internal sealed class GiteaApi
    /// an empty page ends the list. A page that is not full ends nothing: the server
    /// has a page size of its own, and it leaves out what the token may not see.
    /// </summary>
-   /// <exception cref="GiteaUnexpectedAnswerException">The list did not end within <see cref="MaxPages"/> pages.</exception>
+   /// <exception cref="GiteaUnexpectedAnswerException">
+   /// The list did not end within <see cref="MaxPages"/> pages, or a page held more
+   /// than was asked for (so a list is at most <see cref="MaxPages"/> times
+   /// <see cref="PageSize"/> items).
+   /// </exception>
    public async Task<List<T>> ListAsync<T>(string path, string token, JsonTypeInfo<List<T?>> type, CancellationToken cancellationToken)
        where T : class
    {
@@ -142,6 +154,10 @@ internal sealed class GiteaApi
          cancellationToken.ThrowIfCancellationRequested();
          (List<T?> items, bool? more) = await SendAsync($"{path}?page={page}&limit={PageSize}", token, type, cancellationToken)
              .ConfigureAwait(false);
+         if(items.Count > PageSize)
+         {
+            throw new GiteaUnexpectedAnswerException($"A page held {items.Count} items; {PageSize} were asked for.");
+         }
          all.AddRange(items.OfType<T>());
          if(more == false || (more is null && items.Count == 0))
          {
@@ -214,20 +230,29 @@ internal sealed class GiteaApi
              $"{Host} answered with an error on its side (HTTP {(int)server.Status}); retry later.",
              failure),
 
+         GiteaStatusException { Status: HttpStatusCode.RequestTimeout } => new ForgeAccessException(
+             ForgeAccessKind.Unavailable, $"{Host} did not answer in time (HTTP 408); retry later.", failure),
+
          ///////////////////////////////////////////////////////////////////////////
-         // What is left of the statuses says that the address is not a Gitea     //
-         // server's: a redirect (never followed: the token stays where the       //
-         // account says), a page that is not there, a request it does not take.  //
+         // A redirect is never followed: the token stays where the account      //
+         // says. A server answers with one when the address is not its own, and //
+         // Gitea also does for an organization or account that was renamed.     //
          ///////////////////////////////////////////////////////////////////////////
          GiteaStatusException { Status: >= HttpStatusCode.MultipleChoices and < HttpStatusCode.BadRequest } redirect => new ForgeAccessException(
              ForgeAccessKind.NotFound,
-             $"{Host} answered with a redirect (HTTP {(int)redirect.Status}) instead of the Gitea API. {CheckTheAddress} "
-             + "It has to be the address the server itself uses.",
+             $"{Host} answered with a redirect (HTTP {(int)redirect.Status}) instead of what was asked for. "
+             + "If the organization or account was renamed, use its new name. Otherwise check the server address of this account: "
+             + "it has to be the address the server itself uses.",
+             failure),
+
+         GiteaStatusException { Status: HttpStatusCode.NotFound } => new ForgeAccessException(
+             ForgeAccessKind.NotFound,
+             $"There is no Gitea API at this address of {Host} (HTTP 404). {CheckTheAddress}",
              failure),
 
          GiteaStatusException other => new ForgeAccessException(
              ForgeAccessKind.NotFound,
-             $"There is no Gitea API at this address of {Host} (HTTP {(int)other.Status}). {CheckTheAddress}",
+             $"{Host} answered with HTTP {(int)other.Status}, which the Gitea API does not answer here. {CheckTheAddress}",
              failure),
 
          GiteaUnexpectedAnswerException => new ForgeAccessException(
@@ -238,6 +263,10 @@ internal sealed class GiteaApi
 
          HttpRequestException network => new ForgeAccessException(
              ForgeAccessKind.Unavailable, ForgeFailures.Unreachable(Host, network.HttpRequestError), failure),
+
+         // The connection ended while the answer was being read.
+         IOException => new ForgeAccessException(
+             ForgeAccessKind.Unavailable, $"The connection to {Host} was lost while its answer was read; retry later.", failure),
 
          OperationCanceledException when !canceledByCaller => new ForgeAccessException(
              ForgeAccessKind.Unavailable, $"{Host} did not answer in time; retry later.", failure),
@@ -256,6 +285,17 @@ internal sealed class GiteaApi
        string relative, string token, JsonTypeInfo<T> type, CancellationToken cancellationToken)
        where T : class
    {
+      if(token.Any(c => char.IsControl(c) || char.IsWhiteSpace(c)))
+      {
+         ///////////////////////////////////////////////////////////////////////////
+         // Not a token: a line break or a space came along when it was pasted.   //
+         // It cannot be put into a request, and it is not put into a message.    //
+         ///////////////////////////////////////////////////////////////////////////
+         throw new ForgeAccessException(
+             ForgeAccessKind.Unauthorized,
+             "The token contains a space or a line break, which no access token does. Check what was entered or pasted as the token.");
+      }
+
       using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
       limit.CancelAfter(_requestTimeout);
 
@@ -283,10 +323,43 @@ internal sealed class GiteaApi
          throw new GiteaUnexpectedAnswerException("The answer is not the JSON the API gives.", notTheApi);
       }
 
-      bool? more = response.Headers.TryGetValues("Link", out IEnumerable<string>? links)
-          ? links.Any(link => link.Contains("rel=\"next\"", StringComparison.OrdinalIgnoreCase))
-          : null;
+      bool? more = response.Headers.TryGetValues("Link", out IEnumerable<string>? links) ? SaysAboutANextPage(links) : null;
       return (value ?? throw new GiteaUnexpectedAnswerException("The answer is empty."), more);
+   }
+
+
+
+   /// <summary>
+   /// What <c>Link</c> headers say about a next page: true when one of the links has
+   /// the relation <c>next</c>; false when the links are about paging (they name a
+   /// first, a previous or a last page) and none is the next; null when they say
+   /// nothing about paging (a link something on the way added, such as a preload).
+   /// Only the relations are read. The addresses are not: the next page is asked for
+   /// at the account's server, by its number.
+   /// </summary>
+   internal static bool? SaysAboutANextPage(IEnumerable<string> links)
+   {
+      bool aboutPaging = false;
+      foreach(string link in links.SelectMany(header => header.Split(',')))
+      {
+         foreach(string parameter in link.Split(';').Skip(1))
+         {
+            string[] pair = parameter.Split('=', 2, StringSplitOptions.TrimEntries);
+            if(pair.Length != 2 || !string.Equals(pair[0], "rel", StringComparison.OrdinalIgnoreCase))
+            {
+               continue;
+            }
+            foreach(string relation in pair[1].Trim('"').Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+               if(string.Equals(relation, "next", StringComparison.OrdinalIgnoreCase))
+               {
+                  return true;
+               }
+               aboutPaging |= relation.ToUpperInvariant() is "PREV" or "PREVIOUS" or "FIRST" or "LAST";
+            }
+         }
+      }
+      return aboutPaging ? false : null;
    }
 
 
@@ -298,18 +371,16 @@ internal sealed class GiteaApi
    /// </summary>
    private static async Task<string> ReasonOfAsync(HttpResponseMessage refusal, CancellationToken cancellationToken)
    {
-      byte[]? body = await ReadAsync(refusal.Content, MaxRefusalBytes, cancellationToken).ConfigureAwait(false);
-      if(body is null)
-      {
-         return "";
-      }
-
       try
       {
-         return ForgeFailures.OneLine(JsonSerializer.Deserialize(body, GiteaJsonContext.Default.GiteaRefusal)?.Message);
+         byte[]? body = await ReadAsync(refusal.Content, MaxRefusalBytes, cancellationToken).ConfigureAwait(false);
+         return body is null
+             ? ""
+             : ForgeFailures.OneLine(JsonSerializer.Deserialize(body, GiteaJsonContext.Default.GiteaRefusal)?.Message);
       }
-      catch(JsonException)
+      catch(Exception noReason) when(noReason is JsonException or IOException)
       {
+         // Not the API's document, or the connection ended while it was read: the status is what is known.
          return "";
       }
    }

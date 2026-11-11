@@ -67,13 +67,16 @@ public sealed class GiteaRepositoryLister : IRepositoryLister
                 .ListAsync($"orgs/{name}/repos", token, GiteaJsonContext.Default.ListGiteaRepository, cancellationToken)
                 .ConfigureAwait(false);
          }
-         catch(GiteaStatusException notAnOrganization) when(notAnOrganization.Status == HttpStatusCode.NotFound)
+         catch(GiteaStatusException notAnOrganization)
+             when(notAnOrganization.Status is HttpStatusCode.NotFound or HttpStatusCode.Forbidden)
          {
             ///////////////////////////////////////////////////////////////////////
-            // No organization of that name that the token can see: it is a     //
-            // user account, or nothing. The token's own account gets its own   //
-            // repositories (the private ones too); another account the ones    //
-            // the token can see there.                                         //
+            // No organization of that name that the token can list: it is a    //
+            // user account, or nothing. (A token that may not read             //
+            // organizations is refused here whatever the name is, its own      //
+            // account included: that is not yet an answer either.) The token's //
+            // own account gets its own repositories (the private ones too);    //
+            // another account the ones the token can see there.                //
             ///////////////////////////////////////////////////////////////////////
             string own = await _api.GetOwnNameAsync(token, cancellationToken).ConfigureAwait(false);
             bool isOwn = string.Equals(own, organization, StringComparison.OrdinalIgnoreCase);
@@ -85,6 +88,11 @@ public sealed class GiteaRepositoryLister : IRepositoryLister
             }
             catch(GiteaStatusException nobody) when(nobody.Status == HttpStatusCode.NotFound && !isOwn)
             {
+               if(notAnOrganization.Status == HttpStatusCode.Forbidden)
+               {
+                  // Not an account either: the refusal of the organization is the answer.
+                  throw _api.Translate(notAnOrganization);
+               }
                throw new ForgeAccessException(
                    ForgeAccessKind.NotFound,
                    $"'{organization}' was found neither as an organization nor as a user account on {_api.Host} (404), "

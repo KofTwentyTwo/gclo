@@ -51,9 +51,26 @@ public sealed class GiteaListerTests : IDisposable
 
 
 
-   /// <summary>A body that never ends: a server that keeps sending.</summary>
-   private sealed class Endless : Stream
+   /// <summary>An answer's body whose every read is scripted: one that never ends, one that breaks off, one that stalls.</summary>
+   private sealed class Body(Func<Memory<byte>, CancellationToken, ValueTask<int>> read) : Stream
    {
+      /// <summary>A server that keeps sending.</summary>
+      public static Body Endless() => new((buffer, _) =>
+      {
+         buffer.Span.Fill((byte)' ');
+         return ValueTask.FromResult(buffer.Length);
+      });
+
+      /// <summary>A connection that ends while the answer is read.</summary>
+      public static Body BreaksOff() => new((_, _) => throw new IOException("The response ended prematurely."));
+
+      /// <summary>A server that stops sending and does not close.</summary>
+      public static Body Stalls() => new(async (_, token) =>
+      {
+         await Task.Delay(Timeout.Infinite, token);
+         return 0;
+      });
+
       public override bool CanRead => true;
 
       public override bool CanSeek => false;
@@ -77,10 +94,17 @@ public sealed class GiteaListerTests : IDisposable
 
 
       public override int Read(byte[] buffer, int offset, int count)
-      {
-         Array.Fill(buffer, (byte)' ', offset, count);
-         return count;
-      }
+          => read(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+
+
+      public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+          => read(buffer, cancellationToken);
+
+
+
+      public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+          => read(buffer.AsMemory(offset, count), cancellationToken).AsTask();
 
 
 
@@ -94,6 +118,11 @@ public sealed class GiteaListerTests : IDisposable
 
       public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
    }
+
+
+
+   /// <summary>A test that would hang if a bound were missing fails instead.</summary>
+   private static Task<T> Bounded<T>(Task<T> task) => task.WaitAsync(TimeSpan.FromSeconds(60));
 
 
 
@@ -144,7 +173,7 @@ public sealed class GiteaListerTests : IDisposable
          _server.OnPage("orgs/acme/repos", page, [Repo("same")], more: true);
       }
 
-      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => List());
+      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => Bounded(List()));
 
       Assert.Equal(ForgeAccessKind.NotFound, ex.Kind);
       Assert.Contains("did not answer like a Gitea server", ex.Message);
@@ -372,10 +401,12 @@ public sealed class GiteaListerTests : IDisposable
    [InlineData(HttpStatusCode.ProxyAuthenticationRequired, ForgeAccessKind.Unavailable, "A proxy on the way to git.example.test asked gclo to sign in (HTTP 407)")]
    [InlineData(HttpStatusCode.InternalServerError, ForgeAccessKind.Unavailable, "answered with an error on its side (HTTP 500); retry later")]
    [InlineData(HttpStatusCode.BadGateway, ForgeAccessKind.Unavailable, "answered with an error on its side (HTTP 502); retry later")]
-   [InlineData(HttpStatusCode.Found, ForgeAccessKind.NotFound, "answered with a redirect (HTTP 302) instead of the Gitea API")]
-   [InlineData(HttpStatusCode.PermanentRedirect, ForgeAccessKind.NotFound, "answered with a redirect (HTTP 308) instead of the Gitea API")]
-   [InlineData(HttpStatusCode.BadRequest, ForgeAccessKind.NotFound, "There is no Gitea API at this address of git.example.test (HTTP 400)")]
-   [InlineData(HttpStatusCode.MethodNotAllowed, ForgeAccessKind.NotFound, "There is no Gitea API at this address of git.example.test (HTTP 405)")]
+   [InlineData(HttpStatusCode.RequestTimeout, ForgeAccessKind.Unavailable, "did not answer in time (HTTP 408); retry later")]
+   [InlineData(HttpStatusCode.Found, ForgeAccessKind.NotFound, "answered with a redirect (HTTP 302) instead of what was asked for")]
+   [InlineData(HttpStatusCode.TemporaryRedirect, ForgeAccessKind.NotFound, "If the organization or account was renamed, use its new name.")]
+   [InlineData(HttpStatusCode.PermanentRedirect, ForgeAccessKind.NotFound, "it has to be the address the server itself uses")]
+   [InlineData(HttpStatusCode.BadRequest, ForgeAccessKind.NotFound, "answered with HTTP 400, which the Gitea API does not answer here. Check the server address")]
+   [InlineData(HttpStatusCode.UnprocessableEntity, ForgeAccessKind.NotFound, "answered with HTTP 422, which the Gitea API does not answer here")]
    public async Task AStatusThatIsNotSuccess_HasItsKind_AndNamesTheServer(HttpStatusCode status, ForgeAccessKind kind, string said)
    {
       _server.On("orgs/acme/repos?page=1&limit=50", () => Refusal(status, "whatever the server says"));
@@ -405,6 +436,7 @@ public sealed class GiteaListerTests : IDisposable
    [Fact]
    public async Task ARefusal_CarriesTheServersReason_OnOneLine_AndSaysWhichScopesAreNeeded()
    {
+      TheTokenBelongsTo("me"); // and "acme" is no account either: the refusal is the answer
       _server.On(
           "orgs/acme/repos?page=1&limit=50",
           () => Refusal(HttpStatusCode.Forbidden, "token does not have at least one of required scope(s):\\n [read:organization]"));
@@ -427,6 +459,7 @@ public sealed class GiteaListerTests : IDisposable
    [InlineData("")]
    public async Task ARefusalWithoutAReasonFromTheApi_SaysNone_AndCopiesNoPage(string body)
    {
+      TheTokenBelongsTo("me");
       _server.On("orgs/acme/repos?page=1&limit=50", () => Json(body, HttpStatusCode.Forbidden));
 
       ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => List());
@@ -440,11 +473,12 @@ public sealed class GiteaListerTests : IDisposable
    [Fact]
    public async Task ARefusalThatDoesNotEnd_IsNotReadForItsReason()
    {
+      TheTokenBelongsTo("me");
       _server.On(
           "orgs/acme/repos?page=1&limit=50",
-          () => new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StreamContent(new Endless()) });
+          () => new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StreamContent(Body.Endless()) });
 
-      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => List());
+      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => Bounded(List()));
 
       Assert.StartsWith($"{Host} refused access (403). ", ex.Message, StringComparison.Ordinal);
    }
@@ -474,9 +508,9 @@ public sealed class GiteaListerTests : IDisposable
    {
       _server.On(
           "orgs/acme/repos?page=1&limit=50",
-          () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Endless()) });
+          () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(Body.Endless()) });
 
-      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => List());
+      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => Bounded(List()));
 
       Assert.Equal(ForgeAccessKind.NotFound, ex.Kind);
       Assert.Contains("did not answer like a Gitea server", ex.Message);
@@ -504,7 +538,7 @@ public sealed class GiteaListerTests : IDisposable
       _server.OnRequest = (_, token) => Task.Delay(Timeout.Infinite, token);
 
       ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(
-          () => Repos(requestTimeout: TimeSpan.FromMilliseconds(30)).ListOrganizationRepositoriesAsync("acme", Token));
+          () => Bounded(Repos(requestTimeout: TimeSpan.FromMilliseconds(30)).ListOrganizationRepositoriesAsync("acme", Token)));
 
       Assert.Equal(ForgeAccessKind.Unavailable, ex.Kind);
       Assert.Equal($"{Host} did not answer in time; retry later.", ex.Message);
@@ -643,7 +677,14 @@ public sealed class GiteaListerTests : IDisposable
 
       ArgumentException plain = Assert.Throws<ArgumentException>(() => new GiteaRepositoryLister(new Uri("http://git.example.test")));
       Assert.Contains("it has to begin with https://", plain.Message);
-      Assert.Throws<ArgumentException>(() => new GiteaOrganizationLister(new Uri("https://user:secret@git.example.test")));
+
+      // An address that is refused is not repeated: this one is refused for the secret in it.
+      ArgumentException withASecret = Assert.Throws<ArgumentException>(
+          () => new GiteaOrganizationLister(new Uri("https://user:s3cret-token@git.example.test")));
+      Assert.DoesNotContain("s3cret", withASecret.Message, StringComparison.Ordinal);
+      ArgumentException inTheQuery = Assert.Throws<ArgumentException>(
+          () => new GiteaRepositoryLister(new Uri("https://git.example.test/?access_token=s3cret-token")));
+      Assert.DoesNotContain("s3cret", inTheQuery.Message, StringComparison.Ordinal);
       Assert.Throws<ArgumentNullException>(() => new GiteaRepositoryLister((Uri)null!));
       Assert.Throws<ArgumentNullException>(() => new GiteaRepositoryLister((GiteaApi)null!));
       Assert.Throws<ArgumentNullException>(() => new GiteaOrganizationLister((GiteaApi)null!));
@@ -658,6 +699,16 @@ public sealed class GiteaListerTests : IDisposable
       // a validation callback is how certificate checks are switched off.
       Assert.False(GiteaApi.SharedHandler.AllowAutoRedirect);
       Assert.Null(GiteaApi.SharedHandler.SslOptions.RemoteCertificateValidationCallback);
+
+      // One client serves every account: what one account's server sets must not travel with another's token.
+      Assert.False(GiteaApi.SharedHandler.UseCookies);
+
+      // And the client of production is the one built on that handler.
+      System.Reflection.FieldInfo? handler = typeof(HttpMessageInvoker).GetField(
+          "_handler", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+      Assert.True(handler is not null, "HttpMessageInvoker keeps its handler elsewhere now: find it, this test must keep looking at it.");
+      Assert.Same(GiteaApi.SharedHandler, handler.GetValue(GiteaApi.SharedClient));
+      Assert.Equal(Timeout.InfiniteTimeSpan, GiteaApi.SharedClient.Timeout); // each request has its own limit
    }
 
 
@@ -668,5 +719,165 @@ public sealed class GiteaListerTests : IDisposable
       Assert.Equal("git.example.test", new GiteaApi(new Uri("https://git.example.test/gitea")).Host);
       Assert.Equal("git.example.test:8443", new GiteaApi(new Uri("https://git.example.test:8443")).Host);
       Assert.Equal("https://git.example.test/gitea/", new GiteaApi(new Uri("https://GIT.example.test/gitea")).Server.AbsoluteUri);
+   }
+
+
+
+   // ---------------------------------------------------------------- review of #203
+
+   [Theory]
+   [InlineData("<https://x/y?page=2>; rel=\"next\"", true)]
+   [InlineData("<https://x/y?page=2>; rel=next", true)]
+   [InlineData("<https://x/y?page=2>; rel=\"prev next\"", true)]
+   [InlineData("<https://x/y?page=2>; REL=\"NEXT\"", true)]
+   [InlineData("<https://x/y?page=1>; rel=\"first\",<https://x/y?page=9>; rel=\"last\",<https://x/y?page=2>; rel=\"next\"", true)]
+   [InlineData("<https://x/y?page=1>; rel=\"first\",<https://x/y?page=8>; rel=\"prev\"", false)]
+   [InlineData("<https://x/y?page=9>; rel=last", false)]
+   [InlineData("</app.css>; rel=preload; as=style", null)] // something on the way added a link of its own
+   [InlineData("</app.css>; title=\"rel=next\"", null)]
+   [InlineData("<https://x/y>", null)]
+   [InlineData("<https://x/y>; rel", null)]
+   [InlineData("", null)]
+   public void WhatLinkHeadersSayAboutANextPage_IsReadFromTheirRelations(string header, bool? expected)
+       => Assert.Equal(expected, GiteaApi.SaysAboutANextPage([header]));
+
+
+
+   [Fact]
+   public async Task ALinkThatIsNotAboutPaging_DoesNotEndTheList()
+   {
+      _server
+          .On("orgs/acme/repos?page=1&limit=50", () =>
+          {
+             HttpResponseMessage response = Json($"[{Repo("a")}]");
+             response.Headers.TryAddWithoutValidation("Link", "</assets/app.css>; rel=preload; as=style");
+             return response;
+          })
+          .OnPage("orgs/acme/repos", 2, [Repo("b")])
+          .OnPage("orgs/acme/repos", 3, []);
+
+      IReadOnlyList<RepoDescriptor> repos = await List();
+
+      Assert.Equal(["a", "b"], repos.Select(r => r.Name), StringComparer.Ordinal);
+   }
+
+
+
+   [Fact]
+   public async Task APageWithMoreThanWasAskedFor_IsNotTaken_SoAListHasAnUpperBound()
+   {
+      _server.OnPage("orgs/acme/repos", 1, Enumerable.Range(0, GiteaApi.PageSize + 1).Select(i => Repo($"r{i}")), more: false);
+
+      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => List());
+
+      Assert.Equal(ForgeAccessKind.NotFound, ex.Kind);
+      Assert.Contains("did not answer like a Gitea server", ex.Message);
+   }
+
+
+
+   [Fact]
+   public async Task AConnectionLostWhileTheAnswerIsRead_IsUnavailable_NotAnUnexpectedError()
+   {
+      _server.On(
+          "orgs/acme/repos?page=1&limit=50",
+          () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(Body.BreaksOff()) });
+
+      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => List());
+
+      Assert.Equal(ForgeAccessKind.Unavailable, ex.Kind);
+      Assert.Equal($"The connection to {Host} was lost while its answer was read; retry later.", ex.Message);
+   }
+
+
+
+   [Fact]
+   public async Task AConnectionLostWhileARefusalIsRead_LeavesTheRefusal_WithoutAReason()
+   {
+      _server.On("user", () => new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StreamContent(Body.BreaksOff()) });
+
+      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(() => Orgs().ListOrganizationsAsync(Token));
+
+      Assert.Equal(ForgeAccessKind.Forbidden, ex.Kind);
+      Assert.StartsWith($"{Host} refused access (403). ", ex.Message, StringComparison.Ordinal);
+   }
+
+
+
+   [Fact]
+   public async Task TheTimeLimitOfARequest_CoversTheReadingOfItsAnswer()
+   {
+      _server.On(
+          "orgs/acme/repos?page=1&limit=50",
+          () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(Body.Stalls()) });
+
+      ForgeAccessException ex = await Assert.ThrowsAsync<ForgeAccessException>(
+          () => Bounded(Repos(requestTimeout: TimeSpan.FromMilliseconds(30)).ListOrganizationRepositoriesAsync("acme", Token)));
+
+      Assert.Equal(ForgeAccessKind.Unavailable, ex.Kind);
+      Assert.Equal($"{Host} did not answer in time; retry later.", ex.Message);
+   }
+
+
+
+   [Theory]
+   [InlineData("gitea-test\ntoken")]
+   [InlineData("gitea-test token")]
+   [InlineData("gitea-test-token\r\n")]
+   public async Task WhatIsNotAToken_IsNotSent_AndNotRepeated(string token)
+   {
+      ForgeAccessException fromRepositories = await Assert.ThrowsAsync<ForgeAccessException>(
+          () => Repos().ListOrganizationRepositoriesAsync("acme", token));
+      ForgeAccessException fromOrganizations = await Assert.ThrowsAsync<ForgeAccessException>(
+          () => Orgs().ListOrganizationsAsync(token));
+
+      Assert.Equal(ForgeAccessKind.Unauthorized, fromRepositories.Kind);
+      Assert.Equal(ForgeAccessKind.Unauthorized, fromOrganizations.Kind);
+      Assert.Contains("The token contains a space or a line break", fromRepositories.Message);
+      Assert.DoesNotContain("gitea-test", fromRepositories.Message, StringComparison.Ordinal);
+      Assert.DoesNotContain("gitea-test", fromOrganizations.Message, StringComparison.Ordinal);
+      Assert.Empty(_server.Requests);
+   }
+
+
+
+   [Fact]
+   public async Task ANameWithACharacterThatMeansSomethingInAnAddress_IsOneSegment_InTheRequestAndInTheCloneAddress()
+   {
+      _server.OnPage("orgs/a%23b/repos", 1, [Repo("x#y", owner: "a#b")], more: false);
+
+      RepoDescriptor repo = Assert.Single(await List("a#b"));
+
+      Assert.Equal($"https://{Host}/a%23b/x%23y.git", repo.CloneUrl);
+      Assert.Equal($"/api/v1/orgs/a%23b/repos", Assert.Single(_server.Requests).Address.AbsolutePath);
+   }
+
+
+
+   [Fact]
+   public async Task ATokenThatMayNotReadOrganizations_StillListsItsOwnAccount()
+   {
+      // Such a token is refused at the organization's list whatever the name is.
+      TheTokenBelongsTo("me");
+      _server
+          .On("orgs/me/repos?page=1&limit=50", () => Refusal(HttpStatusCode.Forbidden, "token does not have at least one of required scope(s): [read:organization]"))
+          .OnPage("user/repos", 1, [Repo("mine", owner: "me")], more: false);
+
+      IReadOnlyList<RepoDescriptor> repos = await List("me");
+
+      Assert.Equal("mine", Assert.Single(repos).Name);
+   }
+
+
+
+   [Fact]
+   public async Task ATokenThatMayNotReadOrganizations_ListsAnotherAccountToo()
+   {
+      TheTokenBelongsTo("me");
+      _server
+          .On("orgs/bob/repos?page=1&limit=50", () => Refusal(HttpStatusCode.Forbidden, "token does not have at least one of required scope(s): [read:organization]"))
+          .OnPage("users/bob/repos", 1, [Repo("b", owner: "bob")], more: false);
+
+      Assert.Equal("b", Assert.Single(await List("bob")).Name);
    }
 }

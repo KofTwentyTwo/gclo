@@ -33,7 +33,11 @@ were the two lister implementations and the failure type they throw.
   message handler, so none of it is excluded from the coverage gate.
 - **The address of a server** (`GiteaServerUrl`) is HTTPS, has no user name or
   password in it, and nothing after its path. A host typed without a scheme is
-  taken as HTTPS. `http://` is refused, and there is no setting that allows it.
+  taken as HTTPS; text that has a scheme-like beginning and is not an address
+  (`https:/host` with one slash) is refused instead of being taken for a host.
+  `http://` is refused, and there is no setting that allows it. An address that
+  is refused is not repeated in the message: it may have been refused for the
+  password or token in it.
 - **Certificates are validated by the platform, and that cannot be switched off.**
   A server with a certificate from a private authority works once Windows trusts
   that authority.
@@ -42,14 +46,17 @@ were the two lister implementations and the failure type they throw.
     `Authorization` header. Redirects are not followed; a redirect is reported as
     "this is not the server's own address".
   - The address of a next page is never taken from the server (`Link` headers are
-    read only for "is there a next page").
+    read only for "is there a next page", and only their paging relations).
+  - Nothing a server sets is kept: the one client all accounts share uses no
+    cookies.
   - Clone addresses are built from the configured address, the owner and the
     repository name. The `clone_url` in the server's answers is not read. So the
     host that gets the token for a clone is the host the account names, whatever
     the server's own idea of its address is.
 - **What a server sends is bounded**: the size of an answer, the number of pages of
-  a list, and the time of a request. A server's own words reach a message only as
-  the reason of a refusal, on one line and cut to a length.
+  a list and of items on a page (so a list has at most 100,000 items), and the
+  time of a request, the reading of its answer included. A server's own words
+  reach a message only as the reason of a refusal, on one line and cut to a length.
 - **Paging follows what the server says**, not the size of a page: a Gitea server
   caps the page size, and leaves out of a page what the token may not see, so a
   short or empty page does not end a list. Where a server sends no `Link` header,
@@ -58,6 +65,9 @@ were the two lister implementations and the failure type they throw.
   own account gets its own repositories, another account the ones the token can see
   there. From the list of the token's own repositories only those the account owns
   are taken; that list also holds repositories of others the token may work on.
+  A token that may not read organizations is refused at an organization's list
+  whatever the name is; the account path is tried then as well, so such a token
+  still lists its own account.
 
 ## Alternatives considered
 
@@ -89,6 +99,10 @@ were the two lister implementations and the failure type they throw.
   Gitea server (#201, step 2).
 - The engine's public surface grows (`ForgeKind`, `ForgeAccessException`,
   `ForgeAccessKind`, `GiteaServerUrl`, the two listers), and the base type of
-  `GitHubAccessException` changes: a minor version for the package.
+  `GitHubAccessException` changes: a minor version for the package. Code that
+  catches either type, or reads `Kind`, is not affected; code that looks `Kind`
+  up by name through reflection now finds two properties.
+- A server answers a renamed organization or account with a redirect, which gclo
+  does not follow: the message says to use the new name.
 - Accounts, the command line and the desktop app follow in their own changes
   (#201). Until then the app and the CLI behave as before.

@@ -43,6 +43,17 @@ public static class GiteaServerUrl
 
       if(!typed.Contains("://", StringComparison.Ordinal))
       {
+         ///////////////////////////////////////////////////////////////////////////
+         // No scheme: a host, perhaps with a port and a path. A colon that is    //
+         // not followed by a port is something else ("https:/host" with one      //
+         // slash, "http:host"), and prefixing it would make its first word the   //
+         // host the token is sent to.                                            //
+         ///////////////////////////////////////////////////////////////////////////
+         if(!IsAHostWithAtMostAPort(typed))
+         {
+            reason = "it is not an address (a server's address looks like https://git.example.com)";
+            return false;
+         }
          typed = "https://" + typed;
       }
 
@@ -75,8 +86,38 @@ public static class GiteaServerUrl
       }
 
       string path = parsed.AbsolutePath.EndsWith('/') ? parsed.AbsolutePath : parsed.AbsolutePath + "/";
-      server = new UriBuilder(Uri.UriSchemeHttps, parsed.IdnHost, parsed.IsDefaultPort ? -1 : parsed.Port, path).Uri;
+      try
+      {
+         server = new UriBuilder(Uri.UriSchemeHttps, parsed.IdnHost, parsed.IsDefaultPort ? -1 : parsed.Port, path).Uri;
+      }
+      catch(UriFormatException)
+      {
+         // A host with characters that have no place in a name (many symbols do not).
+         reason = "it is not an address";
+         return false;
+      }
       reason = null;
       return true;
+   }
+
+
+
+   /// <summary>
+   /// True when text without a scheme reads as a host, optionally followed by a port
+   /// and a path: everything between the first colon outside brackets (an IPv6
+   /// literal has its own) and the next slash is digits.
+   /// </summary>
+   private static bool IsAHostWithAtMostAPort(string text)
+   {
+      int from = text.StartsWith('[') ? Math.Max(0, text.IndexOf(']', StringComparison.Ordinal)) : 0;
+      int colon = text.IndexOf(':', from);
+      if(colon < 0)
+      {
+         return true;
+      }
+
+      int slash = text.IndexOf('/', colon);
+      ReadOnlySpan<char> port = text.AsSpan(colon + 1, (slash < 0 ? text.Length : slash) - colon - 1);
+      return port.Length is > 0 and <= 5 && !port.ContainsAnyExceptInRange('0', '9');
    }
 }
