@@ -17,7 +17,8 @@ namespace gclo.Engine.Tests;
 /// </summary>
 public sealed class GitHubListerTests
 {
-   private sealed class FakeGateway : IGitHubGateway
+   /// <summary>A GitHub gateway whose every call is scripted. Also used by <see cref="GitHubListerContractTests"/>.</summary>
+   internal sealed class FakeGateway : IGitHubGateway
    {
       public Func<string, int, Task<IReadOnlyList<GitHubRepo>>> OrgPages { get; set; } =
           (_, _) => Task.FromResult<IReadOnlyList<GitHubRepo>>([]);

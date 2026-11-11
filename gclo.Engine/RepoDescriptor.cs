@@ -6,7 +6,7 @@
 namespace gclo.Engine;
 
 
-/// <summary>A repository discovered in the GitHub organization.</summary>
+/// <summary>A repository discovered in an organization or account.</summary>
 /// <param name="Name">Repository name (unique within the org; used as the local folder name).</param>
 /// <param name="CloneUrl">HTTPS clone URL.</param>
 /// <param name="DefaultBranch">Default branch name; null for empty repositories.</param>
