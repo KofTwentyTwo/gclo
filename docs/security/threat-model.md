@@ -4,7 +4,7 @@
      review it in every MINOR/MAJOR release checklist (K22-SEC-30).
      Method: data-flow diagram + STRIDE per trust boundary. -->
 
-- **Version reviewed:** v1.1.1 · **Last reviewed:** 2026-11-10
+- **Version reviewed:** v1.2.0 (in work; the rows dated 2026-11-10 were written for a 1.1.1 that ships as part of 1.2.0) · **Last reviewed:** 2026-11-11
 
 ## 1. What the product is and does
 

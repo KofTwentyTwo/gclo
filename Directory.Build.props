@@ -53,8 +53,8 @@
        built-in SourceLink appends the git commit as "+<sha>" build metadata on
        AssemblyInformationalVersion, which the About dialog and the CLI's
        version output surface as the short hash. Prefix tracks the next expected
-       release: 1.2.0, the version that brings Gitea support (1.1.1 is cut from
-       the line before it). -->
+       release: 1.2.0, which carries the fixes that were planned as 1.1.1 and
+       Gitea support together (there is no release numbered 1.1.1). -->
   <PropertyGroup>
     <VersionPrefix>1.2.0</VersionPrefix>
     <VersionSuffix>dev</VersionSuffix>
