@@ -16,7 +16,7 @@ namespace gclo.Services;
 
 
 /// <summary>
-/// Self-update via Velopack, with releases hosted on the app's public GitHub repository.
+/// Self-update via Velopack, with releases hosted on the project's public repository (ADR 0009).
 /// Updates only work in Velopack-installed builds: under F5, loose unpackaged builds, or
 /// MSIX packages <see cref="IsSupported"/> is false. Every member is guarded — failures are
 /// reported as strings and must never crash the app over something as optional as an update.
@@ -25,7 +25,12 @@ namespace gclo.Services;
 /// </summary>
 public sealed class UpdateService
 {
-   private const string RepoUrl = "https://github.com/KofTwentyTwo/gclo";
+   /// <summary>
+   /// The repository whose releases are the update feed: the project's home on its own
+   /// Gitea server (ADR 0009). Public, so the feed and the packages are read without a
+   /// token; nothing but the request for them is sent there.
+   /// </summary>
+   private const string ReleasesUrl = "https://git.kof22.com/KofTwentyTwo/gclo";
 
    private readonly IActivityLog _log;
 
@@ -80,7 +85,7 @@ public sealed class UpdateService
 
 
    /// <summary>
-   /// Checks GitHub releases for a newer version and remembers it for
+   /// Checks the project's releases for a newer version and remembers it for
    /// <see cref="DownloadAndApplyAsync"/>. Never throws: failures come back in
    /// <see cref="UpdateCheckResult.Error"/>.
    /// </summary>
@@ -98,7 +103,7 @@ public sealed class UpdateService
       }
       catch(Exception ex)
       {
-         _log.Error($"Update check failed before contacting GitHub: {ex.Message}", ex);
+         _log.Error($"Update check failed before contacting the server: {ex.Message}", ex);
          return new UpdateCheckResult(null, ex.Message);
       }
 
@@ -167,8 +172,8 @@ public sealed class UpdateService
    /// Created lazily so merely constructing the service can never fail; callers wrap this
    /// in try/catch and treat a throwing manager as "updates not supported".
    /// A prerelease install (semver has a '-suffix') runs on the dev channel, whose
-   /// packages are attached to GitHub *prerelease* releases — GithubSource must be
-   /// told to look at prereleases or dev installs can never find any update at all.
+   /// packages are attached to *prerelease* releases — the source must be told to
+   /// look at prereleases or dev installs can never find any update at all.
    /// Stable installs keep prereleases out of consideration; Velopack's channel
    /// filtering then matches packages to the installed channel either way.
    /// </summary>
@@ -179,7 +184,7 @@ public sealed class UpdateService
          bool prerelease = BuildVersion
              .Describe(Assembly.GetExecutingAssembly())
              .Contains('-');
-         _manager = new UpdateManager(new GithubSource(RepoUrl, null, prerelease));
+         _manager = new UpdateManager(new GiteaSource(ReleasesUrl, null, prerelease));
       }
       return _manager;
    }

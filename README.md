@@ -46,7 +46,7 @@ scoop install gclo
 
 **Chocolatey is not available yet.** The only version submitted, 1.0.1, is still in community moderation with the status "Waiting for Maintainer to take corrective action", so `choco install gclo` does not find it. 1.1.0 has not been submitted. `winget` support for the desktop app is not available either. Both are tracked in [#7](https://git.kof22.com/KofTwentyTwo/gclo/issues/7), and this section will be updated when a package is approved.
 
-The channels available today (GitHub Releases, the in-app updater and Scoop) are all served over HTTPS.
+The channels available today (the project's Releases page, the in-app updater and Scoop) are all served over HTTPS from git.kof22.com.
 
 ## Verifying a release
 
@@ -120,7 +120,7 @@ On launch, gclo shows a brief branded splash, then the **Quick Sync** connect ca
 
 **Share:** Help > Share gclo by email… opens a new message in your email program with an invitation already written: what gclo is, where to download the latest release, and how to install it. Type an address and send; gclo itself sends nothing. If no email program is set up, the text is shown and copied to the clipboard, to paste into a message by hand.
 
-**Updates:** Help > Check for updates… downloads and applies the latest release for your channel. Self-update is only available in installed builds (not the portable zip or a local debug build).
+**Updates:** Help > Check for updates… downloads and applies the latest release for your channel from the project's releases on git.kof22.com. Versions up to 1.1.0 look for updates on GitHub; if they do not find 1.1.1 there, install it once by hand, and it updates itself from then on. Self-update is only available in installed builds (not the portable zip or a local debug build).
 
 ### Saved accounts
 

@@ -200,6 +200,35 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
 - To re-point the manifests by hand (for example after a missed release):
   `./.github/scripts/Update-PackageManifests.ps1 -Version 1.2.3 -CliZipPath <zip>`.
 
+## The release on git.kof22.com
+
+From 1.1.1 on, the app's updater, the Scoop manifest and the Chocolatey package
+read releases from `https://git.kof22.com/KofTwentyTwo/gclo`
+([ADR 0009](adr/0009-updates-and-downloads-from-gitea.md)). The release workflow
+still builds, signs and publishes on GitHub. Until a pipeline on Gitea exists, a
+release is therefore **not done** until it also exists on Gitea, exactly as it
+does on GitHub:
+
+- **The same tag and the same assets**, byte for byte: Setup.exe, the portable
+  zip, the CLI zip, the `.nupkg` packages (full and delta), `releases.<channel>.json`,
+  `SHA256SUMS`, the SBOMs. The updater needs the feed file and the packages; the
+  package managers need the CLI zip and `SHA256SUMS`.
+- **The same prerelease flag.** A beta copied without the flag becomes the latest
+  release (Scoop would see it, and stable installs would be offered nothing newer
+  because their feed file is not in it). A stable release copied with the flag is
+  invisible to stable installs.
+- **Before the package manifests are written.** `Update-PackageManifests.ps1`
+  refuses to write a manifest whose download does not answer, so the `packages`
+  job fails until the copy is done; run it again afterwards.
+- **No more than nine prereleases newer than the latest stable release.** The
+  updater reads the ten newest releases and picks by channel; a longer run of betas
+  hides the stable release from stable installs. Delete old prereleases.
+- **From the network the users are on.** Check the release page and one download
+  from outside the local network.
+
+Releases on Gitea can be edited and their assets replaced; nothing there is
+immutable. Treat a published version as final anyway (see "A broken release").
+
 ## Cutting a release, start to finish
 
 1. **Open the release checklist issue** from the KofTwentyTwo standards'
@@ -255,9 +284,12 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
      above; each fails loudly when it cannot publish.
 
 7. **Verify.** On the [releases page](https://git.kof22.com/KofTwentyTwo/gclo/releases)
-   every asset listed above is attached and
+   every asset listed above is attached, with the same hashes as in `SHA256SUMS`
+   and the right prerelease flag (see "The release on git.kof22.com"). On GitHub,
+   where the release was built,
    `gh attestation verify <asset> --repo KofTwentyTwo/gclo --signer-repo KofTwentyTwo/standards`
-   passes. Merge the packaging PR. Check the winget PR on microsoft/winget-pkgs.
+   passes. Install the previous version and let it update itself to this one.
+   Merge the packaging PR. Check the winget PR on microsoft/winget-pkgs.
    Tick the "Ship" section of the checklist issue.
 
 8. **If something failed**, where it failed decides the recovery:
@@ -288,13 +320,17 @@ Both install the same asset, `gclo-cli-win-x64-<version>.zip`, by URL and SHA-25
 
 ### A broken release
 
-Releases are immutable and a published version is never deleted or reused
-(K22-REL-07): installed apps, package managers, and attestations may already
-refer to it. Instead:
+A published version is never deleted or reused (K22-REL-07): installed apps,
+package managers, and attestations may already refer to it. (GitHub enforces
+that; Gitea does not, so it is a rule to keep, not one to rely on.) Instead:
 
 1. Edit the broken release's notes to say what is wrong and which version fixes
-   it (`gh release edit v1.2.3 --notes-file ...`), and mark it as a prerelease if
-   stable users must stop receiving it (`gh release edit v1.2.3 --prerelease`).
+   it, and mark it as a prerelease if stable users must stop receiving it. Do
+   both **on git.kof22.com**, which is where installed apps from 1.1.1 on and the
+   package managers look (edit the release there, or
+   `tea releases edit --repo KofTwentyTwo/gclo --prerelease true v1.2.3`), and on
+   GitHub for the versions up to 1.1.0 that still look there
+   (`gh release edit v1.2.3 --notes-file ...`, `gh release edit v1.2.3 --prerelease`).
 2. Fix the cause on `main` through a normal pull request.
 3. Tag the **next** patch version and let the pipeline publish it.
 

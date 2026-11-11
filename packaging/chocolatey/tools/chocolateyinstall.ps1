@@ -11,7 +11,7 @@ $toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $packageArgs = @{}
 $packageArgs.packageName = 'gclo'
 $packageArgs.unzipLocation = $toolsDir
-$packageArgs.url64bit = 'https://github.com/KofTwentyTwo/gclo/releases/download/v1.1.0/gclo-cli-win-x64-1.1.0.zip'
+$packageArgs.url64bit = 'https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v1.1.0/gclo-cli-win-x64-1.1.0.zip'
 $packageArgs.checksum64 = '46f02d89c9d8a459e5b02598f9791fa7aab5c16b09c254bc997f8f235a6a49e2'
 $packageArgs.checksumType64 = 'sha256'
 

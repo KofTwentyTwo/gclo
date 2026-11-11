@@ -45,7 +45,7 @@ public sealed class PackagingManifestTests
    private static string CliZipUrlPattern(string version)
    {
       string v = Regex.Escape(version);
-      return $@"^https://github\.com/KofTwentyTwo/gclo/releases/download/v{v}/gclo-cli-win-x64(-{v})?\.zip$";
+      return $@"^https://git\.kof22\.com/KofTwentyTwo/gclo/releases/download/v{v}/gclo-cli-win-x64(-{v})?\.zip$";
    }
 
 
@@ -57,10 +57,24 @@ public sealed class PackagingManifestTests
       JsonElement x64 = root.GetProperty("architecture").GetProperty("64bit");
       Assert.Equal("gclo.exe", root.GetProperty("bin").GetString());
       Assert.Equal("MIT", root.GetProperty("license").GetString());
-      Assert.Equal("github", root.GetProperty("checkver").GetString());
-      string autoupdateUrl = root.GetProperty("autoupdate").GetProperty("architecture").GetProperty("64bit").GetProperty("url").GetString()!;
-      Assert.Contains("v$version/gclo-cli-win-x64-$version.zip", autoupdateUrl);
-      Assert.EndsWith("/SHA256SUMS", root.GetProperty("autoupdate").GetProperty("architecture").GetProperty("64bit").GetProperty("hash").GetProperty("url").GetString());
+      /////////////////////////////////////////////////////////////////////////////
+      // Everything is asked of the project's own server (ADR 0009): the newest  //
+      // version (the tag of its latest release, 'v1.2.3' read as '1.2.3'), the  //
+      // download of a later version, its hash, and the pages the notes name.    //
+      /////////////////////////////////////////////////////////////////////////////
+      JsonElement checkver = root.GetProperty("checkver");
+      Assert.Equal("https://git.kof22.com/api/v1/repos/KofTwentyTwo/gclo/releases/latest", checkver.GetProperty("url").GetString());
+      Assert.Equal("$.tag_name", checkver.GetProperty("jsonpath").GetString());
+      Assert.Equal(@"v([\d.]+)", checkver.GetProperty("regex").GetString());
+      Assert.Equal("https://git.kof22.com/KofTwentyTwo/gclo", root.GetProperty("homepage").GetString());
+      JsonElement autoupdate = root.GetProperty("autoupdate").GetProperty("architecture").GetProperty("64bit");
+      Assert.Equal(
+          "https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v$version/gclo-cli-win-x64-$version.zip",
+          autoupdate.GetProperty("url").GetString());
+      Assert.Equal("$baseurl/SHA256SUMS", autoupdate.GetProperty("hash").GetProperty("url").GetString());
+      Assert.All(
+          root.GetProperty("notes").EnumerateArray().Select(note => note.GetString()!),
+          note => Assert.DoesNotContain("github.com/KofTwentyTwo", note, StringComparison.Ordinal));
       return (root.GetProperty("version").GetString()!, x64.GetProperty("url").GetString()!, x64.GetProperty("hash").GetString()!);
    }
 
@@ -73,7 +87,9 @@ public sealed class PackagingManifestTests
       XElement metadata = nuspec.Root.Element(ns + "metadata")!;
       Assert.Equal("gclo", metadata.Element(ns + "id")!.Value);
       string version = metadata.Element(ns + "version")!.Value;
-      Assert.EndsWith($"/releases/tag/v{version}", metadata.Element(ns + "releaseNotes")!.Value);
+      Assert.Equal($"https://git.kof22.com/KofTwentyTwo/gclo/releases/tag/v{version}", metadata.Element(ns + "releaseNotes")!.Value);
+      Assert.DoesNotContain("github.com/KofTwentyTwo", nuspec.ToString(), StringComparison.OrdinalIgnoreCase);
+      Assert.DoesNotContain("githubusercontent.com", nuspec.ToString(), StringComparison.OrdinalIgnoreCase);
 
       string install = File.ReadAllText(Path.Combine(RepoRoot, "packaging", "chocolatey", "tools", "chocolateyinstall.ps1"));
       string url = Regex.Match(install, @"url64bit\s*=\s*'(?<value>[^']+)'", RegexOptions.ExplicitCapture, TimeSpan.FromSeconds(1)).Groups["value"].Value;

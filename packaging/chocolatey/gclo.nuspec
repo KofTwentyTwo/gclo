@@ -16,9 +16,9 @@
     <packageSourceUrl>https://git.kof22.com/KofTwentyTwo/gclo/src/branch/main/packaging/chocolatey</packageSourceUrl>
     <docsUrl>https://git.kof22.com/KofTwentyTwo/gclo/src/branch/main/docs/CLI.md</docsUrl>
     <bugTrackerUrl>https://git.kof22.com/KofTwentyTwo/gclo/issues</bugTrackerUrl>
-    <licenseUrl>https://raw.githubusercontent.com/KofTwentyTwo/gclo/main/LICENSE</licenseUrl>
+    <licenseUrl>https://git.kof22.com/KofTwentyTwo/gclo/raw/branch/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
-    <iconUrl>https://raw.githubusercontent.com/KofTwentyTwo/gclo/main/gclo/Assets/Brand/gclo-icon.svg</iconUrl>
+    <iconUrl>https://git.kof22.com/KofTwentyTwo/gclo/raw/branch/main/gclo/Assets/Brand/gclo-icon.svg</iconUrl>
     <tags>git github clone mirror organization cli</tags>
     <summary>Clone or update every repository of a GitHub organization in one pass (CLI).</summary>
     <description><![CDATA[
@@ -34,9 +34,9 @@ This package installs the self-contained command-line edition (`gclo.exe`, no .N
 
 A GitHub personal access token is required: set `GITHUB_TOKEN`, or use `--token-env`, `--token-file`, or `--token-stdin` (there is deliberately no option that takes the token on the command line). The full command reference is the package's documentation link (docs/CLI.md in the repository).
 
-The desktop app (WinUI 3) is a separate, Authenticode-signed download from the GitHub Releases page.
+The desktop app (WinUI 3) is a separate, Authenticode-signed download from the project's Releases page.
 ]]></description>
-    <releaseNotes>https://github.com/KofTwentyTwo/gclo/releases/tag/v1.1.0</releaseNotes>
+    <releaseNotes>https://git.kof22.com/KofTwentyTwo/gclo/releases/tag/v1.1.0</releaseNotes>
   </metadata>
   <files>
     <file src="tools\**" target="tools" />

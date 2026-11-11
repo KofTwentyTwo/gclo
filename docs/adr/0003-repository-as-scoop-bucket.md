@@ -1,6 +1,6 @@
 # ADR-0003: Make this repository its own Scoop bucket and ship the Chocolatey package source
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR 0009](0009-updates-and-downloads-from-gitea.md) (releases are read from git.kof22.com)
 - **Date:** 2026-10-09
 - **Pull request:** #59
 

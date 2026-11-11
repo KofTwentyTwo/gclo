@@ -108,7 +108,7 @@ is a vulnerability: please report it through the channel above.
   carries a [build-provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations),
   and ships with a CycloneDX SBOM. See "Verifying a release" in the
   [README](README.md#verifying-a-release).
-- Self-update downloads only from this repository's GitHub Releases and verifies each
+- Self-update downloads only from this project's releases on git.kof22.com and verifies each
   package against the release's `releases.<channel>.json` feed.
 - Setup.exe, the update stub and every gclo executable and library are
   **Authenticode-signed** with Azure Artifact Signing (SHA-256, RFC 3161 timestamp) in

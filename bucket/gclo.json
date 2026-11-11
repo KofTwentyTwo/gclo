@@ -1,24 +1,28 @@
 {
   "version": "1.1.0",
   "description": "Git Clone Large Organizations: clone or update every repository of a GitHub organization or user account, in parallel (command-line edition)",
-  "homepage": "https://github.com/KofTwentyTwo/gclo",
+  "homepage": "https://git.kof22.com/KofTwentyTwo/gclo",
   "license": "MIT",
   "notes": [
     "gclo needs a GitHub personal access token: set GITHUB_TOKEN, or pass --token-env, --token-file, or --token-stdin.",
-    "The desktop app is a separate download: https://github.com/KofTwentyTwo/gclo/releases"
+    "The desktop app is a separate download: https://git.kof22.com/KofTwentyTwo/gclo/releases"
   ],
   "architecture": {
     "64bit": {
-      "url": "https://github.com/KofTwentyTwo/gclo/releases/download/v1.1.0/gclo-cli-win-x64-1.1.0.zip",
+      "url": "https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v1.1.0/gclo-cli-win-x64-1.1.0.zip",
       "hash": "46f02d89c9d8a459e5b02598f9791fa7aab5c16b09c254bc997f8f235a6a49e2"
     }
   },
   "bin": "gclo.exe",
-  "checkver": "github",
+  "checkver": {
+    "url": "https://git.kof22.com/api/v1/repos/KofTwentyTwo/gclo/releases/latest",
+    "jsonpath": "$.tag_name",
+    "regex": "v([\\d.]+)"
+  },
   "autoupdate": {
     "architecture": {
       "64bit": {
-        "url": "https://github.com/KofTwentyTwo/gclo/releases/download/v$version/gclo-cli-win-x64-$version.zip",
+        "url": "https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v$version/gclo-cli-win-x64-$version.zip",
         "hash": {
           "url": "$baseurl/SHA256SUMS"
         }

@@ -1,6 +1,6 @@
 # ADR-0001: Use Velopack for install and self-update from GitHub Releases
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR 0009](0009-updates-and-downloads-from-gitea.md) (releases are read from git.kof22.com)
 - **Date:** 2026-07-05 (recorded 2026-10-09)
 - **Pull request:** #64
 

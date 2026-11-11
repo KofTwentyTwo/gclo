@@ -29,7 +29,10 @@ param(
 
    [string] $CliZipPath,
 
-   [string] $Sha256
+   [string] $Sha256,
+
+   # Skips the check that the download is on the server (offline use, a rehearsal).
+   [switch] $SkipDownloadCheck
 )
 
 Set-StrictMode -Version Latest
@@ -76,7 +79,24 @@ if($Sha256 -notmatch '^[0-9a-f]{64}$')
 }
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-$url = "https://github.com/KofTwentyTwo/gclo/releases/download/v$Version/gclo-cli-win-x64-$Version.zip"
+$url = "https://git.kof22.com/KofTwentyTwo/gclo/releases/download/v$Version/gclo-cli-win-x64-$Version.zip"
+
+################################################################################
+## The manifests name the download on git.kof22.com (ADR 0009). A package that ##
+## points at a file that is not there yet fails for everyone who installs it,  ##
+## so the release must be on that server before its manifests are written.     ##
+################################################################################
+if(-not $SkipDownloadCheck)
+{
+   try
+   {
+      $null = Invoke-WebRequest -Uri $url -Method Head -MaximumRedirection 5 -TimeoutSec 60 -ErrorAction Stop
+   }
+   catch
+   {
+      throw "$url does not answer ($($_.Exception.Message)). Publish the release and its assets on git.kof22.com first, then run this again."
+   }
+}
 
 ################################################################################
 ## Scoop: a real JSON edit, so the file stays valid whatever its layout.      ##
@@ -96,7 +116,7 @@ Write-Progress-Line "Scoop manifest -> $Version"
 $nuspecPath = Join-Path $repoRoot 'packaging\chocolatey\gclo.nuspec'
 $nuspec = Get-Content -LiteralPath $nuspecPath -Raw
 $nuspec = $nuspec -replace '<version>[^<]+</version>', "<version>$Version</version>"
-$nuspec = $nuspec -replace '<releaseNotes>[^<]+</releaseNotes>', "<releaseNotes>https://github.com/KofTwentyTwo/gclo/releases/tag/v$Version</releaseNotes>"
+$nuspec = $nuspec -replace '<releaseNotes>[^<]+</releaseNotes>', "<releaseNotes>https://git.kof22.com/KofTwentyTwo/gclo/releases/tag/v$Version</releaseNotes>"
 Write-FileText -Path $nuspecPath -Text $nuspec
 
 $installPath = Join-Path $repoRoot 'packaging\chocolatey\tools\chocolateyinstall.ps1'
