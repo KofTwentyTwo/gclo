@@ -453,12 +453,7 @@ public sealed partial class WorkspacePage : UserControl
       EditFlyout.Hide();
       if(SaveAsAccountRequested is { } save)
       {
-         await save(new AccountWizardSeed(
-             ViewModel.Token,
-             ViewModel.Organization,
-             ViewModel.TargetFolder,
-             ViewModel.CreateOrgSubfolder,
-             ViewModel.MaxConcurrency));
+         await save(ViewModel.ToAccountSeed());
       }
    }
 

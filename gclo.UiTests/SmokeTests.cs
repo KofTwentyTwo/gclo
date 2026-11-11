@@ -197,7 +197,11 @@ public sealed partial class SmokeTests : UiTestBase
    [Fact]
    public void ConnectTokenBox_TypingText_KeepsAppAliveAndOrgBoxPresent()
    {
-      AutomationElement tokenBox = Session.WaitForElement("ConnectTokenBox");
+      // The box takes a token once a place was chosen (#209).
+      Session.WaitForElement("ConnectPlaceGitHub").AsRadioButton().IsChecked = true;
+      AutomationElement tokenBox = Session.WaitFor(
+          () => Session.FindInApp(cf => cf.ByAutomationId("ConnectTokenBox")) is { IsEnabled: true } box ? box : null,
+          "the token box to take a token once a place is chosen");
       Session.EnterText(tokenBox, "ghp_short");
 
       Assert.NotNull(Session.WaitForElement("ConnectOrgBox"));
@@ -288,7 +292,54 @@ public sealed partial class SmokeTests : UiTestBase
 
 
 
-   // (10) Resizing below the minimum window size is intentionally not covered:
+   // (10) Quick Sync on a Gitea server (#209). The card asks where the repositories
+   //      are; with Gitea chosen and an address entered its title names the server.
+   //      Entering the token sends nothing: the organizations are listed when Find
+   //      is pressed, and they are the ones of that server (the fixture answers for
+   //      the place that was asked, offline). Nothing is loaded, and the card is put
+   //      back on GitHub with an empty token box, so the other tests of this
+   //      session find it as they expect.
+   [Fact]
+   public void QuickSync_OnAGiteaServer_ListsThatServersOrganizations_WhenAsked()
+   {
+      try
+      {
+         Session.WaitForElement("ConnectPlaceGitea").AsRadioButton().IsChecked = true;
+         Session.EnterText(Session.WaitForElement("ConnectServerBox"), "git.example.test");
+         AutomationElement tokenBox = Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByAutomationId("ConnectTokenBox")) is { IsEnabled: true } box ? box : null,
+             "the token box to take a token once a place is chosen");
+         Session.EnterText(tokenBox, "gclo-uitest-fixture-token");
+
+         // The address was taken with the token, as it was normalized, and the title names the server.
+         Session.WaitForText("Connect to git.example.test");
+
+         Session.WaitFor(
+             () => Session.FindInApp(cf => cf.ByAutomationId("ConnectFindOrgsButton")) is { IsEnabled: true } button ? button : null,
+             "the Find button to enable");
+         Session.ClickButton("Find");
+         ComboBox orgBox = Session.WaitForElement("ConnectOrgBox").AsComboBox();
+         Session.WaitFor(
+             () =>
+             {
+                orgBox.Expand();
+                return orgBox.Items.FirstOrDefault(i => string.Equals(i.Name, "fixture-gitea-org", StringComparison.Ordinal));
+             },
+             "the fixture's Gitea organization in the organization list");
+         orgBox.Collapse();
+         Assert.False(Session.App.HasExited);
+      }
+      finally
+      {
+         // Back to GitHub: choosing another place empties the token and the organization list.
+         Session.WaitForElement("ConnectPlaceGitHub").AsRadioButton().IsChecked = true;
+         Session.WaitForText("Connect to GitHub");
+      }
+   }
+
+
+
+   // (11) Resizing below the minimum window size is intentionally not covered:
    //     driving OS-level resize through UIA transforms is flaky across DPI
    //     scales, and the minimum is already enforced by OverlappedPresenter.
 

@@ -142,6 +142,34 @@ were the two lister implementations and the failure type they throw.
 - **Texts follow the place.** The page a token is made on is the one of the
   chosen place (`ForgeTexts`); step 2 names the place the token is checked with.
 
+### Quick Sync and the start screen (#209)
+
+GitHub and Gitea are equal options wherever the app asks for a place, with the
+same two labels. Quick Sync, the card the app first opens on, is where that
+matters most.
+
+- **The place is chosen on the card, and nothing is chosen for the user.** On a
+  first run neither GitHub nor Gitea is selected, and the token box takes a token
+  only once one is. A token cannot be pasted for a place nobody chose.
+- **Nothing is sent until the user asks.** A token that is typed, pasted, or
+  filled in from a saved default goes nowhere by itself. It leaves the machine
+  when the user presses Find (the organization list) or Load repositories, and
+  it goes to the listers of the place that is on the card at that moment. An
+  account's page still lists and loads when it is opened: its token was saved for
+  its place.
+- **A server address is taken when its box is left**, not while it is typed, so no
+  token is sent to half an address; the card then shows it as it was normalized.
+- **What belongs to one place is forgotten when another is chosen:** the token,
+  the organization, and the table. The repositories of the table have clone
+  addresses on the other host; they are not left there to be synced with a token
+  of the new place.
+- **The card opens the way the last connection that worked left it:** place,
+  server address, organization, target folder, kept in `settings.json`. Never a
+  token. An older gclo that rewrites `settings.json` drops these fields; the card
+  then opens as on a first run, which costs a choice and nothing else.
+- **The app opens where it was left:** the workspace that was open last; with
+  nothing recorded, the first account; with no account, Quick Sync.
+
 ## Alternatives considered
 
 - **A Gitea client package.** One more dependency to track and to trust with the

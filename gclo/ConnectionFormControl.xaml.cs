@@ -97,18 +97,33 @@ public sealed partial class ConnectionFormControl : UserControl
       ///////////////////////////////////////////////////////////////////////////////
       TokenBox.IsEnabled = !savedWithAnAccount;
 
-      // The page of the place this workspace connects to (#206); none when that place is not known.
-      if(ViewModel is not null)
+      ApplyThePlace();
+      if(ViewModel is not null && !ReferenceEquals(_followed, ViewModel))
       {
-         TokenBox.Header = ViewModel.TokenHeader;
-         TokenPageLink.NavigateUri = ViewModel.TokenPage;
-         TokenPageLink.Visibility = StatusFormat.VisibleIfNotNull(ViewModel.TokenPage);
+         ///////////////////////////////////////////////////////////////////////////
+         // Quick Sync's place is chosen on this form (#209). What the form says  //
+         // about the token follows it, and so does the token box: the view model //
+         // empties the token when another place is chosen, and fills in a saved  //
+         // default; the box is mirrored by hand, so it is brought along here.     //
+         ///////////////////////////////////////////////////////////////////////////
+         _followed = ViewModel;
+         ViewModel.PropertyChanged += (_, args) =>
+         {
+            switch(args.PropertyName)
+            {
+               case nameof(WorkspaceViewModel.Token):
+                  FollowTheToken();
+                  break;
+               case nameof(WorkspaceViewModel.TokenHeader) or nameof(WorkspaceViewModel.TokenPage) or nameof(WorkspaceViewModel.TokenPlaceholder)
+                   or nameof(WorkspaceViewModel.IsPlaceChosen):
+                  ApplyThePlace();
+                  break;
+            }
+         };
       }
-      TokenBox.PlaceholderText = !savedWithAnAccount ? "ghp_…"
-          : ViewModel!.UsesDefaultToken ? "No default token is saved"
-          : "No token is saved for this account";
       // The organization placeholder must not ask for a token the box already has, or cannot take.
-      OrgBox.PlaceholderText = hasToken ? "Choose an organization, or type one"
+      OrgBox.PlaceholderText = ViewModel?.CanChoosePlace == true ? "Type a name, or press Find to list them"
+          : hasToken ? "Choose an organization, or type one"
           : savedWithAnAccount ? "Type an organization or account"
           : "Paste a token first, or type an org";
       ToolTipService.SetToolTip(TokenBox, savedWithAnAccount
@@ -116,8 +131,96 @@ public sealed partial class ConnectionFormControl : UserControl
               ? "This account uses the default token from File > Settings."
               : "This account's token is set with Edit account…, not typed here."
           : !hasToken
-              ? "Fine-grained or classic PAT with repository read access; used for the GitHub API and git over HTTPS. Never written to disk or logs."
+              ? "Needs read access to repositories. Sent only when you press Find or Load repositories, and only to the place chosen above. Never written to disk or logs."
               : "Using the saved default token from Settings. Type here to use a different one for this session.");
+   }
+
+
+
+   /// <summary>The view model whose place and token this control already follows.</summary>
+   private WorkspaceViewModel? _followed;
+
+
+
+   /// <summary>
+   /// What the form says about the token of the place the workspace is on: the
+   /// header of the box, what the empty box shows, and the page a token is made on
+   /// (none when the place is not known).
+   /// </summary>
+   private void ApplyThePlace()
+   {
+      if(ViewModel is null)
+      {
+         return;
+      }
+
+      // No token is taken before the user said where the repositories are; an account's box takes none at all (#182).
+      TokenBox.IsEnabled = ViewModel.AccountId is null && ViewModel.IsPlaceChosen;
+      TokenBox.Header = ViewModel.TokenHeader;
+      TokenPageLink.NavigateUri = ViewModel.TokenPage;
+      TokenPageLink.Visibility = StatusFormat.VisibleIfNotNull(ViewModel.TokenPage);
+      TokenBox.PlaceholderText = ViewModel.AccountId is null ? ViewModel.TokenPlaceholder
+          : ViewModel.UsesDefaultToken ? "No default token is saved"
+          : "No token is saved for this account";
+   }
+
+
+
+   /// <summary>
+   /// Brings the token box along when the view model changed the token itself:
+   /// emptied (another place was chosen), or filled in from a saved default, which
+   /// shows as the mask. What was typed into the box is the view model's token
+   /// already, and stays.
+   /// </summary>
+   private void FollowTheToken()
+   {
+      if(_takingWhatWasTyped)
+      {
+         // The box is being typed into right now: it is not changed under the hand that types.
+         return;
+      }
+
+      string token = ViewModel.Token;
+      string shown = TokenBox.Password;
+      if(token.Length == 0 && shown.Length > 0)
+      {
+         TokenBox.Password = "";
+      }
+      else if(token.Length > 0
+          && !string.Equals(shown, token, StringComparison.Ordinal)
+          && !string.Equals(shown, SettingsTokenState.Mask, StringComparison.Ordinal))
+      {
+         TokenBox.Password = SettingsTokenState.Mask;
+      }
+   }
+
+
+
+   /// <summary>
+   /// Hands the server address to the view model, which takes the place it names.
+   /// Called when the box is left or Enter is pressed, and before a token is taken
+   /// from the token box: a token is only ever sent to an address that was finished.
+   /// </summary>
+   private void CommitTheServer()
+   {
+      if(ViewModel is not null && ViewModel.AsksForServer && !string.Equals(ServerBox.Text, ViewModel.Server, StringComparison.Ordinal))
+      {
+         ViewModel.Server = ServerBox.Text;
+      }
+   }
+
+
+
+   private void ServerBox_LostFocus(object sender, RoutedEventArgs e) => CommitTheServer();
+
+
+
+   private void ServerBox_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+   {
+      if(e.Key == Windows.System.VirtualKey.Enter)
+      {
+         CommitTheServer();
+      }
    }
 
 
@@ -128,11 +231,32 @@ public sealed partial class ConnectionFormControl : UserControl
    private void TokenBox_PasswordChanged(object sender, RoutedEventArgs e)
    {
       string typed = ((PasswordBox)sender).Password;
-      if(ViewModel is not null && ViewModel.AccountId is null && !string.Equals(typed, SettingsTokenState.Mask, StringComparison.Ordinal))
+      if(ViewModel is not null && ViewModel.AccountId is null && !_takingWhatWasTyped
+          && !string.Equals(typed, SettingsTokenState.Mask, StringComparison.Ordinal))
       {
-         ViewModel.Token = typed;
+         ///////////////////////////////////////////////////////////////////////////
+         // The address first, in case its box was not left the usual way: the    //
+         // token is for the place that is on the form. Taking the address can    //
+         // empty the view model's token (another place); the box keeps what is   //
+         // being typed, which is then the token of the place just taken.         //
+         ///////////////////////////////////////////////////////////////////////////
+         _takingWhatWasTyped = true;
+         try
+         {
+            CommitTheServer();
+            ViewModel.Token = typed;
+         }
+         finally
+         {
+            _takingWhatWasTyped = false;
+         }
       }
    }
+
+
+
+   /// <summary>True while <see cref="TokenBox_PasswordChanged"/> hands what was typed to the view model.</summary>
+   private bool _takingWhatWasTyped;
 
 
 

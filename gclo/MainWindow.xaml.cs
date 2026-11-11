@@ -161,11 +161,17 @@ public sealed partial class MainWindow : Window
 
       _settings = AppSettings.Load(_log);
 
-      // Create and show Quick Sync before selecting it, so NavigationView.Content
+      // Create and show Quick Sync before selecting anything, so NavigationView.Content
       // is never empty regardless of when SelectionChanged fires.
       ShowWorkspace(Guid.Empty);
       ApplySettings(seedQuickSyncConcurrency: true);
-      WorkspaceNav.SelectedItem = QuickSyncNavItem;
+
+      // The start screen is where the user left off; with nothing recorded, their
+      // first account, and Quick Sync when there is none (#209).
+      Guid start = StartWorkspace.Choose(_accountsStore.GetAll(), _settings.LastWorkspace);
+      WorkspaceNav.SelectedItem = WorkspaceNav.MenuItems
+          .OfType<NavigationViewItem>()
+          .FirstOrDefault(item => item.Tag is Guid id && id == start) ?? QuickSyncNavItem;
 
       // AppWindow.Resize takes physical pixels; scale by the monitor DPI so the
       // window is the same visual size at 150%/200% display scaling. The default
@@ -399,6 +405,12 @@ public sealed partial class MainWindow : Window
             _currentWorkspaceId = id;
             RenderSyncAllBar(); // the link to the syncing account depends on what is on screen
             _log.Info($"Showing workspace '{shown.ViewModel.DisplayName}'.");
+            if(_settings.LastWorkspace != id)
+            {
+               // Where the next start opens (#209).
+               _settings.LastWorkspace = id;
+               _settings.Save(_log);
+            }
          }
       }
    }
@@ -542,16 +554,28 @@ public sealed partial class MainWindow : Window
    {
       if(id == Guid.Empty)
       {
-         // Quick Sync: no account behind it. A saved default token (Settings)
-         // pre-fills the connect card; setting Token also starts the org lookup.
+         // Quick Sync: no account behind it. Its place is chosen on its card, and it
+         // gets the listers of that place (#209). It opens the way the last connection
+         // that worked had it, and with no place chosen when there was none. A default
+         // token saved for the place pre-fills the card. No token is remembered, and
+         // none is sent anywhere until the user presses Find or Load repositories.
          var quickSync = new WorkspaceViewModel(
-             UiTestFixture.WrapRepositoryLister(new GitHubRepositoryLister()),
-             UiTestFixture.WrapGitClient(new LibGit2GitClient()),
-             UiTestFixture.WrapOrganizationLister(new GitHubOrganizationLister()),
-             log: _log);
-         if(_tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId) is { Length: > 0 } defaultToken)
+             git: UiTestFixture.WrapGitClient(new LibGit2GitClient()),
+             log: _log,
+             listersOf: place => (
+                 UiTestFixture.WrapRepositoryLister(place.CreateRepositoryLister(), place),
+                 UiTestFixture.WrapOrganizationLister(place.CreateOrganizationLister(), place)),
+             defaultTokenOf: place => DefaultTokens.For(_tokenVault, place))
          {
-            quickSync.Token = defaultToken;
+            Connected = connection =>
+            {
+               _settings.RememberQuickSync(connection);
+               _settings.Save(_log);
+            },
+         };
+         if(_settings.RememberedQuickSync() is { } remembered)
+         {
+            quickSync.Restore(remembered);
          }
          return quickSync;
       }
@@ -859,9 +883,10 @@ public sealed partial class MainWindow : Window
    /// </summary>
    private async Task ShowSeededAccountWizardAsync(AccountWizardSeed seed)
    {
-      // A Quick Sync connection is a GitHub connection, and so is the account it is saved as.
+      // The account is saved where the connection was: its token is checked with that place.
+      ForgeEndpoint place = seed.Place ?? ForgeEndpoint.GitHub;
       var viewModel = new AccountWizardViewModel(
-          _accountsStore, UiTestFixture.WrapOrganizationLister(new GitHubOrganizationLister()), seed, _log,
+          _accountsStore, UiTestFixture.WrapOrganizationLister(place.CreateOrganizationLister(), place), seed, _log,
           defaultToken: () => _tokenVault.TryRetrieve(AppSettings.DefaultTokenVaultId));
       var dialog = new AccountWizardDialog(
           viewModel, () => WinRT.Interop.WindowNative.GetWindowHandle(this))
@@ -877,6 +902,10 @@ public sealed partial class MainWindow : Window
       await DialogGuard.ShowAsync(dialog);
       if(dialog.Saved)
       {
+         if(_workspaces.TryGetValue(Guid.Empty, out WorkspaceEntry? quickSync))
+         {
+            quickSync.ViewModel.SaveAsAccountOffered = false; // it was taken up
+         }
          OnAccountAdded(viewModel);
       }
       else

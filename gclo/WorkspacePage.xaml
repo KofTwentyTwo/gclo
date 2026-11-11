@@ -84,20 +84,36 @@
              load that fails (connect card still showing) and a refresh that fails
              (table showing) get the same red, dismissable surface with a Retry — not
              caption text at the bottom of the window. -->
-        <InfoBar
-            Grid.Row="0"
-            AutomationProperties.AutomationId="LoadErrorBar"
-            Severity="Error"
-            IsOpen="{x:Bind ViewModel.LoadErrorOpen, Mode=TwoWay}"
-            Title="{x:Bind ViewModel.LoadErrorTitle, Mode=OneWay}"
-            Message="{x:Bind ViewModel.LoadErrorMessage, Mode=OneWay}">
-            <InfoBar.ActionButton>
-                <Button
-                    AutomationProperties.AutomationId="LoadErrorRetryButton"
-                    Content="Retry"
-                    Command="{x:Bind ViewModel.LoadReposCommand, Mode=OneTime}" />
-            </InfoBar.ActionButton>
-        </InfoBar>
+        <StackPanel Grid.Row="0">
+            <InfoBar
+                AutomationProperties.AutomationId="LoadErrorBar"
+                Severity="Error"
+                IsOpen="{x:Bind ViewModel.LoadErrorOpen, Mode=TwoWay}"
+                Title="{x:Bind ViewModel.LoadErrorTitle, Mode=OneWay}"
+                Message="{x:Bind ViewModel.LoadErrorMessage, Mode=OneWay}">
+                <InfoBar.ActionButton>
+                    <Button
+                        AutomationProperties.AutomationId="LoadErrorRetryButton"
+                        Content="Retry"
+                        Command="{x:Bind ViewModel.LoadReposCommand, Mode=OneTime}" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+            <!-- Quick Sync, once its connection loaded repositories (#209): the moment
+                 the user knows it is worth keeping. Quick Sync itself keeps no token. -->
+            <InfoBar
+                AutomationProperties.AutomationId="SaveAsAccountBar"
+                Severity="Informational"
+                IsOpen="{x:Bind ViewModel.SaveAsAccountOffered, Mode=TwoWay}"
+                Title="This connection works"
+                Message="Save it as an account to keep it: its token is then stored in Windows Credential Manager, and it opens with one click next time.">
+                <InfoBar.ActionButton>
+                    <Button
+                        AutomationProperties.AutomationId="SaveAsAccountBarButton"
+                        Content="Save as account…"
+                        Click="SaveAsAccountButton_Click" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+        </StackPanel>
 
         <!-- ============================================================ State 1
              Connect card, shown until the first successful load in this workspace. -->
@@ -130,7 +146,7 @@
                         Style="{ThemeResource CaptionTextBlockStyle}"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         TextWrapping="Wrap"
-                        Text="Once this connection works, save it as an account (Edit on the connection chip) so the token is kept for you."
+                        Text="Quick Sync keeps no token. Once this connection works, you can save it as an account, where the token is kept for you."
                         Visibility="{x:Bind local:StatusFormat.VisibleIfNot(IsAccountWorkspace), Mode=OneTime}" />
                     <!-- A saved account: its token is not typed here (#182). -->
                     <TextBlock
@@ -209,6 +225,17 @@
                         VerticalAlignment="Center"
                         FontWeight="SemiBold"
                         Text="{x:Bind ViewModel.Organization, Mode=OneWay}" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        AutomationProperties.AccessibilityView="Raw"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="·" />
+                    <!-- Where the organization is: GitHub, or the host of the Gitea server. -->
+                    <TextBlock
+                        AutomationProperties.AutomationId="ChipPlaceText"
+                        VerticalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="{x:Bind ViewModel.PlaceName, Mode=OneWay}" />
                     <TextBlock
                         VerticalAlignment="Center"
                         AutomationProperties.AccessibilityView="Raw"
