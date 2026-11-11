@@ -3,17 +3,19 @@
  * SPDX-License-Identifier: MIT
  */
 
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Serialization;
+using gclo.Engine;
 
 namespace gclo.ViewModels;
 
 
 /// <summary>
-/// A saved connection profile: which GitHub organization to sync, where its clones
-/// live on disk, and how the sync runs. Metadata only — the access token is held
-/// separately in an <see cref="ITokenVault"/> (keyed by <see cref="Id"/>, or the
-/// default token when <see cref="TokenSource"/> says so) and is never serialized
-/// alongside the account.
+/// A saved connection profile: which organization to sync (on GitHub, or on a
+/// Gitea server), where its clones live on disk, and how the sync runs. Metadata
+/// only — the access token is held separately in an <see cref="ITokenVault"/> (keyed
+/// by <see cref="TokenEntryId"/>, or the default token when <see cref="TokenSource"/>
+/// says so) and is never serialized alongside the account.
 /// </summary>
 public sealed record Account
 {
@@ -34,6 +36,33 @@ public sealed record Account
    [JsonIgnore]
    public bool UsesDefaultToken => TokenSource == TokenSource.Default;
 
+   /// <summary>
+   /// The kind of forge the account is on. GitHub is the default, and is left out of
+   /// accounts.json, so files written before forges existed stay byte-identical and
+   /// a GitHub account written now reads the same in an older gclo. Set when the
+   /// account is added and not changed afterwards: see <see cref="AccountsStore.Save"/>.
+   /// </summary>
+   [JsonConverter(typeof(JsonStringEnumConverter<ForgeKind>))]
+   [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+   public ForgeKind Forge { get; init; } = ForgeKind.GitHub;
+
+   /// <summary>
+   /// The address of the account's server, for a forge that has no one well-known
+   /// host (Gitea); null for GitHub, and then left out of accounts.json. It is where
+   /// the account's token is sent, so it is set when the account is added and not
+   /// changed afterwards.
+   /// </summary>
+   [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+   public string? Server { get; init; }
+
+   /// <summary>
+   /// The vault entry that holds the account's own token: the account's id for a
+   /// GitHub account, another id for any other forge, so that a version of gclo
+   /// that knows only GitHub finds no token for it (see <see cref="AccountTokenEntry"/>).
+   /// </summary>
+   [JsonIgnore]
+   public Guid TokenEntryId => AccountTokenEntry.For(Id, Forge);
+
    /// <summary>Display name; unique across accounts (case-insensitive).</summary>
    public required string Name { get; init; }
 
@@ -47,7 +76,7 @@ public sealed record Account
       init => field = value ?? "";
    } = "";
 
-   /// <summary>GitHub organization (or user) whose repositories are synced.</summary>
+   /// <summary>The organization (or user account) whose repositories are synced.</summary>
    public required string Organization { get; init; }
 
    /// <summary>Folder the sync targets; see <see cref="CreateOrgSubfolder"/>.</summary>
@@ -80,4 +109,13 @@ public sealed record Account
 
    /// <summary>One-line outcome of the last sync, or null if it never ran.</summary>
    public string? LastSyncSummary { get; init; }
+
+
+
+   /// <summary>
+   /// Where the account lives, or the reason its forge and server cannot be used as
+   /// they are stored (a file edited by hand, or a forge this version does not know).
+   /// </summary>
+   public bool TryGetEndpoint([NotNullWhen(true)] out ForgeEndpoint? endpoint, [NotNullWhen(false)] out string? reason)
+       => ForgeEndpoint.TryCreate(Forge, Server, out endpoint, out reason);
 }

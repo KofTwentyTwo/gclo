@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+using gclo.Engine;
+
+
 namespace gclo.ViewModels;
 
 
@@ -35,9 +38,18 @@ public sealed class AccountTokenResolver
    public string? TryResolve(Account account)
    {
       ArgumentNullException.ThrowIfNull(account);
+      if(account.TokenSource == TokenSource.Default && account.Forge != ForgeKind.GitHub)
+      {
+         ///////////////////////////////////////////////////////////////////////////
+         // The default token is a GitHub token. It is never handed to an account //
+         // on another forge, however such an account came to say it uses it.     //
+         ///////////////////////////////////////////////////////////////////////////
+         return null;
+      }
+
       string? token = account.TokenSource == TokenSource.Default
           ? _vault.TryRetrieve(AppSettings.DefaultTokenVaultId)
-          : _vault.TryRetrieve(account.Id);
+          : _vault.TryRetrieve(account.TokenEntryId);
       return string.IsNullOrEmpty(token) ? null : token;
    }
 
@@ -57,8 +69,12 @@ public sealed class AccountTokenResolver
    public string MissingDescription(Account account)
    {
       ArgumentNullException.ThrowIfNull(account);
-      return account.TokenSource == TokenSource.Default
-          ? "uses the default token, but no default token is saved (desktop app: Settings)"
-          : $"has no token in {_vault.DescribeEntry(account.Id)}";
+      if(account.TokenSource == TokenSource.Default)
+      {
+         return account.Forge == ForgeKind.GitHub
+             ? "uses the default token, but no default token is saved (desktop app: Settings)"
+             : "is set to use the default token, which is a GitHub token and is not used for another forge; give the account a token of its own";
+      }
+      return $"has no token in {_vault.DescribeEntry(account.TokenEntryId)}";
    }
 }

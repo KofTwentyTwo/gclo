@@ -30,25 +30,33 @@ internal static class AccountsCommand
                gclo accounts edit --name <name> [options] [token option]
                gclo accounts remove --name <name>
 
-        An account pairs sync settings (organization, target root, parallelism,
-        org-subfolder preference, description) with a token stored in Windows
-        Credential Manager. Use one with 'gclo sync --account <name>'. Because the
-        token lives in Windows Credential Manager, accounts only work on Windows.
+        An account pairs sync settings (organization, where it lives, target root,
+        parallelism, org-subfolder preference, description) with a token stored in
+        Windows Credential Manager. Use one with 'gclo sync --account <name>'.
+        Because the token lives in Windows Credential Manager, accounts only work
+        on Windows.
 
         list (default)
           Prints the accounts, one per line, in aligned columns: name,
-          organization, target root, token source ('own' or 'default'), and last
-          sync time (local time, 'never' when the account has not completed a
-          sync yet).
+          organization, where it lives ('GitHub', or the host of a Gitea server),
+          target root, token source ('own' or 'default'), and last sync time
+          (local time, 'never' when the account has not completed a sync yet).
           --json    Print a single-line JSON array instead:
                     [{"id":"...","name":"...","description":"...","organization":"...",
                       "targetRoot":"...","createOrgSubfolder":bool,"maxConcurrency":N,
                       "lastSync":"2026-07-04T15:30:00+00:00"|null,"lastSyncSummary":"..."|null,
-                      "tokenSource":"own"|"default"}]
+                      "tokenSource":"own"|"default","forge":"github"|"gitea",
+                      "server":"https://git.example.com/"|null}]
 
         add
           --name <name>          Display name; must be unique (case-insensitive).
-          --org <name>           GitHub organization or user account to sync.
+          --org <name>           Organization or user account to sync.
+          --forge <kind>         Where the organization lives: github (the default)
+                                 or gitea (a Gitea or Forgejo server; needs --server).
+          --server <address>     The address of the Gitea server, for example
+                                 https://git.example.com. HTTPS only: it is where
+                                 the token is sent. Implies --forge gitea. Both are
+                                 fixed once the account is added.
           --target <folder>      Target root folder. A relative folder is stored as
                                  a full path, resolved against the current directory.
           --parallel <N>         Parallel clone/pull count, 1-64 (default 8).
@@ -56,11 +64,14 @@ internal static class AccountsCommand
           --description <text>   Optional note.
           --token-env <VAR> | --token-file <path> | --token-stdin
                                  The token to store (default: the GITHUB_TOKEN
-                                 environment variable). Never pass it as an argument.
+                                 environment variable, or GITEA_TOKEN for a Gitea
+                                 server). Never pass it as an argument.
           --use-default-token    Instead of a token of its own, the account uses
                                  the default token saved in the desktop app's
                                  Settings, read whenever it syncs, so replacing
                                  the default token there updates this account too.
+                                 GitHub accounts only: the default token is a
+                                 GitHub token.
 
         edit
           --name <name>          The account to change (required).
@@ -75,6 +86,9 @@ internal static class AccountsCommand
                                  without a token option the token is left untouched.
           --use-default-token    Switch the account to the default token; its own
                                  token is removed from Windows Credential Manager.
+                                 GitHub accounts only.
+          The forge and the server of an account cannot be changed: its token was
+          saved for that place. Remove the account and add it again.
 
         remove
           --name <name>          Deletes the account's settings and its stored
@@ -155,7 +169,8 @@ internal static class AccountsCommand
             IReadOnlyList<AccountSummary> summaries = accounts
                 .Select(a => new AccountSummary(
                     a.Id.ToString("N"), a.Name, a.Description, a.Organization, a.TargetRoot,
-                    a.CreateOrgSubfolder, a.MaxConcurrency, a.LastSyncUtc, a.LastSyncSummary, TokenSourceLabel(a)))
+                    a.CreateOrgSubfolder, a.MaxConcurrency, a.LastSyncUtc, a.LastSyncSummary, TokenSourceLabel(a),
+                    ForgeLabel(a.Forge), a.Server))
                 .ToList();
             Terminal.OutVerbatim(JsonSerializer.Serialize(
                 summaries, CliJsonContext.Default.IReadOnlyListAccountSummary));
@@ -171,11 +186,12 @@ internal static class AccountsCommand
 
          int nameWidth = accounts.Max(a => a.Name.Length);
          int orgWidth = accounts.Max(a => a.Organization.Length);
+         int whereWidth = accounts.Max(a => Where(a).Length);
          int targetWidth = accounts.Max(a => a.TargetRoot.Length);
          foreach(Account account in accounts)
          {
             Terminal.Out(
-                $"{account.Name.PadRight(nameWidth)}  {account.Organization.PadRight(orgWidth)}  "
+                $"{account.Name.PadRight(nameWidth)}  {account.Organization.PadRight(orgWidth)}  {Where(account).PadRight(whereWidth)}  "
                 + $"{account.TargetRoot.PadRight(targetWidth)}  {TokenSourceLabel(account).PadRight(7)}  {FormatLastSync(account.LastSyncUtc)}");
          }
          return ExitCodes.Success;
@@ -207,11 +223,12 @@ internal static class AccountsCommand
       int parallel = AppSettings.DefaultConcurrency;
       bool orgSubfolder = false;
       var tokenOptions = new TokenOptions();
+      var forgeOptions = new ForgeOptions();
 
       var reader = new OptionReader(args);
       while(reader.MoveNext())
       {
-         if(tokenOptions.TryConsume(reader))
+         if(tokenOptions.TryConsume(reader) || forgeOptions.TryConsume(reader))
          {
             continue;
          }
@@ -258,13 +275,19 @@ internal static class AccountsCommand
       }
 
       string targetRoot = AbsoluteTarget(target);
+      ForgeEndpoint endpoint = forgeOptions.Resolve();
+      if(tokenOptions.UseDefault && endpoint.Kind != ForgeKind.GitHub)
+      {
+         throw new CliUsageException(
+             $"--use-default-token is for GitHub accounts: the default token is a GitHub token. Give the account on {endpoint} a token of its own.");
+      }
 
-      log.Info($"accounts add started: name='{name.Trim()}', org='{org.Trim()}', token={(tokenOptions.UseDefault ? "default" : "own")}");
+      log.Info($"accounts add started: name='{name.Trim()}', org='{org.Trim()}', forge={endpoint}, token={(tokenOptions.UseDefault ? "default" : "own")}");
       try
       {
          // The token (if the account gets one of its own) is read before the store
          // opens, so a bad token option fails without touching accounts.json.
-         string? token = tokenOptions.UseDefault ? null : tokenOptions.Resolve();
+         string? token = tokenOptions.UseDefault ? null : tokenOptions.Resolve(endpoint.Kind);
          (AccountsStore store, ITokenVault vault) = open(log);
          RequireDefaultTokenIfUsed(tokenOptions, vault);
          var account = new Account
@@ -277,9 +300,14 @@ internal static class AccountsCommand
             CreateOrgSubfolder = orgSubfolder,
             MaxConcurrency = parallel,
             TokenSource = tokenOptions.UseDefault ? TokenSource.Default : TokenSource.Own,
+            Forge = endpoint.Kind,
+            Server = endpoint.Server?.AbsoluteUri,
          };
          SaveOrFail(store, account, token);
-         Terminal.Out($"Account '{account.Name}' added" + (tokenOptions.UseDefault ? " (uses the default token)." : "."));
+         Terminal.Out(
+             $"Account '{account.Name}' added"
+             + (endpoint.Kind == ForgeKind.GitHub ? "" : $" on {endpoint}")
+             + (tokenOptions.UseDefault ? " (uses the default token)." : "."));
          return ExitCodes.Success;
       }
       catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
@@ -343,6 +371,10 @@ internal static class AccountsCommand
                reader.RejectValue();
                orgSubfolder = true;
                break;
+            case "--forge" or "--server":
+               throw new CliUsageException(
+                   "The forge and the server of an account cannot be changed: its token was saved for that place. "
+                   + "Remove the account and add it again.");
             case "--no-org-subfolder":
                reader.RejectValue();
                orgSubfolder = false;
@@ -373,8 +405,13 @@ internal static class AccountsCommand
       {
          (AccountsStore store, ITokenVault vault) = open(log);
          Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
+         if(tokenOptions.UseDefault && existing.Forge != ForgeKind.GitHub)
+         {
+            throw new CliErrorException(
+                $"Account '{existing.Name}' is on {Where(existing)}: the default token is a GitHub token, so it keeps a token of its own.");
+         }
          RequireDefaultTokenIfUsed(tokenOptions, vault);
-         string? token = tokenOptions.HasExplicitSource && !tokenOptions.UseDefault ? tokenOptions.Resolve() : null;
+         string? token = tokenOptions.HasExplicitSource && !tokenOptions.UseDefault ? tokenOptions.Resolve(existing.Forge) : null;
 
          // A token option decides the source: --use-default-token switches to the
          // default token (and drops the own entry); --token-* gives the account a
@@ -467,6 +504,17 @@ internal static class AccountsCommand
 
    /// <summary>'own' or 'default': the token source as the list column and the JSON field show it.</summary>
    private static string TokenSourceLabel(Account account) => account.UsesDefaultToken ? "default" : "own";
+
+
+
+   /// <summary>The forge as the JSON listing names it.</summary>
+   private static string ForgeLabel(ForgeKind forge) => forge == ForgeKind.GitHub ? "github" : "gitea";
+
+
+
+   /// <summary>Where an account lives, as the listing and messages name it: "GitHub", or the host of its server.</summary>
+   private static string Where(Account account)
+       => account.TryGetEndpoint(out ForgeEndpoint? endpoint, out _) ? endpoint.DisplayName : $"{ForgeLabel(account.Forge)} (not usable)";
 
 
 

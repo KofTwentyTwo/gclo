@@ -131,7 +131,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
       // Decided once: the choice is offered only when a default token exists at
       // open time, and the value itself is fetched again when a step needs it.
       HasDefaultToken = !string.IsNullOrWhiteSpace(defaultToken?.Invoke());
-      UseDefaultToken = existing is null ? HasDefaultToken : existing.UsesDefaultToken;
+      UseDefaultToken = existing is null ? HasDefaultToken : existing.UsesDefaultToken && existing.Forge == ForgeKind.GitHub;
 
       Step = 1;
       NameError = "";
@@ -215,7 +215,12 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// is shown: when a default token is saved, and also for an account that uses the
    /// default token while none is saved, which otherwise could not be given another.
    /// </summary>
-   public bool OffersTokenChoice => HasDefaultToken || _existing?.UsesDefaultToken == true;
+   /// <remarks>
+   /// Never for an account that is not on GitHub: the default token is a GitHub
+   /// token, and such an account has a token of its own.
+   /// </remarks>
+   public bool OffersTokenChoice
+       => (_existing?.Forge ?? ForgeKind.GitHub) == ForgeKind.GitHub && (HasDefaultToken || _existing?.UsesDefaultToken == true);
 
    /// <summary>
    /// <see cref="UseDefaultToken"/> as the selected index of a two-item radio group:
@@ -476,6 +481,10 @@ public sealed partial class AccountWizardViewModel : ObservableObject
       CreateOrgSubfolder = CreateOrgSubfolder,
       MaxConcurrency = Math.Clamp(MaxConcurrency, AppSettings.MinConcurrency, AppSettings.MaxConcurrency),
       TokenSource = UseDefaultToken ? TokenSource.Default : TokenSource.Own,
+
+      // An account stays on the forge and server it was added for: its token was saved for that place.
+      Forge = _existing?.Forge ?? ForgeKind.GitHub,
+      Server = _existing?.Server,
       LastSyncUtc = _existing?.LastSyncUtc,
       LastSyncSummary = _existing?.LastSyncSummary,
    };

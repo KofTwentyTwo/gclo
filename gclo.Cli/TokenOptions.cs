@@ -3,11 +3,14 @@
  * SPDX-License-Identifier: MIT
  */
 
+using gclo.Engine;
+
+
 namespace gclo.Cli;
 
 
 /// <summary>
-/// Collects and resolves the GitHub token source options shared by all commands.
+/// Collects and resolves the token source options shared by all commands.
 /// There is deliberately no plain '--token &lt;value&gt;' option: process command
 /// lines are visible to other processes on the machine (Task Manager, 'ps', WMI
 /// queries), so a token passed as an argument would leak to every local user and
@@ -16,8 +19,11 @@ namespace gclo.Cli;
 /// </summary>
 internal sealed class TokenOptions
 {
-   /// <summary>Environment variable consulted when no token option is given.</summary>
+   /// <summary>Environment variable consulted for GitHub when no token option is given.</summary>
    public const string DefaultVariable = "GITHUB_TOKEN";
+
+   /// <summary>Environment variable consulted for a Gitea server when no token option is given.</summary>
+   public const string GiteaVariable = "GITEA_TOKEN";
 
    private string? _envVariable;
 
@@ -86,11 +92,21 @@ internal sealed class TokenOptions
 
 
    /// <summary>
-   /// Resolves the token from the single configured source, or from the
-   /// <see cref="DefaultVariable"/> environment variable when none was given.
+   /// The environment variable that holds the token for <paramref name="forge"/> when
+   /// no token option is given. Each forge has its own: a token that is in the
+   /// environment for GitHub is never sent to a Gitea server because no option was
+   /// given, nor the other way round.
+   /// </summary>
+   public static string DefaultVariableFor(ForgeKind forge) => forge == ForgeKind.GitHub ? DefaultVariable : GiteaVariable;
+
+
+
+   /// <summary>
+   /// Resolves the token from the single configured source, or from the default
+   /// environment variable of <paramref name="forge"/> when none was given.
    /// Throws with an actionable message when the token is missing or empty.
    /// </summary>
-   public string Resolve()
+   public string Resolve(ForgeKind forge = ForgeKind.GitHub)
    {
       EnsureAtMostOneSource();
       if(_useDefault)
@@ -107,7 +123,7 @@ internal sealed class TokenOptions
       {
          return FromFile(_filePath);
       }
-      return FromEnvironment(_envVariable ?? DefaultVariable, wasExplicit: _envVariable is not null);
+      return FromEnvironment(_envVariable ?? DefaultVariableFor(forge), wasExplicit: _envVariable is not null);
    }
 
 

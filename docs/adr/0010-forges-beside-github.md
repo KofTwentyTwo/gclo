@@ -69,6 +69,30 @@ were the two lister implementations and the failure type they throw.
   whatever the name is; the account path is tried then as well, so such a token
   still lists its own account.
 
+### Accounts and the command line (#204)
+
+- **An account names its forge and, for Gitea, its server.** Both are left out of
+  `accounts.json` when they are the default, so files written before stay as they
+  are and a GitHub account written now reads the same in an older gclo.
+- **A token stays with the place it was saved for.** The forge and the server of
+  an account are set when it is added and cannot be changed by an edit, in the
+  app or on the command line: to move an account, it is removed and added again,
+  and its token is entered for the new place. `gclo sync --account` takes no
+  `--forge` or `--server`.
+- **An older gclo must not send a Gitea token to GitHub.** A version from before
+  forges reads every account as a GitHub account and looks its token up under the
+  account's id. The token of an account that is not on GitHub is therefore kept
+  under another entry (the id combined with a fixed value): to the older version
+  the account has no token, and it says so.
+- **Tokens do not cross forges by default.** The default token saved in Settings
+  is a GitHub token: an account on another forge has a token of its own, and is
+  never handed the default one, whatever its record says. On the command line
+  each forge has its own default variable (`GITHUB_TOKEN`, `GITEA_TOKEN`).
+- **One place pairs an account with its listers** (`AccountListers`, over
+  `ForgeEndpoint`), used by the app and the command line. An account whose stored
+  forge or server cannot be used (a file edited by hand) gets listers that ask no
+  server anything and fail with the reason.
+
 ## Alternatives considered
 
 - **A Gitea client package.** One more dependency to track and to trust with the
@@ -79,6 +103,9 @@ were the two lister implementations and the failure type they throw.
   address also makes such a server work.
 - **Following redirects on the same host.** Simpler to refuse them all than to
   decide which are the same host.
+- **Letting an edit change an account's server**, with the token entered again.
+  The rule "the token is asked for again" would have to hold in the wizard, the
+  command line and the store; "it cannot be changed" holds in the store alone.
 - **Allowing `http://` for a server on a local network, or a switch to accept any
   certificate.** Both put the token on the wire, or in the hands of whoever answers,
   in exactly the setups where nobody is watching. The supported route for a private

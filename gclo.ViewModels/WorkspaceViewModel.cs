@@ -126,10 +126,11 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
        AccountsStore? accountsStore = null,
        IWslCloner? wsl = null)
    {
-      _lister = lister ?? new GitHubRepositoryLister();
+      // Without listers of its own, a workspace gets those of its account's forge: Quick Sync is GitHub.
+      _lister = lister ?? (account is null ? new GitHubRepositoryLister() : AccountListers.RepositoryListerFor(account));
       _git = git ?? new LibGit2GitClient();
       _wsl = wsl ?? new WslCloner();
-      _orgLister = orgLister ?? new GitHubOrganizationLister();
+      _orgLister = orgLister ?? (account is null ? new GitHubOrganizationLister() : AccountListers.OrganizationListerFor(account));
       _progressFactory = progressFactory ?? DefaultProgress;
       _orgLookupDebounce = orgLookupDebounce ?? TimeSpan.FromMilliseconds(600);
       _log = log ?? new FileActivityLog(GcloPaths.LogDirectory);

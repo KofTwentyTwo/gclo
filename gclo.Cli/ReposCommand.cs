@@ -22,7 +22,12 @@ internal static class ReposCommand
         selection before syncing, or to feed a script.
 
         Options:
-          --org <name>         GitHub organization or user account (required).
+          --org <name>         Organization or user account (required).
+          --forge <kind>       Where the organization lives: github (the default) or
+                               gitea (a Gitea or Forgejo server; needs --server).
+          --server <address>   The address of the Gitea server, for example
+                               https://git.example.com. HTTPS only: it is where the
+                               token is sent. Implies --forge gitea.
           --include <glob>     Only repositories whose name matches the pattern
                                ('*' and '?' wildcards, case-insensitive). Repeatable;
                                a repository matches when any include matches.
@@ -30,7 +35,8 @@ internal static class ReposCommand
                                applied after --include.
           --skip-archived      Drop archived repositories.
           --token-env <VAR>    Read the token from environment variable VAR
-                               (default: GITHUB_TOKEN when no token option is given).
+                               (default when no token option is given: GITHUB_TOKEN,
+                               or GITEA_TOKEN for a Gitea server; never the other's).
           --token-file <path>  Read the token from the first non-blank line of a file.
           --token-stdin        Read the token as one line from standard input.
           --json               Print a single-line JSON array instead:
@@ -42,31 +48,40 @@ internal static class ReposCommand
           1  canceled (Ctrl+C)
           2  fatal: bad arguments, missing token, organization not found
           3  the token was rejected or may not see the organization
-          4  rate limit, network failure, timeout, or an error on GitHub's side; retry later
+          4  rate limit, network failure, timeout, or an error on the server's side; retry later
         """;
 
 
 
-   /// <summary>Composition root: wires the real GitHub lister and file log.</summary>
+   /// <summary>Composition root: wires the real listers of the forge the options name, and the file log.</summary>
    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage(
        Justification = "Wires the real network lister and file log; delegates to the covered core.")]
    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
-       => RunAsync(args, new GitHubRepositoryLister(), new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory), cancellationToken);
+       => RunAsync(
+           args, endpoint => endpoint.CreateRepositoryLister(), new FileActivityLog(gclo.ViewModels.GcloPaths.LogDirectory), cancellationToken);
+
+
+
+   /// <summary>The command with one lister, whatever forge the options name.</summary>
+   internal static Task<int> RunAsync(
+       string[] args, IRepositoryLister lister, IActivityLog log, CancellationToken cancellationToken)
+       => RunAsync(args, _ => lister, log, cancellationToken);
 
 
 
    internal static async Task<int> RunAsync(
-       string[] args, IRepositoryLister lister, IActivityLog log, CancellationToken cancellationToken)
+       string[] args, Func<ForgeEndpoint, IRepositoryLister> listers, IActivityLog log, CancellationToken cancellationToken)
    {
       string? org = null;
       bool json = false;
       var filter = new RepoFilterSpec();
       var tokenOptions = new TokenOptions();
+      var forgeOptions = new ForgeOptions();
 
       var reader = new OptionReader(args);
       while(reader.MoveNext())
       {
-         if(tokenOptions.TryConsume(reader))
+         if(tokenOptions.TryConsume(reader) || forgeOptions.TryConsume(reader))
          {
             continue;
          }
@@ -102,16 +117,17 @@ internal static class ReposCommand
          throw new CliUsageException("--org is required.");
       }
 
-      log.Info($"repos started: org='{org}', filters={filter}, json={json}");
+      ForgeEndpoint endpoint = forgeOptions.Resolve();
+      log.Info($"repos started: org='{org}', forge={endpoint}, filters={filter}, json={json}");
 
       try
       {
-         string token = tokenOptions.Resolve();
+         string token = tokenOptions.Resolve(endpoint.Kind);
 
          IReadOnlyList<RepoDescriptor> repositories;
          try
          {
-            repositories = await lister
+            repositories = await listers(endpoint)
                 .ListOrganizationRepositoriesAsync(org.Trim(), token, cancellationToken)
                 .ConfigureAwait(false);
          }

@@ -171,6 +171,7 @@ public sealed class AccountsStore
          RefreshForAChange();
 
          account = ReconcileWithTheFile(account, knownBefore);
+         account = WithItsForgeChecked(account);
 
          bool nameTaken = _accounts.Any(a =>
              a.Id != account.Id
@@ -214,8 +215,8 @@ public sealed class AccountsStore
 
          // Vault first: a failing Store leaves the vault exactly as it was (the
          // previous token, if any, is still there), and nothing else has changed.
-         string? previousToken = _vault.TryRetrieve(account.Id);
-         _vault.Store(account.Id, token);
+         string? previousToken = _vault.TryRetrieve(account.TokenEntryId);
+         _vault.Store(account.TokenEntryId, token);
 
          try
          {
@@ -228,11 +229,11 @@ public sealed class AccountsStore
             {
                if(previousToken is null)
                {
-                  _vault.Delete(account.Id);
+                  _vault.Delete(account.TokenEntryId);
                }
                else
                {
-                  _vault.Store(account.Id, previousToken);
+                  _vault.Store(account.TokenEntryId, previousToken);
                }
             }
             catch(Exception compensationFailure)
@@ -266,10 +267,10 @@ public sealed class AccountsStore
    /// </summary>
    private void SaveUsingDefaultToken(List<Account> updated, Account account, string verb)
    {
-      string? ownToken = _vault.TryRetrieve(account.Id);
+      string? ownToken = _vault.TryRetrieve(account.TokenEntryId);
       if(ownToken is not null)
       {
-         _vault.Delete(account.Id);
+         _vault.Delete(account.TokenEntryId);
       }
       try
       {
@@ -283,7 +284,7 @@ public sealed class AccountsStore
          }
          try
          {
-            _vault.Store(account.Id, ownToken);
+            _vault.Store(account.TokenEntryId, ownToken);
          }
          catch(Exception compensationFailure)
          {
@@ -339,12 +340,14 @@ public sealed class AccountsStore
          {
             return;
          }
-         string name = _accounts.First(a => a.Id == id).Name;
+         Account removed = _accounts.First(a => a.Id == id);
+         string name = removed.Name;
+         Guid entry = removed.TokenEntryId;
 
          // Vault first: a failing Delete leaves both stores untouched. Keep the
          // token in memory only long enough to put it back if the file write fails.
-         string? removedToken = _vault.TryRetrieve(id);
-         _vault.Delete(id);
+         string? removedToken = _vault.TryRetrieve(entry);
+         _vault.Delete(entry);
 
          try
          {
@@ -359,7 +362,7 @@ public sealed class AccountsStore
 
             try
             {
-               _vault.Store(id, removedToken);
+               _vault.Store(entry, removedToken);
             }
             catch(Exception compensationFailure)
             {
@@ -491,6 +494,62 @@ public sealed class AccountsStore
           ? account with { LastSyncUtc = onDisk.LastSyncUtc, LastSyncSummary = onDisk.LastSyncSummary }
           : account;
    }
+
+
+
+   /// <summary>
+   /// What a save writes for <paramref name="account"/> as far as its forge goes, or
+   /// a refusal. The forge and the server of an account say where its token is sent:
+   /// </summary>
+   /// <remarks>
+   /// <list type="bullet">
+   /// <item>They have to be usable (<see cref="Account.TryGetEndpoint"/>), and the
+   /// server is written the way it was normalized.</item>
+   /// <item>They are set when the account is added and cannot be changed by a save.
+   /// A token that was saved for one server is not sent to another because somebody
+   /// edited the address; the account is deleted and added again, with its token
+   /// entered for the new place.</item>
+   /// <item>The default token is a GitHub token: an account on another forge has a
+   /// token of its own.</item>
+   /// </list>
+   /// </remarks>
+   private Account WithItsForgeChecked(Account account)
+   {
+      if(!account.TryGetEndpoint(out ForgeEndpoint? endpoint, out string? reason))
+      {
+         throw new ArgumentException($"Account '{account.Name}' cannot be saved: {reason}.", nameof(account));
+      }
+      account = account with { Server = endpoint.Server?.AbsoluteUri };
+
+      Account? onDisk = _accounts.FirstOrDefault(a => a.Id == account.Id);
+      if(onDisk is not null
+          && (onDisk.Forge != account.Forge || !string.Equals(onDisk.Server, account.Server, StringComparison.Ordinal)))
+      {
+         throw new ArgumentException(
+             $"Account '{onDisk.Name}' is on {DescribeForge(onDisk)}, and that cannot be changed: its token was saved for that place. "
+             + "Delete the account and add it again for the other one.",
+             nameof(account));
+      }
+
+      if(account.UsesDefaultToken && account.Forge != ForgeKind.GitHub)
+      {
+         throw new ArgumentException(
+             $"Account '{account.Name}' is on {endpoint.DisplayName}; the default token is a GitHub token, so the account needs a token of its own.",
+             nameof(account));
+      }
+      return account;
+   }
+
+
+
+   /// <summary>
+   /// How a message names the place an account is on, also when what is stored cannot
+   /// be used. Such an address is not repeated: it may hold a password or a token.
+   /// </summary>
+   private static string DescribeForge(Account account)
+       => account.TryGetEndpoint(out ForgeEndpoint? endpoint, out _)
+           ? endpoint.DisplayName
+           : $"{account.Forge}, at an address that cannot be used";
 
 
 
