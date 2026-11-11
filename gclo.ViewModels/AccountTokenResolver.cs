@@ -38,25 +38,24 @@ public sealed class AccountTokenResolver
    public string? TryResolve(Account account)
    {
       ArgumentNullException.ThrowIfNull(account);
-      if(account.TokenSource == TokenSource.Default && account.Forge != ForgeKind.GitHub)
+      if(account.TokenSource == TokenSource.Default)
       {
          ///////////////////////////////////////////////////////////////////////////
-         // The default token is a GitHub token. It is never handed to an account //
-         // on another forge, however such an account came to say it uses it.     //
+         // The default token of the place the account is on, and of no other: it //
+         // is looked up by that place. An account whose place cannot be used has //
+         // none.                                                                  //
          ///////////////////////////////////////////////////////////////////////////
-         return null;
+         return account.TryGetEndpoint(out ForgeEndpoint? place, out _) ? DefaultTokens.For(_vault, place) : null;
       }
 
-      string? token = account.TokenSource == TokenSource.Default
-          ? _vault.TryRetrieve(AppSettings.DefaultTokenVaultId)
-          : _vault.TryRetrieve(account.TokenEntryId);
+      string? token = _vault.TryRetrieve(account.TokenEntryId);
       return string.IsNullOrEmpty(token) ? null : token;
    }
 
 
 
-   /// <summary>True when the vault holds a default token.</summary>
-   public bool HasDefaultToken => !string.IsNullOrEmpty(_vault.TryRetrieve(AppSettings.DefaultTokenVaultId));
+   /// <summary>True when the vault holds a default token for <paramref name="place"/>.</summary>
+   public bool HasDefaultTokenFor(ForgeEndpoint place) => DefaultTokens.For(_vault, place) is not null;
 
 
 
@@ -73,7 +72,7 @@ public sealed class AccountTokenResolver
       {
          return account.Forge == ForgeKind.GitHub
              ? "uses the default token, but no default token is saved (desktop app: Settings)"
-             : "is set to use the default token, which is a GitHub token and is not used for another forge; give the account a token of its own";
+             : $"uses the default token for {account.DescribePlace()}, but none is saved for it (desktop app: Settings)";
       }
       return $"has no token in {_vault.DescribeEntry(account.TokenEntryId)}";
    }

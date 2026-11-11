@@ -57,11 +57,13 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    private readonly Func<string?>? _storedToken;
 
    /// <summary>
-   /// Fetches the default token from Settings on demand (null, or returning null,
-   /// when none is saved). Read when step 2 validates or the account is saved with
-   /// "Use the default token"; never copied into <see cref="Token"/> (#102).
+   /// Fetches the default token saved in Settings for a place on demand (null, or
+   /// returning null, when none is saved for it). Read when step 2 validates or the
+   /// account is saved with "Use the default token"; never copied into
+   /// <see cref="Token"/> (#102). Always asked for the place the account is on: a
+   /// default token is not used for another place.
    /// </summary>
-   private readonly Func<string?>? _defaultToken;
+   private readonly Func<ForgeEndpoint, string?>? _defaultTokenOf;
 
 
 
@@ -81,7 +83,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
        Func<string?>? storedToken = null,
        IActivityLog? log = null,
        Func<string?>? defaultToken = null)
-       : this(store, orgLister, listerOf: null, existing, storedToken, defaultToken, log)
+       : this(store, orgLister, listerOf: null, existing, storedToken, OfTheOnePlace(defaultToken), log)
    {
       ArgumentNullException.ThrowIfNull(defaults);
 
@@ -118,8 +120,8 @@ public sealed partial class AccountWizardViewModel : ObservableObject
        Func<ForgeEndpoint, IOrganizationLister> listerOf,
        AppSettings defaults,
        IActivityLog? log = null,
-       Func<string?>? defaultToken = null)
-       : this(store, ListerOfGitHub(listerOf), listerOf, existing: null, storedToken: null, defaultToken, log)
+       Func<ForgeEndpoint, string?>? defaultTokenOf = null)
+       : this(store, ListerOfGitHub(listerOf), listerOf, existing: null, storedToken: null, defaultTokenOf, log)
    {
       ArgumentNullException.ThrowIfNull(defaults);
       TargetRoot = defaults.DefaultTargetFolder;
@@ -138,7 +140,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    public AccountWizardViewModel(
        AccountsStore store, IOrganizationLister orgLister, AccountWizardSeed seed, IActivityLog? log = null,
        Func<string?>? defaultToken = null)
-       : this(store, orgLister, listerOf: null, existing: null, storedToken: null, defaultToken, log)
+       : this(store, orgLister, listerOf: null, existing: null, storedToken: null, OfTheOnePlace(defaultToken), log)
    {
       ArgumentNullException.ThrowIfNull(seed);
       Name = "";
@@ -147,12 +149,12 @@ public sealed partial class AccountWizardViewModel : ObservableObject
       // The account is where the connection was: its token was used with that place.
       _chosen = seed.Place ?? ForgeEndpoint.GitHub;
 
-      // A Quick Sync connection that runs on the default token becomes a
-      // default-token account; any other token is the account's own. Compared in
-      // memory only; neither value is logged. The default token is a GitHub token.
-      UseDefaultToken = HasDefaultToken
-          && _chosen.Kind == ForgeKind.GitHub
-          && string.Equals(seed.Token.Trim(), _defaultToken?.Invoke()?.Trim(), StringComparison.Ordinal);
+      // A Quick Sync connection that runs on the default token of its place becomes
+      // a default-token account; any other token is the account's own. Compared in
+      // memory only; neither value is logged.
+      string ofThePlace = DefaultTokenNow();
+      HasDefaultToken = ofThePlace.Length > 0;
+      UseDefaultToken = HasDefaultToken && string.Equals(seed.Token.Trim(), ofThePlace, StringComparison.Ordinal);
       Organization = seed.Organization;
       TargetRoot = seed.TargetRoot;
       CreateOrgSubfolder = seed.CreateOrgSubfolder;
@@ -170,9 +172,19 @@ public sealed partial class AccountWizardViewModel : ObservableObject
 
 
 
+   /// <summary>
+   /// The default token of a wizard that is on one place for good (an edit, a saved
+   /// Quick Sync connection): what the caller gives is the default token of that
+   /// place.
+   /// </summary>
+   private static Func<ForgeEndpoint, string?>? OfTheOnePlace(Func<string?>? defaultToken)
+       => defaultToken is null ? null : _ => defaultToken();
+
+
+
    private AccountWizardViewModel(
        AccountsStore store, IOrganizationLister orgLister, Func<ForgeEndpoint, IOrganizationLister>? listerOf,
-       Account? existing, Func<string?>? storedToken, Func<string?>? defaultToken, IActivityLog? log)
+       Account? existing, Func<string?>? storedToken, Func<ForgeEndpoint, string?>? defaultTokenOf, IActivityLog? log)
    {
       ArgumentNullException.ThrowIfNull(store);
       ArgumentNullException.ThrowIfNull(orgLister);
@@ -183,11 +195,11 @@ public sealed partial class AccountWizardViewModel : ObservableObject
       _existing = existing;
       _existingPlace = existing is not null && existing.TryGetEndpoint(out ForgeEndpoint? place, out _) ? place : null;
       _storedToken = existing is null ? null : storedToken;
-      _defaultToken = defaultToken;
-      // Decided once: the choice is offered only when a default token exists at
-      // open time, and the value itself is fetched again when a step needs it.
-      HasDefaultToken = !string.IsNullOrWhiteSpace(defaultToken?.Invoke());
-      UseDefaultToken = existing is null ? HasDefaultToken : existing.UsesDefaultToken && existing.Forge == ForgeKind.GitHub;
+      _defaultTokenOf = defaultTokenOf;
+      // Decided when the place is: the choice is offered only when a default token
+      // exists for it then, and the value itself is fetched again when a step needs it.
+      HasDefaultToken = DefaultTokenNow().Length > 0;
+      UseDefaultToken = existing is null ? HasDefaultToken : existing.UsesDefaultToken;
 
       Step = 1;
       NameError = "";
@@ -334,10 +346,11 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    public partial bool IsValidatingToken { get; set; }
 
    /// <summary>
-   /// True when a default token was saved in Settings when the wizard opened, which
-   /// is when step 2 offers the choice between it and a token of the account's own.
+   /// True when a default token was saved in Settings for the place the account is
+   /// on, when the wizard opened or when step 1 took the place: that is when step 2
+   /// offers the choice between it and a token of the account's own.
    /// </summary>
-   public bool HasDefaultToken { get; }
+   public bool HasDefaultToken { get; private set; }
 
    /// <summary>
    /// Step 2's choice: true means the account resolves to the default token from
@@ -360,11 +373,10 @@ public sealed partial class AccountWizardViewModel : ObservableObject
    /// default token while none is saved, which otherwise could not be given another.
    /// </summary>
    /// <remarks>
-   /// Never for an account that is not on GitHub: the default token is a GitHub
-   /// token, and such an account has a token of its own.
+   /// The default token is the one of the place the account is on. A place that has
+   /// none offers no choice: the account has a token of its own.
    /// </remarks>
-   public bool OffersTokenChoice
-       => PlaceKind == ForgeKind.GitHub && (HasDefaultToken || _existing?.UsesDefaultToken == true);
+   public bool OffersTokenChoice => HasDefaultToken || _existing?.UsesDefaultToken == true;
 
    /// <summary>
    /// <see cref="UseDefaultToken"/> as the selected index of a two-item radio group:
@@ -389,7 +401,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
             return "No default token is saved right now. Save one in Settings, or give this account a token of its own.";
          }
 
-         int others = _store.CountUsingDefaultToken() - (_existing?.UsesDefaultToken == true ? 1 : 0);
+         int others = (Place is { } place ? _store.UsingDefaultTokenOf(place).Count : 0) - (_existing?.UsesDefaultToken == true ? 1 : 0);
          string shared = others switch
          {
             0 => "Used by Quick Sync.",
@@ -441,6 +453,14 @@ public sealed partial class AccountWizardViewModel : ObservableObject
 
    /// <summary>Dialog title matching the wizard's mode.</summary>
    public string Title => IsEditing ? "Edit account" : "Add account";
+
+
+
+   /// <summary>
+   /// The default token saved for the place the account is on, as it is right now;
+   /// empty when there is none, and for an account whose place cannot be used.
+   /// </summary>
+   private string DefaultTokenNow() => Place is { } place ? _defaultTokenOf?.Invoke(place)?.Trim() ?? "" : "";
 
 
 
@@ -523,22 +543,12 @@ public sealed partial class AccountWizardViewModel : ObservableObject
                // An edit with the box left empty validates the STORED token, fetched
                // here and used for this one call only.
                string candidate;
-               if(UseDefaultToken && PlaceKind != ForgeKind.GitHub)
-               {
-                  ///////////////////////////////////////////////////////////////////
-                  // The choice is not shown for such an account. Whatever set it, //
-                  // the default token is a GitHub token and is not sent anywhere  //
-                  // else.                                                         //
-                  ///////////////////////////////////////////////////////////////////
-                  TokenError = "The default token is a GitHub token. This account needs a token of its own.";
-                  return false;
-               }
-
                if(UseDefaultToken)
                {
-                  // The default token is fetched for this one call only; the box
-                  // stays untouched (and disabled) so it is never shown or retained.
-                  candidate = _defaultToken?.Invoke()?.Trim() ?? "";
+                  // The default token of the place the account is on, and of no
+                  // other, fetched for this one call only; the box stays untouched
+                  // (and disabled) so it is never shown or retained.
+                  candidate = DefaultTokenNow();
                   if(candidate.Length == 0)
                   {
                      TokenError = "The default token is no longer saved. Save one in Settings, "
@@ -653,7 +663,7 @@ public sealed partial class AccountWizardViewModel : ObservableObject
          // Another place than the one the wizard was on. What was entered for the   //
          // other place is not carried over: a token typed for one server is not     //
          // sent to another, and an organization of one is not one of the other. The //
-         // default token is a GitHub token, so it is not the choice anywhere else.  //
+         // default token on offer is the one saved for the new place, if any.        //
          //////////////////////////////////////////////////////////////////////////////
          _orgLister = listerOf(place); // first: if there is no lister for the place, the wizard stays on the one it has
          _chosen = place;
@@ -661,7 +671,10 @@ public sealed partial class AccountWizardViewModel : ObservableObject
          TokenError = "";
          Organizations.Clear();
          Organization = "";
-         UseDefaultToken = place.Kind == ForgeKind.GitHub && HasDefaultToken;
+         HasDefaultToken = DefaultTokenNow().Length > 0;
+         UseDefaultToken = HasDefaultToken;
+         OnPropertyChanged(nameof(HasDefaultToken));
+         OnPropertyChanged(nameof(DefaultTokenCaption));
          OnPropertyChanged(nameof(PlaceName));
          OnPropertyChanged(nameof(OffersTokenChoice));
          OnPropertyChanged(nameof(TokenHeader));

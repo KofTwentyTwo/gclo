@@ -138,13 +138,13 @@ public sealed class AccountsStoreTests : IDisposable
    public void CountUsingDefaultToken_CountsOnlyDefaultTokenAccounts()
    {
       AccountsStore store = NewStore();
-      Assert.Equal(0, store.CountUsingDefaultToken());
+      Assert.Empty(store.UsingDefaultTokenOf(ForgeEndpoint.GitHub));
       store.Save(MakeAccount("A") with { TokenSource = TokenSource.Default }, null);
       store.Save(MakeAccount("B") with { TokenSource = TokenSource.Default }, null);
       store.Save(MakeAccount("C"), "ghp_c");
 
-      Assert.Equal(2, store.CountUsingDefaultToken());
-      Assert.Equal(2, NewStore().CountUsingDefaultToken());
+      Assert.Equal(2, store.UsingDefaultTokenOf(ForgeEndpoint.GitHub).Count);
+      Assert.Equal(2, NewStore().UsingDefaultTokenOf(ForgeEndpoint.GitHub).Count);
    }
 
    // ---------------------------------------------------------------- persistence

@@ -735,14 +735,14 @@ public sealed class AccountFilesTests : IDisposable
    // ---------------------------------------------------------------- the wizard
 
    [Fact]
-   public async Task TheWizard_NeverSendsTheDefaultTokenToAnAccountOnAnotherForge_WhateverSetTheChoice()
+   public async Task TheWizard_SendsNoDefaultTokenToAnAccountWhoseServerHasNone_WhateverSetTheChoice()
    {
-      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default"); // GitHub's: the wizard of this account is not given it
       Account forge = GiteaAccount();
       AccountsStore store = NewStore();
       store.Save(forge, "gitea_token");
       var lister = new FakeOrganizationLister();
-      var wizard = new AccountWizardViewModel(store, lister, new AppSettings(), forge, () => "gitea_token", defaultToken: () => "ghp_default");
+      var wizard = new AccountWizardViewModel(store, lister, new AppSettings(), forge, () => "gitea_token", defaultToken: () => null);
 
       wizard.TokenChoiceIndex = 0; // the choice is not shown for this account; this sets it all the same
       Assert.True(await wizard.TryAdvanceAsync());
@@ -750,7 +750,9 @@ public sealed class AccountFilesTests : IDisposable
       Assert.False(await wizard.TryAdvanceAsync());
 
       Assert.Equal(2, wizard.Step);
-      Assert.Equal("The default token is a GitHub token. This account needs a token of its own.", wizard.TokenError);
+      Assert.Equal(
+          "The default token is no longer saved. Save one in Settings, or use a different token for this account.",
+          wizard.TokenError);
       Assert.Equal(0, lister.Calls);
    }
 }

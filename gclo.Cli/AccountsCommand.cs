@@ -70,8 +70,9 @@ internal static class AccountsCommand
                                  the default token saved in the desktop app's
                                  Settings, read whenever it syncs, so replacing
                                  the default token there updates this account too.
-                                 GitHub accounts only: the default token is a
-                                 GitHub token.
+                                 It is the default token of the place the account
+                                 is on (GitHub, or its Gitea server): one has to
+                                 be saved for that place.
 
         edit
           --name <name>          The account to change (required).
@@ -84,9 +85,9 @@ internal static class AccountsCommand
                                  Replace the stored token (and switch an account
                                  on the default token to a token of its own);
                                  without a token option the token is left untouched.
-          --use-default-token    Switch the account to the default token; its own
-                                 token is removed from Windows Credential Manager.
-                                 GitHub accounts only.
+          --use-default-token    Switch the account to the default token of the
+                                 place it is on; its own token is removed from
+                                 Windows Credential Manager.
           The forge and the server of an account cannot be changed: its token was
           saved for that place. Remove the account and add it again.
 
@@ -276,11 +277,6 @@ internal static class AccountsCommand
 
       string targetRoot = AbsoluteTarget(target);
       ForgeEndpoint endpoint = forgeOptions.Resolve();
-      if(tokenOptions.UseDefault && endpoint.Kind != ForgeKind.GitHub)
-      {
-         throw new CliUsageException(
-             $"--use-default-token is for GitHub accounts: the default token is a GitHub token. Give the account on {endpoint} a token of its own.");
-      }
 
       log.Info($"accounts add started: name='{name.Trim()}', org='{org.Trim()}', forge={endpoint}, token={(tokenOptions.UseDefault ? "default" : "own")}");
       try
@@ -289,7 +285,7 @@ internal static class AccountsCommand
          // opens, so a bad token option fails without touching accounts.json.
          string? token = tokenOptions.UseDefault ? null : tokenOptions.Resolve(endpoint.Kind);
          (AccountsStore store, ITokenVault vault) = open(log);
-         RequireDefaultTokenIfUsed(tokenOptions, vault);
+         RequireDefaultTokenIfUsed(tokenOptions, vault, endpoint);
          var account = new Account
          {
             Id = Guid.NewGuid(),
@@ -406,12 +402,16 @@ internal static class AccountsCommand
          (AccountsStore store, ITokenVault vault) = open(log);
          Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
          RefuseASharedName(store, existing.Name);
-         if(tokenOptions.UseDefault && existing.Forge != ForgeKind.GitHub)
+         tokenOptions.EnsureAtMostOneSource();
+         if(tokenOptions.UseDefault)
          {
-            throw new CliErrorException(
-                $"Account '{existing.Name}' is on {Where(existing)}: the default token is a GitHub token, so it keeps a token of its own.");
+            // The default token of the place the account is on; an account whose place cannot be used has none.
+            ForgeEndpoint place = existing.TryGetEndpoint(out ForgeEndpoint? where, out string? unusable)
+                ? where
+                : throw new CliErrorException(
+                    $"Account '{existing.Name}' cannot be used as it is saved: {unusable}. {existing.AdviceWhenUnusable("Remove")}");
+            RequireDefaultTokenIfUsed(tokenOptions, vault, place);
          }
-         RequireDefaultTokenIfUsed(tokenOptions, vault);
          string? token = tokenOptions.HasExplicitSource && !tokenOptions.UseDefault ? tokenOptions.Resolve(existing.Forge) : null;
 
          // A token option decides the source: --use-default-token switches to the
@@ -535,18 +535,19 @@ internal static class AccountsCommand
 
 
    /// <summary>
-   /// --use-default-token is only useful when a default token exists: without one
-   /// the account could never sync, so the command fails up front and says where
-   /// the default token is set (the CLI has no way to set it).
+   /// --use-default-token is only useful when a default token exists for the place
+   /// the account is on: without one the account could never sync, so the command
+   /// fails up front and says where the default token is set (the CLI has no way to
+   /// set it). A default token saved for another place does not count.
    /// </summary>
-   private static void RequireDefaultTokenIfUsed(TokenOptions tokenOptions, ITokenVault vault)
+   private static void RequireDefaultTokenIfUsed(TokenOptions tokenOptions, ITokenVault vault, ForgeEndpoint place)
    {
       tokenOptions.EnsureAtMostOneSource();
-      if(tokenOptions.UseDefault && !new AccountTokenResolver(vault).HasDefaultToken)
+      if(tokenOptions.UseDefault && !new AccountTokenResolver(vault).HasDefaultTokenFor(place))
       {
          throw new CliErrorException(
-             "No default token is saved, so the account could not sync. Save one in the desktop app "
-             + "(Settings > Default GitHub token), or give the account a token of its own with --token-env, "
+             $"No default token is saved for {place}, so the account could not sync. Save one in the desktop app "
+             + "(File > Settings), or give the account a token of its own with --token-env, "
              + "--token-file, or --token-stdin.");
       }
    }

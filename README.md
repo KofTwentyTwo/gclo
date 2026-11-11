@@ -81,7 +81,7 @@ gclo authenticates to GitHub with a personal access token — it is used for bot
 | Classic PAT | `repo` scope (read access to the org's repositories); optionally `read:org` so the organization dropdown / `gclo orgs` can list your orgs |
 | Fine-grained PAT | Repository read access for the organization |
 
-**Token storage.** In **Quick Sync**, the token is held in memory for the session only and never written anywhere. A **saved account's** token and the optional **default token** (Settings) are kept in the **Windows Credential Manager** (per-user, DPAPI-protected) — never in `settings.json`, `accounts.json`, or any log. See [SECURITY.md](SECURITY.md). A saved token is read at the moment it is used: replacing or removing the default token in Settings, or an account's token in its wizard, takes effect for the workspaces that are already open, without a restart. Quick Sync follows a changed default token only while its token box still holds the one Settings put there.
+**Token storage.** In **Quick Sync**, the token is held in memory for the session only and never written anywhere. A **saved account's** token and the optional **default tokens** (File > Settings: one for GitHub, and one for a Gitea server together with its address) are kept in the **Windows Credential Manager** (per-user, DPAPI-protected) — never in `settings.json`, `accounts.json`, or any log. See [SECURITY.md](SECURITY.md). A saved token is read at the moment it is used: replacing or removing the default token in Settings, or an account's token in its wizard, takes effect for the workspaces that are already open, without a restart. Quick Sync follows a changed default token only while its token box still holds the one Settings put there.
 
 ## Using the GUI
 

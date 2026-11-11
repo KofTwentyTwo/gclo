@@ -760,21 +760,21 @@ public sealed class QuickSyncPlaceTests : IDisposable
    {
       WorkspaceViewModel workspace = QuickSync();
 
-      workspace.OnDefaultTokenChanged(previous: null, current: "ghp_default_0123456789");
+      workspace.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: "ghp_default_0123456789");
       Assert.Equal("", workspace.Token); // no place was chosen yet
 
       workspace.PlaceIndex = 0;
-      workspace.OnDefaultTokenChanged(previous: null, current: "ghp_default_0123456789");
+      workspace.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: "ghp_default_0123456789");
       Assert.Equal("ghp_default_0123456789", workspace.Token);
 
       workspace.IsOnGitea = true;
       workspace.Server = Server;
-      workspace.OnDefaultTokenChanged(previous: null, current: "ghp_another_0123456789"); // the box is empty, as "previous" says
+      workspace.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: "ghp_another_0123456789"); // the box is empty, as "previous" says
 
       Assert.Equal("", workspace.Token); // a GitHub token: not for this place
 
       workspace.Server = "http://not-usable";
-      workspace.OnDefaultTokenChanged(previous: null, current: "ghp_another_0123456789");
+      workspace.OnDefaultTokenChanged(ForgeEndpoint.GitHub, previous: null, current: "ghp_another_0123456789");
 
       Assert.Equal("", workspace.Token);
    }
@@ -866,15 +866,19 @@ public sealed class QuickSyncPlaceTests : IDisposable
       Assert.Contains("Place = git.example.test", seed.ToString(), StringComparison.Ordinal);
       Assert.Contains("Place = GitHub", (seed with { Place = null }).ToString(), StringComparison.Ordinal);
 
-      // The wizard that saves it: on that place, with that place's lister, and never on the default token (a GitHub token).
+      // The wizard that saves it: on that place, with that place's lister. The server has no default token, so the
+      // account gets the token of the connection as its own.
       var vault = new InMemoryVault();
       var store = new AccountsStore(vault, _root);
-      var wizard = new AccountWizardViewModel(
-          store, ListersOf(s_gitea).Organizations, seed, defaultToken: () => "gitea-token-0123456789");
+      var wizard = new AccountWizardViewModel(store, ListersOf(s_gitea).Organizations, seed, defaultToken: () => null);
       Assert.False(wizard.CanChoosePlace);
       Assert.Equal("This account is on git.example.test.", wizard.PlaceNote);
       Assert.False(wizard.UseDefaultToken);
       Assert.False(wizard.OffersTokenChoice);
+
+      // Had the connection run on the default token of its server, the account would use that one.
+      Assert.True(new AccountWizardViewModel(
+          store, ListersOf(s_gitea).Organizations, seed, defaultToken: () => "gitea-token-0123456789").UseDefaultToken);
 
       wizard.Name = "Platform";
       while(wizard.Step < 4)

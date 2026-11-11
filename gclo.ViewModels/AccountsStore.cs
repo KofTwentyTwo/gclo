@@ -349,12 +349,18 @@ public sealed class AccountsStore
 
 
 
-   /// <summary>How many accounts resolve to the default token (Settings shows what a removal breaks).</summary>
-   public int CountUsingDefaultToken()
+   /// <summary>
+   /// The accounts that resolve to the default token of <paramref name="place"/>
+   /// (Settings shows what a removal breaks, the wizard how many share it).
+   /// </summary>
+   public IReadOnlyList<Account> UsingDefaultTokenOf(ForgeEndpoint place)
    {
+      ArgumentNullException.ThrowIfNull(place);
       lock(_gate)
       {
-         return _accounts.Count(a => a.UsesDefaultToken);
+         return _accounts
+             .Where(a => a.UsesDefaultToken && a.TryGetEndpoint(out ForgeEndpoint? where, out _) && where.Equals(place))
+             .ToList();
       }
    }
 
@@ -604,8 +610,6 @@ public sealed class AccountsStore
    /// A token that was saved for one server is not sent to another because somebody
    /// edited the address; the account is deleted and added again, with its token
    /// entered for the new place.</item>
-   /// <item>The default token is a GitHub token: an account on another forge has a
-   /// token of its own.</item>
    /// </list>
    /// </remarks>
    private Account WithItsForgeChecked(Account account)
@@ -634,13 +638,6 @@ public sealed class AccountsStore
          throw new ArgumentException(
              $"Account '{onDisk.Name}' is on {onDisk.DescribePlace()}, and that cannot be changed: its token was saved for that place. "
              + "Delete the account and add it again for the other one.",
-             nameof(account));
-      }
-
-      if(account.UsesDefaultToken && account.Forge != ForgeKind.GitHub)
-      {
-         throw new ArgumentException(
-             $"Account '{account.Name}' is on {endpoint.DisplayName}; the default token is a GitHub token, so the account needs a token of its own.",
              nameof(account));
       }
       return account;

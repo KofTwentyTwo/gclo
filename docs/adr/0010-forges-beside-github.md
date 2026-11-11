@@ -113,10 +113,11 @@ were the two lister implementations and the failure type they throw.
   hold for a file changed by hand: at another address the account has no token.
   The price: a token whose account was edited that way stays in Credential Manager
   under a name gclo no longer derives, until the address is put back.
-- **Tokens do not cross forges by default.** The default token saved in Settings
-  is a GitHub token: an account on another forge has a token of its own, and is
-  never handed the default one, whatever its record says. On the command line
-  each forge has its own default variable (`GITHUB_TOKEN`, `GITEA_TOKEN`).
+- **Tokens do not cross places by default.** A default token saved in Settings
+  belongs to one place (GitHub, or one Gitea server) and is never handed to an
+  account on another, whatever its record says: see "A default token per place"
+  below. On the command line each forge has its own default variable
+  (`GITHUB_TOKEN`, `GITEA_TOKEN`).
 - **One place pairs an account with its listers** (`AccountListers`, over
   `ForgeEndpoint`), used by the app and the command line. An account whose stored
   forge or server cannot be used (a file edited by hand) gets listers that ask no
@@ -137,8 +138,8 @@ were the two lister implementations and the failure type they throw.
   edit, a saved Quick Sync connection) offers no choice.
 - **What was entered for one place is not carried to another.** When step 1 is
   left with another place than before, the typed token, the organization and the
-  list of organizations are emptied, and the default token (a GitHub token) is
-  neither offered nor preselected for a Gitea server.
+  list of organizations are emptied, and the default token on offer is the one
+  saved for the new place, if there is one (#212).
 - **Texts follow the place.** The page a token is made on is the one of the
   chosen place (`ForgeTexts`); step 2 names the place the token is checked with.
 
@@ -172,6 +173,30 @@ matters most.
   then opens as on a first run, which costs a choice and nothing else.
 - **The app opens where it was left:** the workspace that was open last; with
   nothing recorded, the first account; with no account, Quick Sync.
+
+### A default token per place (#212)
+
+Settings held one default token, GitHub's, and the rule was "the default token is
+a GitHub token". With GitHub and Gitea as equal options it holds one for GitHub
+and one for a Gitea server, and the rule is: **a default token belongs to one
+place and is never used for another.**
+
+- **The rule is in the name of the vault entry**, not in a check somebody has to
+  remember: GitHub's entry is the one it always was; a Gitea server's is made
+  from the server's address (`DefaultTokens.EntryFor`). Asking for the default
+  token of a place finds the one saved for exactly that place, or none.
+- **Who asks:** Quick Sync, for the place on its card; an account that uses the
+  default token, for its own place (`AccountTokenResolver`); the wizard, for the
+  place of the account; `--use-default-token` on the command line, likewise. A
+  place that has none offers no such choice.
+- **The Gitea default is an address and a token, saved together.** Settings never
+  carries the saved token to another address: a changed address asks for the
+  token of the new server and removes the old one's; a refused address disables
+  Save. One default Gitea server: more servers are what accounts are for.
+- The address is in `settings.json` (`DefaultGiteaServer`); the token is in the
+  vault. An older gclo that rewrites `settings.json` drops the address: the token
+  stays in the vault under its entry and is found again once the address is
+  entered in Settings.
 
 ## Alternatives considered
 

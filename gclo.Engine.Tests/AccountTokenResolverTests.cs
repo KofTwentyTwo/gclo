@@ -114,11 +114,11 @@ public sealed class AccountTokenResolverTests
    public void HasDefaultToken_ReflectsTheVault()
    {
       var resolver = new AccountTokenResolver(_vault);
-      Assert.False(resolver.HasDefaultToken);
+      Assert.False(resolver.HasDefaultTokenFor(ForgeEndpoint.GitHub));
 
       _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
 
-      Assert.True(resolver.HasDefaultToken);
+      Assert.True(resolver.HasDefaultTokenFor(ForgeEndpoint.GitHub));
    }
 
 

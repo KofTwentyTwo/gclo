@@ -93,7 +93,7 @@ public sealed class SettingsTokenState
 
 
 
-   private string UsedBy() => DependentCount switch
+   internal string UsedBy() => DependentCount switch
    {
       0 => " and used by Quick Sync",
       1 => " and used by Quick Sync and 1 account",
@@ -102,7 +102,7 @@ public sealed class SettingsTokenState
 
 
 
-   private string RotationNote() => DependentCount switch
+   internal string RotationNote() => DependentCount switch
    {
       0 => "",
       1 => " The 1 account that uses it switches to the new token too.",
@@ -111,7 +111,7 @@ public sealed class SettingsTokenState
 
 
 
-   private string RemovalWarning()
+   internal string RemovalWarning()
    {
       if(DependentCount == 0)
       {

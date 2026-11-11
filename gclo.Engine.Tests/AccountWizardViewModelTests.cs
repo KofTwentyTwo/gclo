@@ -488,7 +488,7 @@ public sealed class AccountWizardViewModelTests : IDisposable
       Account saved = Assert.Single(_store.GetAll());
       Assert.True(saved.UsesDefaultToken);
       Assert.Null(_vault.TryRetrieve(saved.Id));
-      Assert.Equal(1, _store.CountUsingDefaultToken());
+      Assert.Single(_store.UsingDefaultTokenOf(ForgeEndpoint.GitHub));
    }
 
 

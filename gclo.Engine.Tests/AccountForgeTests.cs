@@ -144,14 +144,17 @@ public sealed class AccountForgeTests : IDisposable
    // ---------------------------------------------------------------- the default token is GitHub's
 
    [Fact]
-   public void TheDefaultToken_IsNeverGivenToAnAccountOnAnotherForge()
+   public void TheDefaultTokenOfGitHub_IsNeverGivenToAnAccountOnAGiteaServer()
    {
       _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
       var resolver = new AccountTokenResolver(_vault);
-      Account gitea = GiteaAccount() with { TokenSource = TokenSource.Default }; // as a file edited by hand could say
+      Account gitea = GiteaAccount() with { TokenSource = TokenSource.Default };
 
+      // A default token belongs to one place: the server has none, and GitHub's is not it.
       Assert.Null(resolver.TryResolve(gitea));
-      Assert.Contains("the default token, which is a GitHub token", resolver.MissingDescription(gitea), StringComparison.Ordinal);
+      Assert.Equal(
+          "uses the default token for git.example.test, but none is saved for it (desktop app: Settings)",
+          resolver.MissingDescription(gitea));
       Assert.Equal("ghp_default", resolver.TryResolve(GitHubAccount() with { TokenSource = TokenSource.Default }));
    }
 
@@ -171,14 +174,17 @@ public sealed class AccountForgeTests : IDisposable
 
 
    [Fact]
-   public void Save_AGiteaAccountOnTheDefaultToken_IsRefused()
+   public void Save_AGiteaAccountOnTheDefaultTokenOfItsServer_HasNoTokenOfItsOwn()
    {
       Account account = GiteaAccount() with { TokenSource = TokenSource.Default };
 
-      ArgumentException ex = Assert.Throws<ArgumentException>(() => NewStore().Save(account, token: null));
+      NewStore().Save(account, token: null);
 
-      Assert.Contains("is on git.example.test; the default token is a GitHub token", ex.Message, StringComparison.Ordinal);
-      Assert.Empty(NewStore().GetAll());
+      Account saved = Assert.Single(NewStore().GetAll());
+      Assert.Equal(TokenSource.Default, saved.TokenSource);
+      Assert.Equal(ForgeKind.Gitea, saved.Forge);
+      Assert.Null(_vault.TryRetrieve(saved.TokenEntryId));
+      Assert.Throws<ArgumentException>(() => NewStore().Save(account, "a token it has no place for")); // as for any account on a default token
    }
 
 
@@ -328,10 +334,11 @@ public sealed class AccountForgeTests : IDisposable
       Account account = GiteaAccount();
       AccountsStore store = NewStore();
       store.Save(account, "gitea_token");
+      // The wizard of an account is given the default token of the account's place: this server has none.
       var wizard = new AccountWizardViewModel(
-          store, new FakeOrganizationLister(), new AppSettings(), account, () => "gitea_token", defaultToken: () => "ghp_default");
+          store, new FakeOrganizationLister(), new AppSettings(), account, () => "gitea_token", defaultToken: () => null);
 
-      // The default token is a GitHub token: it is not on offer here.
+      // GitHub's default token is not on offer for an account on a Gitea server.
       Assert.False(wizard.OffersTokenChoice);
       Assert.False(wizard.UseDefaultToken);
 
@@ -352,15 +359,26 @@ public sealed class AccountForgeTests : IDisposable
 
 
    [Fact]
-   public void TheWizard_ForAnAccountOnAnotherForgeThatSaysDefaultToken_DoesNotPreselectIt()
+   public async Task TheWizard_ForAGiteaAccountOnTheDefaultToken_WhoseServerHasNone_SendsNothing_AndOffersATokenOfItsOwn()
    {
-      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
-      Account edited = GiteaAccount() with { TokenSource = TokenSource.Default }; // as a file edited by hand could say
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default"); // GitHub's: not this account's
+      Account account = GiteaAccount() with { TokenSource = TokenSource.Default };
+      var lister = new FakeOrganizationLister();
 
       var wizard = new AccountWizardViewModel(
-          NewStore(), new FakeOrganizationLister(), new AppSettings(), edited, () => null, defaultToken: () => "ghp_default");
+          NewStore(), lister, new AppSettings(), account, () => null, defaultToken: () => null);
 
-      Assert.False(wizard.UseDefaultToken);
-      Assert.False(wizard.OffersTokenChoice);
+      // It says it uses the default token, and there is none for its server: the choice is shown, so it can be given a token of its own.
+      Assert.True(wizard.UseDefaultToken);
+      Assert.True(wizard.OffersTokenChoice);
+      Assert.False(wizard.HasDefaultToken);
+
+      Assert.True(await wizard.TryAdvanceAsync());
+      Assert.False(await wizard.TryAdvanceAsync());
+
+      Assert.Equal(
+          "The default token is no longer saved. Save one in Settings, or use a different token for this account.",
+          wizard.TokenError);
+      Assert.Equal(0, lister.Calls);
    }
 }

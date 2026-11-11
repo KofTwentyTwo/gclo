@@ -1024,17 +1024,19 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IDisposable
    /// Sync follows only when its box still holds what Settings put there
    /// (<paramref name="previous"/>, or nothing): a token somebody typed stays.
    /// </summary>
+   /// <param name="place">The place whose default token changed.</param>
    /// <param name="previous">The default token before the change; null when there was none.</param>
    /// <param name="current">The default token now; null when there is none.</param>
-   public void OnDefaultTokenChanged(string? previous, string? current)
+   public void OnDefaultTokenChanged(ForgeEndpoint place, string? previous, string? current)
    {
+      ArgumentNullException.ThrowIfNull(place);
       if(_account is not null)
       {
          RefreshAccountToken();
       }
-      else if(_placeIsUsable && _quickSyncPlace.Kind == ForgeKind.GitHub && string.Equals(Token, previous ?? "", StringComparison.Ordinal))
+      else if(_placeIsUsable && _quickSyncPlace.Equals(place) && string.Equals(Token, previous ?? "", StringComparison.Ordinal))
       {
-         // The default token is a GitHub token: a Quick Sync that is on another place is not given it.
+         // The default token of one place: a Quick Sync that is on another place is not given it.
          SetTokenFromItsSource(current ?? "");
       }
    }
