@@ -280,6 +280,26 @@ public sealed class AccountWizardViewModelTests : IDisposable
 
 
 
+   [Theory]
+   [InlineData("")]
+   [InlineData("   ")]
+   public async Task TryAdvance_WithNoTokenTyped_AsksForOne_AndAsksNothingOfTheServer(string typed)
+   {
+      AccountWizardViewModel wizard = NewWizard();
+      wizard.Name = "Work";
+      await AdvanceToStepAsync(wizard, 2);
+      wizard.Token = typed;
+
+      Assert.False(await wizard.TryAdvanceAsync());
+
+      Assert.Equal(2, wizard.Step);
+      Assert.Equal("Enter a token to continue.", wizard.TokenError);
+      Assert.False(wizard.IsValidatingToken);
+      Assert.Equal(0, _orgs.Calls);
+   }
+
+
+
    [Fact]
    public async Task TryAdvance_RejectedToken_SetsTokenErrorAndStays()
    {

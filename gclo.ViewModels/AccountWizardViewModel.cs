@@ -368,6 +368,13 @@ public sealed partial class AccountWizardViewModel : ObservableObject
                         return false;
                      }
                   }
+                  else if(candidate.Length == 0)
+                  {
+                     // Nothing to check: say so here, instead of asking the server
+                     // and showing its argument error (#172).
+                     TokenError = "Enter a token to continue.";
+                     return false;
+                  }
                }
 
                IsValidatingToken = true;
