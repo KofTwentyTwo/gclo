@@ -1164,6 +1164,130 @@ public sealed partial class MainWindow : Window
 
 
 
+   /// <summary>
+   /// Help > Share gclo by email: hands an invitation (what gclo is, where to download
+   /// it, how to install it) to the user's email program as a
+   /// new message with no recipient, so they type an address and send. gclo sends
+   /// nothing itself. When no email program takes it, the text is shown, and copied
+   /// to the clipboard when the clipboard can be had, to be pasted into a message by
+   /// hand.
+   /// </summary>
+   private async void ShareMenuItem_Click(object sender, RoutedEventArgs e)
+   {
+      try
+      {
+         var invitation = ShareInvitation.Create(RepoUrl, BuildVersion.Describe(typeof(MainWindow).Assembly));
+
+         // The UI suite must not open an email program on the machine it runs on,
+         // nor touch the clipboard, which belongs to the whole desktop (it would
+         // overwrite what the person at the machine copied): under its fixture the
+         // invitation is only shown.
+         bool isUnderTest = UiTestFixture.IsEnabled;
+         if(!isUnderTest && invitation.FitsInALink && await TryOpenInEmailProgramAsync(invitation))
+         {
+            _log.Info("Share: the invitation was handed to the email program.");
+            return;
+         }
+
+         // When another program holds the clipboard the text is still shown, to be
+         // copied by hand; the dialog says which of the two it is.
+         bool copied = !isUnderTest && TryCopyToClipboard(invitation.AsPlainText);
+         ContentDialogResult? shown = await DialogGuard.ShowAsync(NewShareDialog(invitation, copied));
+         _log.Info(
+             (isUnderTest ? "Share: under the UI test fixture no email program is asked; " : "Share: no email program took the invitation; ")
+             + (copied ? "it was copied to the clipboard and " : "it was ")
+             + (shown is null ? "could not be shown, because another dialog is open." : "shown."));
+      }
+      catch(Exception ex)
+      {
+         // Nothing depends on this action; a failure is said in the log, not as a crash.
+         _log.Error($"Share: the invitation could not be opened ({ex.Message}).", ex);
+      }
+   }
+
+
+
+   /// <summary>
+   /// Asks Windows to open the invitation in the email program; false when none took
+   /// it, or when asking failed, which is said in the log and treated the same way.
+   /// </summary>
+   private async Task<bool> TryOpenInEmailProgramAsync(ShareInvitation invitation)
+   {
+      try
+      {
+         return await Windows.System.Launcher.LaunchUriAsync(invitation.MailtoUri);
+      }
+      catch(Exception ex)
+      {
+         _log.Error($"Share: the email program could not be asked ({ex.Message}).", ex);
+         return false;
+      }
+   }
+
+
+
+   /// <summary>Puts text on the clipboard; false, with a line in the log, when the clipboard cannot be had.</summary>
+   private bool TryCopyToClipboard(string text)
+   {
+      try
+      {
+         var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+         package.SetText(text);
+         Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+         // Hand the text over for good: without this it is gone when gclo closes.
+         Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
+         return true;
+      }
+      catch(Exception ex)
+      {
+         // Another program holds the clipboard: not worth failing the action for.
+         _log.Error($"Share: the invitation could not be copied to the clipboard ({ex.Message}).", ex);
+         return false;
+      }
+   }
+
+
+
+   /// <summary>The invitation as text to paste, for when no email program opened it.</summary>
+   /// <param name="invitation">The invitation to show.</param>
+   /// <param name="copied">True when the text is on the clipboard already; the dialog says which it is.</param>
+   private ContentDialog NewShareDialog(ShareInvitation invitation, bool copied)
+   {
+      // AcceptsReturn before Text: a box that takes one line keeps only the first
+      // line of what it is given, which here would be the subject and nothing else.
+      var text = new TextBox
+      {
+         AcceptsReturn = true,
+         TextWrapping = TextWrapping.Wrap,
+         IsReadOnly = true,
+         MaxHeight = 320,
+         Text = invitation.AsPlainText,
+      };
+      string explanation = copied
+          ? "No email program opened the invitation. It has been copied to the clipboard: paste it into a new message, add an address, and send."
+          : "No email program opened the invitation. Copy the text below into a new message, add an address, and send.";
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(text, "ShareInvitationText");
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(text, "Invitation text");
+      // Focus lands in the box: a screen reader then also says why the dialog is there.
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(text, explanation);
+      ScrollViewer.SetVerticalScrollBarVisibility(text, ScrollBarVisibility.Auto);
+
+      var panel = new StackPanel { Spacing = 12 };
+      panel.Children.Add(new TextBlock { Text = explanation, TextWrapping = TextWrapping.Wrap });
+      panel.Children.Add(text);
+
+      return new ContentDialog
+      {
+         Title = "Share gclo by email",
+         Content = panel,
+         CloseButtonText = "Close",
+         DefaultButton = ContentDialogButton.Close,
+         XamlRoot = Content.XamlRoot,
+      };
+   }
+
+
+
    /// <summary>Opens a page of the repository in the default browser; the log names the page, never a token.</summary>
    private async Task OpenRepositoryPageAsync(string path)
    {

@@ -95,6 +95,33 @@ public sealed partial class SmokeTests : UiTestBase
 
 
 
+   // Help -> Share gclo by email. Under the fixture the invitation is shown in the
+   // app instead of being handed to an email program, so the test can read it and
+   // nothing opens on the machine that runs the suite.
+   [Fact]
+   public void HelpMenu_Share_ShowsTheInvitation_WithTheDownloadLink()
+   {
+      Session.InvokeMenuItem("Help", "MenuShare");
+      try
+      {
+         AutomationElement text = Session.WaitForElement("ShareInvitationText");
+         string invitation = text.Patterns.Value.Pattern.Value.Value;
+
+         Assert.StartsWith("Subject: Try gclo", invitation, StringComparison.Ordinal);
+         Assert.Contains("https://github.com/KofTwentyTwo/gclo/releases/latest", invitation, StringComparison.Ordinal);
+         Assert.False(Session.App.HasExited);
+
+         Session.ClickButton("Close");
+         Session.WaitForElementGone("ShareInvitationText");
+      }
+      finally
+      {
+         Session.TryClickButton("Close"); // no-op when the happy path closed it
+      }
+   }
+
+
+
    // (5) Help -> About shows the semantic version plus the parenthesized git hash.
    [Fact]
    public void HelpMenu_About_ShowsSemanticVersionWithCommitHash()

@@ -118,6 +118,8 @@ On launch, gclo shows a brief branded splash, then the **Quick Sync** connect ca
 
 **Activity log:** View > Activity log… shows the tail of today's log and links to the logs folder. Logs live under `%LOCALAPPDATA%\KofTwentyTwo\gclo\logs`, one file per day, kept for 30 days; they record run parameters and per-repo failures and never contain your token (see [SECURITY.md](SECURITY.md)).
 
+**Share:** Help > Share gclo by email… opens a new message in your email program with an invitation already written: what gclo is, where to download the latest release, and how to install it. Type an address and send; gclo itself sends nothing. If no email program is set up, the text is shown and copied to the clipboard, to paste into a message by hand.
+
 **Updates:** Help > Check for updates… downloads and applies the latest release for your channel. Self-update is only available in installed builds (not the portable zip or a local debug build).
 
 ### Saved accounts
