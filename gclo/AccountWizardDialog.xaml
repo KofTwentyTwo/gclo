@@ -61,7 +61,7 @@
                 SelectedIndex="{x:Bind ViewModel.PlaceIndex, Mode=TwoWay}"
                 Visibility="{x:Bind local:StatusFormat.VisibleIf(ViewModel.CanChoosePlace)}">
                 <RadioButton AutomationProperties.AutomationId="WizardPlaceGitHub" Content="GitHub" />
-                <RadioButton AutomationProperties.AutomationId="WizardPlaceGitea" Content="A Gitea server" />
+                <RadioButton AutomationProperties.AutomationId="WizardPlaceGitea" Content="Gitea" />
             </RadioButtons>
             <TextBox
                 AutomationProperties.AutomationId="WizardServerBox"
