@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using LibGit2Sharp;
@@ -46,6 +47,13 @@ public sealed class LibGit2GitClient : IGitClient
    /// <see cref="ApplyRecoveryAsync"/>.
    /// </summary>
    private const string CheckoutPendingKey = "gclo.checkoutpending";
+
+   /// <summary>
+   /// Beside the marker: the commits an unfinished checkout here was writing before
+   /// the branch was moved on (ids, separated by commas). Their files may still be
+   /// on disk, and are told from a person's by what those commits hold (#174).
+   /// </summary>
+   private const string WrittenBeforeKey = "gclo.checkoutwrittenbefore";
 
    /// <summary>
    /// Local git config flag meaning "gclo writes this repository's working tree
@@ -94,6 +102,13 @@ public sealed class LibGit2GitClient : IGitClient
    /// </summary>
    internal Action? AfterFetchForTesting { get; set; }
 
+   /// <summary>
+   /// Test seam: runs in the first checkout of an empty clone, after its branch was
+   /// created and before any file is written. A test cancels there to leave exactly
+   /// what a cut-off checkout leaves.
+   /// </summary>
+   internal Action? BeforeFirstCheckoutForTesting { get; set; }
+
 
 
    /// <inheritdoc/>
@@ -107,7 +122,7 @@ public sealed class LibGit2GitClient : IGitClient
    /// <inheritdoc/>
    public Task CloneAsync(string url, string path, string token, Action<double>? onProgress, CancellationToken cancellationToken)
        => Task.Factory.StartNew(
-           () => Clone(url, path, token, onProgress, cancellationToken),
+           () => OneAtATime(path, () => Clone(url, path, token, onProgress, cancellationToken)),
            cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
 
@@ -115,7 +130,7 @@ public sealed class LibGit2GitClient : IGitClient
    /// <inheritdoc/>
    public Task FetchAndPullAsync(string url, string path, string token, CancellationToken cancellationToken)
        => Task.Factory.StartNew(
-           () => FetchAndPull(url, path, token, cancellationToken),
+           () => OneAtATime(path, () => FetchAndPull(url, path, token, cancellationToken)),
            cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
 
@@ -123,8 +138,68 @@ public sealed class LibGit2GitClient : IGitClient
    /// <inheritdoc/>
    public Task ApplyRecoveryAsync(string path, PathRecovery recovery, CancellationToken cancellationToken)
        => Task.Factory.StartNew(
-           () => ApplyRecovery(path, recovery, cancellationToken),
+           () => OneAtATime(path, () => ApplyRecovery(path, recovery, cancellationToken)),
            cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+
+
+   /// <summary>
+   /// The folders a git operation of this process is working in right now. A caller
+   /// that stops waiting for an operation (a canceled sync does) does not stop the
+   /// operation: it goes on until git notices, and then cleans up after itself, which
+   /// for a clone means deleting the folder. Starting the next operation on that
+   /// folder before then would have the two working against each other.
+   /// </summary>
+   private static readonly ConcurrentDictionary<string, byte> s_inFlight =
+       new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+
+
+   /// <summary>
+   /// Runs <paramref name="operation"/> as the only one in <paramref name="path"/>;
+   /// refuses at once when an earlier one there has not ended yet.
+   /// </summary>
+   private static void OneAtATime(string path, Action operation)
+   {
+      ///////////////////////////////////////////////////////////////////////////////
+      // The device and long-path spellings of a path name the same folder, and    //
+      // GetFullPath leaves them as they are: they are taken off first. Spellings  //
+      // only the file system can resolve (a share on this machine, a substituted  //
+      // drive, a link in a parent) are not recognised as the same folder.         //
+      ///////////////////////////////////////////////////////////////////////////////
+      string folder = path;
+      foreach(string prefix in (string[])[@"\\?\UNC\", @"\\.\UNC\", @"\??\UNC\"])
+      {
+         if(folder.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+         {
+            folder = @"\\" + folder[prefix.Length..];
+         }
+      }
+      foreach(string prefix in (string[])[@"\\?\", @"\\.\", @"\??\"])
+      {
+         if(folder.StartsWith(prefix, StringComparison.Ordinal))
+         {
+            folder = folder[prefix.Length..];
+         }
+      }
+      folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+      if(!s_inFlight.TryAdd(folder, 0))
+      {
+         throw new InvalidOperationException(
+             "Another git operation of gclo is still working in this folder: one that was canceled and has not ended yet "
+             + "(it ends on its own a moment after it was canceled), or another workspace syncing the same folder. "
+             + "Sync again when it has finished.");
+      }
+
+      try
+      {
+         operation();
+      }
+      finally
+      {
+         s_inFlight.TryRemove(folder, out _);
+      }
+   }
 
 
 
@@ -202,9 +277,14 @@ public sealed class LibGit2GitClient : IGitClient
          ct.ThrowIfCancellationRequested();
          Commands.Checkout(repo, repo.Head, new CheckoutOptions
          {
-            CheckoutModifiers = CheckoutModifiers.Force, // materialize the fresh working tree
-                                                         // The only checkout that lacked the hook: a canceled clone used to
-                                                         // write its whole tree before the token was ever observed (#31).
+            ////////////////////////////////////////////////////////////////////////
+            // Force: materialize the fresh working tree. The hook lets a         //
+            // cancellation stop the checkout before it has written much; once    //
+            // libgit2 is writing, it may run to the end, and the cancellation is //
+            // then the caller's to see (the engine stops waiting; the folder     //
+            // stays marked as busy until this returns).                          //
+            ////////////////////////////////////////////////////////////////////////
+            CheckoutModifiers = CheckoutModifiers.Force,
             CheckoutNotifyFlags = CheckoutNotifyFlags.Updated,
             OnCheckoutNotify = (_, _) => !ct.IsCancellationRequested,
          });
@@ -289,10 +369,14 @@ public sealed class LibGit2GitClient : IGitClient
          return;
       }
 
-      if(IsCheckoutPending(repo))
+      if(IsCheckoutPending(repo) && !repo.Info.IsHeadUnborn)
       {
-         CompletePendingCheckout(repo, ct);
-         return;
+         /////////////////////////////////////////////////////////////////////
+         // With an unborn HEAD there is no commit to complete: the first   //
+         // checkout was cut off before its branch existed, and starts over //
+         // below.                                                          //
+         /////////////////////////////////////////////////////////////////////
+         FinishOrReleaseAPendingCheckout(repo, ct);
       }
 
       if(repo.Info.IsHeadDetached)
@@ -307,7 +391,7 @@ public sealed class LibGit2GitClient : IGitClient
          // Empty clone — or a clone that was killed before its first checkout ran.
          // If the remote branch exists now, materialize it instead of silently
          // reporting an empty working tree as up to date forever.
-         MaterializeUnbornHead(repo, ct);
+         MaterializeUnbornHead(repo, url, token, ct);
          return;
       }
 
@@ -369,6 +453,25 @@ public sealed class LibGit2GitClient : IGitClient
          throw new InvalidOperationException(
              $"'{repo.Head.FriendlyName}' has local commits that origin does not have; gclo only fast-forwards and never merges. "
              + "Push or reset the local commits, or delete the folder to re-clone.", ex);
+      }
+      catch(CheckoutConflictException ex) when(File.Exists(Path.Combine(repo.Info.Path, "index")))
+      {
+         throw new InvalidOperationException(
+             "The update would replace files in this folder that are not as git recorded them (changed or added here, or "
+             + $"left by an update that was interrupted), so nothing was updated ({ex.Message}). 'git status' lists them: "
+             + "commit, move or delete them, then sync again.", ex);
+      }
+      catch(CheckoutConflictException ex)
+      {
+         ///////////////////////////////////////////////////////////////////////////
+         // Without an index git cannot tell which files are unchanged, takes     //
+         // every one of them for a conflict, and says only how many. Say what    //
+         // is wrong and what clears it; nothing was changed.                     //
+         ///////////////////////////////////////////////////////////////////////////
+         throw new InvalidOperationException(
+             "This clone has no index ('.git/index' is missing), so git cannot tell which files are unchanged and "
+             + $"refuses to update any of them ({ex.Message}). Run 'git -C \"{Path.TrimEndingDirectorySeparator(repo.Info.WorkingDirectory)}\" reset' "
+             + "to rebuild the index, or delete the folder to re-clone.", ex);
       }
    }
 
@@ -542,9 +645,8 @@ public sealed class LibGit2GitClient : IGitClient
       const string Prefix = "refs/heads/";
       string oldName = repo.Head.FriendlyName;
 
-      string? defaultRef = repo.Network.ListReferences(url, credentials)
-          .FirstOrDefault(r => string.Equals(r.CanonicalName, "HEAD", StringComparison.Ordinal))?.TargetIdentifier;
-      if(defaultRef is null || !defaultRef.StartsWith(Prefix, StringComparison.Ordinal))
+      string? defaultRef = RemoteDefaultBranch(repo, url, credentials);
+      if(defaultRef is null)
       {
          throw new InvalidOperationException(
              $"'{oldName}' no longer exists on origin, and origin has no default branch to follow. "
@@ -601,11 +703,42 @@ public sealed class LibGit2GitClient : IGitClient
 
 
    /// <summary>
-   /// HEAD symbolically points at a branch with no commits. If the fetch brought that
-   /// branch's remote counterpart, create the local branch there, wire its upstream,
-   /// and check it out to populate the working tree.
+   /// The branch origin says is its default ("refs/heads/..."), asked of origin itself;
+   /// null when origin does not name one (an empty repository).
    /// </summary>
-   private static void MaterializeUnbornHead(Repository repo, CancellationToken ct)
+   private static string? RemoteDefaultBranch(Repository repo, string url, CredentialsHandler credentials)
+   {
+      string? head = repo.Network.ListReferences(url, credentials)
+          .FirstOrDefault(r => string.Equals(r.CanonicalName, "HEAD", StringComparison.Ordinal))?.TargetIdentifier;
+      return head is not null && head.StartsWith("refs/heads/", StringComparison.Ordinal) ? head : null;
+   }
+
+
+
+   /// <summary>
+   /// HEAD symbolically points at a branch with no commits: an empty clone, or a clone
+   /// that was cut off before its first checkout. If the fetch brought a branch to
+   /// check out, create the local branch there, wire its upstream, and check it out
+   /// to populate the working tree.
+   /// </summary>
+   /// <remarks>
+   /// <para>
+   /// Only a repository without any branch of its own is treated as an empty
+   /// clone; one that has local branches is left as it is. Which branch is then
+   /// checked out: the one HEAD names when origin has it. When origin does not, and
+   /// the folder holds nothing but its <c>.git</c> (nobody has put anything into it),
+   /// HEAD still names the branch a new repository starts with here, which need not
+   /// be origin's: origin is asked for its default branch, and that one is checked
+   /// out. A folder that somebody has put files into keeps the branch HEAD names.
+   /// </para>
+   /// <para>
+   /// Nothing changes before everything was checked: the branch to check out, the
+   /// paths Windows cannot create, and what is already in the folder
+   /// (<see cref="RefuseToWriteOverWhatIsNotOurs"/>). Only then is HEAD pointed at
+   /// the branch, the folder marked unfinished, and the branch created.
+   /// </para>
+   /// </remarks>
+   private void MaterializeUnbornHead(Repository repo, string url, string token, CancellationToken ct)
    {
       const string Prefix = "refs/heads/";
       string targetRef = repo.Refs.Head.TargetIdentifier;
@@ -615,10 +748,44 @@ public sealed class LibGit2GitClient : IGitClient
       }
 
       string branchName = targetRef[Prefix.Length..];
+
+      /////////////////////////////////////////////////////////////////////////////////
+      // A repository with branches of its own is not an empty clone. Its unborn     //
+      // HEAD is a branch a person started ("git switch --orphan"), and it is        //
+      // theirs, whatever origin has under that name. (With files staged it is the   //
+      // refusal further down that says so.)                                         //
+      /////////////////////////////////////////////////////////////////////////////////
+      bool hasBranchesOfItsOwn = repo.Branches.Any(b => !b.IsRemote);
       Branch remoteBranch = repo.Branches["origin/" + branchName];
+      bool followOriginsDefault = false;
       if(remoteBranch?.Tip is null)
       {
-         return; // the remote is still empty; nothing to pull
+         if(hasBranchesOfItsOwn || repo.Index.Count > 0 || !repo.Branches.Any(b => b.IsRemote) || !HoldsNothingButItsGitFolder(repo))
+         {
+            /////////////////////////////////////////////////////////////////////////
+            // Origin is still empty; or this is not the untouched folder of an   //
+            // empty clone: it has branches, files are staged, or something was   //
+            // put into it. Then the branch HEAD names may be one somebody chose, //
+            // and it is left.                                                    //
+            /////////////////////////////////////////////////////////////////////////
+            return;
+         }
+
+         /////////////////////////////////////////////////////////////////////////////
+         // A provider of its own: the fetch already spent one of the two requests //
+         // the replay guard allows.                                               //
+         /////////////////////////////////////////////////////////////////////////////
+         string? defaultRef = RemoteDefaultBranch(repo, url, MakeCredentialsProvider(token, url));
+         Branch? defaultBranch = defaultRef is null ? null : repo.Branches["origin/" + defaultRef[Prefix.Length..]];
+         if(defaultBranch?.Tip is null)
+         {
+            return; // origin names no default branch, or it was not fetched
+         }
+
+         followOriginsDefault = true;
+         targetRef = defaultRef!;
+         branchName = targetRef[Prefix.Length..];
+         remoteBranch = defaultBranch;
       }
 
       ///////////////////////////////////////////////////////////////////////////////
@@ -627,6 +794,11 @@ public sealed class LibGit2GitClient : IGitClient
       // the branch it was started from. Checking out over that, with force, would //
       // replace someone's files.                                                  //
       ///////////////////////////////////////////////////////////////////////////////
+      if(hasBranchesOfItsOwn && repo.Index.Count == 0)
+      {
+         return;
+      }
+
       if(repo.Index.Count > 0)
       {
          throw new InvalidOperationException(
@@ -644,19 +816,34 @@ public sealed class LibGit2GitClient : IGitClient
          }
       }
 
+      RefuseToWriteOverWhatIsNotOurs(repo, remoteBranch.Tip.Tree, aCutOffWriteIsOurs: false);
+
+      ///////////////////////////////////////////////////////////////////////////////
+      // From here on the repository changes, in an order in which every point it  //
+      // can be cut off at is one the next pull recovers from: HEAD names the      //
+      // branch (still unborn: this method runs again); the branch's upstream is   //
+      // configured before the branch exists; the folder is marked unfinished      //
+      // before the branch exists, because from then on it looks like any clone    //
+      // and only the marker says that its tree is not written yet.                //
+      ///////////////////////////////////////////////////////////////////////////////
+      if(followOriginsDefault)
+      {
+         repo.Refs.UpdateTarget("HEAD", targetRef);
+      }
+      repo.Config.Set($"branch.{branchName}.remote", "origin", ConfigurationLevel.Local);
+      repo.Config.Set($"branch.{branchName}.merge", targetRef, ConfigurationLevel.Local);
+      repo.Config.Set(CheckoutPendingKey, true, ConfigurationLevel.Local);
       repo.Refs.Add(targetRef, remoteBranch.Tip.Id);
       Branch local = repo.Branches[branchName];
-      repo.Branches.Update(local, b =>
-      {
-         b.Remote = "origin";
-         b.UpstreamBranch = targetRef;
-      });
+      BeforeFirstCheckoutForTesting?.Invoke();
 
       ct.ThrowIfCancellationRequested();
       try
       {
-         // Force: the working tree of a killed half-clone may hold partial files;
-         // recovering means making it match the branch tip exactly.
+         ////////////////////////////////////////////////////////////////////////////
+         // Force: nothing that is not gclo's is in the way (checked above), and  //
+         // nothing was ever checked out here, so there is no state to merge.     //
+         ////////////////////////////////////////////////////////////////////////////
          Commands.Checkout(repo, local, new CheckoutOptions
          {
             CheckoutModifiers = CheckoutModifiers.Force,
@@ -668,6 +855,174 @@ public sealed class LibGit2GitClient : IGitClient
       {
          throw new OperationCanceledException(ct);
       }
+
+      repo.Config.Set(CheckoutPendingKey, false, ConfigurationLevel.Local);
+   }
+
+
+
+   /// <summary>True when the working directory holds nothing but the repository's own <c>.git</c>.</summary>
+   private static bool HoldsNothingButItsGitFolder(Repository repo)
+       => Directory.EnumerateFileSystemEntries(WorkingDirectoryOf(repo))
+           .All(entry => string.Equals(Path.GetFileName(entry), ".git", StringComparison.OrdinalIgnoreCase));
+
+
+
+   /// <summary>
+   /// Before a forced checkout into a folder whose tree gclo has not finished writing:
+   /// refuses, with nothing changed, when something that is not gclo's is where the
+   /// incoming tree has a file, needs a folder, or has a submodule. A forced checkout
+   /// replaces all of those without asking (#174).
+   /// </summary>
+   /// <remarks>
+   /// <para>
+   /// The rules are the ones the path recovery follows
+   /// (<see cref="RefuseWhatCannotBeWritten"/>), and a few it has no need for: a link
+   /// on the way or at a destination (at a destination where the repository has a
+   /// symbolic link, only a link that leads elsewhere), a file where a folder is
+   /// needed (also on the way to a submodule), a folder with anything in it where a
+   /// file is needed, a file at a destination that is not what the current commit has
+   /// there, and anything but an empty folder where the repository has a submodule
+   /// (the checkout makes an empty folder of it).
+   /// </para>
+   /// <para>
+   /// With <paramref name="aCutOffWriteIsOurs"/> the checkout being completed has
+   /// written files already. One of them at a destination is recognised by holding
+   /// what the current commit has for that path (or a commit of
+   /// <paramref name="writtenBefore"/>: one the branch was on while the checkout was
+   /// unfinished), or the beginning of it (the file it was writing when it was cut
+   /// off), line endings aside: the checkout converts them by rules that the tree
+   /// itself brings, and those were not all on disk yet when the first files were
+   /// written.
+   /// </para>
+   /// <para>
+   /// Windows only. The rules about names and links are Windows' rules; elsewhere the
+   /// checkout is done as it always was.
+   /// </para>
+   /// </remarks>
+   private static void RefuseToWriteOverWhatIsNotOurs(
+       Repository repo, Tree incoming, bool aCutOffWriteIsOurs, IReadOnlyList<Tree>? writtenBefore = null)
+   {
+      if(!OperatingSystem.IsWindows())
+      {
+         return;
+      }
+
+      string workdir = WorkingDirectoryOf(repo);
+      List<(string OriginalPath, string EffectivePath, Blob Blob)> entries = CollectEffectiveEntries(incoming, s_noRecovery);
+
+      ///////////////////////////////////////////////////////////////////////////////
+      // Where the repository has a symbolic link, a link in the folder that leads //
+      // where the repository's does is what a checkout writes there (when the     //
+      // user's configuration lets it), or the same thing made by hand: it is not  //
+      // looked at further. The folders on the way to it are, as for every entry.  //
+      ///////////////////////////////////////////////////////////////////////////////
+      entries.RemoveAll(entry =>
+          incoming[entry.OriginalPath]?.Mode == Mode.SymbolicLink && IsTheLinkTheRepositoryHas(workdir, entry.EffectivePath, entry.Blob));
+
+      var effectiveNow = new HashSet<string>(entries.Select(entry => entry.EffectivePath), StringComparer.Ordinal);
+      RefuseWhatCannotBeWritten(
+          repo, workdir, entries, ours: null, effectiveNow, replaceOnlyWhatTheCommitHas: true, aCutOffWriteIsOurs, writtenBefore);
+
+      ///////////////////////////////////////////////////////////////////////////////
+      // What that check lets through because the recovery writes file by file and //
+      // a forced checkout does not: a link at a destination (replaced by the      //
+      // file), and a folder there that holds no file but something else (links,   //
+      // empty folders), which the checkout removes with what is in it.            //
+      ///////////////////////////////////////////////////////////////////////////////
+      foreach((_, string effectivePath, _) in entries)
+      {
+         string full = Path.Combine(workdir, effectivePath.Replace('/', Path.DirectorySeparatorChar));
+         if(IsLink(full))
+         {
+            throw new InvalidOperationException(
+                $"'{effectivePath}' is a link in this folder, where the repository has a file. Move or delete the link, then try again.");
+         }
+         if(Directory.Exists(full) && Directory.EnumerateFileSystemEntries(full).Any())
+         {
+            throw new InvalidOperationException(
+                $"'{effectivePath}' is a folder that is not empty, where the repository has a file. Move or delete the folder, then try again.");
+         }
+      }
+
+      var checkedFolders = new HashSet<string>(StringComparer.Ordinal);
+      foreach(string submodule in SubmodulePaths(incoming))
+      {
+         WorkingTree.Verify(workdir, submodule);
+         for(int slash = submodule.IndexOf('/', StringComparison.Ordinal); slash > 0; slash = submodule.IndexOf('/', slash + 1))
+         {
+            string folder = submodule[..slash];
+            if(checkedFolders.Add(folder) && File.Exists(Path.Combine(workdir, folder.Replace('/', Path.DirectorySeparatorChar))))
+            {
+               throw new InvalidOperationException(
+                   $"'{folder}' is a file in this folder, and the repository has a folder of that name. "
+                   + "Move or delete the file, then try again.");
+            }
+         }
+
+         string full = Path.Combine(workdir, submodule.Replace('/', Path.DirectorySeparatorChar));
+         if(IsLink(full) || File.Exists(full) || (Directory.Exists(full) && Directory.EnumerateFileSystemEntries(full).Any()))
+         {
+            throw new InvalidOperationException(
+                $"'{submodule}' is already in this folder, where the repository has a submodule, and it is not an empty folder. "
+                + "Move or delete it, then try again.");
+         }
+      }
+   }
+
+
+
+   /// <summary>
+   /// True when something is at <paramref name="path"/> and it is a link (a junction, a
+   /// symbolic link): recognised by having a target, as <see cref="WorkingTree"/> does,
+   /// not by the reparse-point attribute, which other things carry too.
+   /// </summary>
+   private static bool IsLink(string path)
+       => new FileInfo(path).LinkTarget is not null || new DirectoryInfo(path).LinkTarget is not null;
+
+
+
+   /// <summary>
+   /// True when a link is at <paramref name="effectivePath"/> and it leads where the
+   /// repository's symbolic link there does (<paramref name="link"/>, whose content
+   /// is the target). A link on the way to it is refused, as on the way to anything
+   /// that is written.
+   /// </summary>
+   private static bool IsTheLinkTheRepositoryHas(string workdir, string effectivePath, Blob link)
+   {
+      WorkingTree.Verify(workdir, effectivePath);
+
+      string full = Path.Combine(workdir, effectivePath.Replace('/', Path.DirectorySeparatorChar));
+      string? target = new FileInfo(full).LinkTarget ?? new DirectoryInfo(full).LinkTarget;
+      return target is not null
+          && string.Equals(target.Replace('/', '\\'), link.GetContentText().Replace('/', '\\'), StringComparison.Ordinal);
+   }
+
+
+
+   /// <summary>The paths of the submodule entries (gitlinks) of a tree, at any depth.</summary>
+   private static List<string> SubmodulePaths(Tree tree)
+   {
+      var found = new List<string>();
+      var stack = new Stack<(Tree Tree, string Prefix)>();
+      stack.Push((tree, ""));
+      while(stack.Count > 0)
+      {
+         (Tree current, string prefix) = stack.Pop();
+         foreach(TreeEntry entry in current)
+         {
+            string path = prefix.Length == 0 ? entry.Name : $"{prefix}/{entry.Name}";
+            if(entry.TargetType == TreeEntryTargetType.Tree)
+            {
+               stack.Push(((Tree)entry.Target, path));
+            }
+            else if(entry.TargetType == TreeEntryTargetType.GitLink)
+            {
+               found.Add(path);
+            }
+         }
+      }
+      return found;
    }
 
 
@@ -768,7 +1123,8 @@ public sealed class LibGit2GitClient : IGitClient
 
       HashSet<string>? ours = stored?.MaterializedPaths is null ? null : new HashSet<string>(stored.MaterializedPaths, StringComparer.Ordinal);
       var effectiveNow = new HashSet<string>(entries.Select(e => e.EffectivePath), StringComparer.Ordinal);
-      RefuseWhatCannotBeWritten(repo, workdir, entries, ours, effectiveNow, replaceOnlyWhatTheCommitHas: !managedByRecord);
+      RefuseWhatCannotBeWritten(
+          repo, workdir, entries, ours, effectiveNow, replaceOnlyWhatTheCommitHas: !managedByRecord, writtenBefore: WrittenBefore(repo));
 
       /////////////////////////////////////////////////////////////////////////////
       // The point of no return. Record first that this tree is being rewritten,   //
@@ -811,7 +1167,7 @@ public sealed class LibGit2GitClient : IGitClient
       }
 
       SaveRecovery(repo, recovery, effectiveNow, tip.Sha);
-      repo.Config.Set(CheckoutPendingKey, false, ConfigurationLevel.Local);
+      MarkFinished(repo);
    }
 
 
@@ -1050,7 +1406,9 @@ public sealed class LibGit2GitClient : IGitClient
        List<(string OriginalPath, string EffectivePath, Blob Blob)> entries,
        HashSet<string>? ours,
        HashSet<string> effectiveNow,
-       bool replaceOnlyWhatTheCommitHas)
+       bool replaceOnlyWhatTheCommitHas,
+       bool aCutOffWriteIsOurs = false,
+       IReadOnlyList<Tree>? writtenBefore = null)
    {
       if(File.Exists(Path.Combine(repo.Info.Path, "index.lock")))
       {
@@ -1072,7 +1430,10 @@ public sealed class LibGit2GitClient : IGitClient
          WorkingTree.Verify(workdir, effectivePath, verifiedFolders);
 
          string full = Path.Combine(workdir, effectivePath.Replace('/', Path.DirectorySeparatorChar));
-         if(replaceOnlyWhatTheCommitHas && File.Exists(full) && !IsWhatTheCommitHas(full, originalPath, current))
+         if(replaceOnlyWhatTheCommitHas
+             && File.Exists(full)
+             && !IsWhatTheCommitHas(full, originalPath, current, aCutOffWriteIsOurs)
+             && !(writtenBefore ?? []).Any(earlier => IsWhatTheCommitHas(full, originalPath, earlier, aCutOffWriteIsOurs)))
          {
             throw new InvalidOperationException(
                 $"'{effectivePath}' is already in this folder, and it is not a file gclo has a record of writing "
@@ -1118,16 +1479,41 @@ public sealed class LibGit2GitClient : IGitClient
    /// True when the file at <paramref name="full"/> holds exactly what a checkout of
    /// <paramref name="commitTree"/> writes for <paramref name="originalPath"/>
    /// (line-ending conversion included). False when the commit has no such file.
+   /// With <paramref name="orItsBeginning"/> the question is whether an unfinished
+   /// checkout wrote the file: then it holds the commit's content for the path, or
+   /// the beginning of it, line endings aside
+   /// (<see cref="HoldsTheBeginningOf"/>).
    /// </summary>
-   private static bool IsWhatTheCommitHas(string full, string originalPath, Tree? commitTree)
+   private static bool IsWhatTheCommitHas(string full, string originalPath, Tree? commitTree, bool orItsBeginning = false)
    {
       if(commitTree?[originalPath]?.Target is not Blob blob)
       {
          return false;
       }
 
-      using Stream expected = blob.GetContentStream(new FilteringOptions(originalPath));
+      if(orItsBeginning)
+      {
+         /////////////////////////////////////////////////////////////////////////////
+         // What is stored, or what the filters make of it on the way out (the     //
+         // "ident" attribute writes the object's id into the file): either is     //
+         // what a checkout writes, depending on which rules were on disk then.    //
+         /////////////////////////////////////////////////////////////////////////////
+         using(Stream stored = blob.GetContentStream())
+         using(var written = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+         {
+            if(HoldsTheBeginningOf(stored, written))
+            {
+               return true;
+            }
+         }
+
+         using Stream filtered = blob.GetContentStream(new FilteringOptions(originalPath));
+         using var again = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+         return HoldsTheBeginningOf(filtered, again);
+      }
+
       using var actual = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+      using Stream expected = blob.GetContentStream(new FilteringOptions(originalPath));
       byte[] expectedBuffer = new byte[81920];
       byte[] actualBuffer = new byte[81920];
       while(true)
@@ -1141,6 +1527,62 @@ public sealed class LibGit2GitClient : IGitClient
          if(expectedRead == 0)
          {
             return true;
+         }
+      }
+   }
+
+
+
+   /// <summary>
+   /// True when <paramref name="actual"/> holds what <paramref name="expected"/> holds,
+   /// or the beginning of it and nothing else, carriage returns aside: a file a
+   /// checkout wrote, or was writing when it was cut off. Carriage returns are left
+   /// out on both sides because a checkout converts line endings by the repository's
+   /// attributes and the user's configuration, and a text that differs from the
+   /// commit's only in its line endings is the commit's text.
+   /// </summary>
+   private static bool HoldsTheBeginningOf(Stream expected, Stream actual)
+   {
+      const byte CarriageReturn = 13;
+      byte[] expectedBuffer = new byte[81920];
+      byte[] actualBuffer = new byte[81920];
+      int expectedCount = 0;
+      int expectedAt = 0;
+      while(true)
+      {
+         int read = actual.Read(actualBuffer, 0, actualBuffer.Length);
+         if(read == 0)
+         {
+            return true; // the file has ended: all of it was the commit's, from its start
+         }
+
+         for(int i = 0; i < read; i++)
+         {
+            if(actualBuffer[i] == CarriageReturn)
+            {
+               continue;
+            }
+
+            byte next;
+            do
+            {
+               if(expectedAt == expectedCount)
+               {
+                  expectedCount = expected.Read(expectedBuffer, 0, expectedBuffer.Length);
+                  expectedAt = 0;
+                  if(expectedCount == 0)
+                  {
+                     return false; // the file goes on where the commit's has ended
+                  }
+               }
+               next = expectedBuffer[expectedAt++];
+            }
+            while(next == CarriageReturn);
+
+            if(next != actualBuffer[i])
+            {
+               return false;
+            }
          }
       }
    }
@@ -1237,45 +1679,225 @@ public sealed class LibGit2GitClient : IGitClient
 
 
    /// <summary>
-   /// Finishes a clone whose checkout never completed and that has no stored
-   /// recovery: moves to the upstream tip, re-validates its paths on Windows, and
-   /// force-checks-out the whole tree (whatever partial files exist are overwritten
-   /// to match). If the paths are still invalid, rethrows the same typed failure —
-   /// the repo must not silently report success with an empty or partial tree.
+   /// What a marked folder needs before the ordinary pull: its checkout finished, or
+   /// only its marker taken off.
    /// </summary>
+   /// <remarks>
+   /// git writes the index when a checkout has reached its end. A marked folder
+   /// without an index is therefore a tree that was never finished: it is completed,
+   /// with force (<see cref="CompletePendingCheckout"/>). A marked folder that has an
+   /// index and holds every file of its commit is one whose checkout did finish
+   /// (gclo's own, whose marker could not be cleared any more, or one a person
+   /// completed with git): its tree is git's to update, and the ordinary pull does
+   /// that without replacing anything that was changed. An index that somebody's git
+   /// wrote over an unfinished tree (a "git reset", a "git add") does not put the
+   /// missing files there, and that folder is completed like one without an index.
+   /// Either way the pull that follows brings what origin has got since.
+   /// </remarks>
+   private static void FinishOrReleaseAPendingCheckout(Repository repo, CancellationToken ct)
+   {
+      if(repo.Index.Count == 0 || !HoldsItsWholeTree(repo))
+      {
+         CompletePendingCheckout(repo, ct);
+      }
+      else
+      {
+         MarkFinished(repo);
+      }
+   }
+
+
+
+   /// <summary>
+   /// True when every file of the current commit is in the folder (as a file, or as a
+   /// link: the repository may have a symbolic link there). What the index says is
+   /// not asked: it is whoever's git wrote it.
+   /// </summary>
+   private static bool HoldsItsWholeTree(Repository repo)
+   {
+      string workdir = WorkingDirectoryOf(repo);
+      foreach((string originalPath, _, _) in CollectEffectiveEntries(repo.Head.Tip.Tree, s_noRecovery))
+      {
+         string full = Path.Combine(workdir, originalPath.Replace('/', Path.DirectorySeparatorChar));
+         if(!(File.Exists(full) || IsLink(full)))
+         {
+            return false;
+         }
+      }
+      return true;
+   }
+
+
+
+   /// <summary>The folder's tree is written: the marker and what goes with it are taken off.</summary>
+   private static void MarkFinished(Repository repo)
+   {
+      repo.Config.Set(CheckoutPendingKey, false, ConfigurationLevel.Local);
+      repo.Config.Unset(WrittenBeforeKey, ConfigurationLevel.Local);
+   }
+
+
+
+   /// <summary>The trees of the commits recorded under <see cref="WrittenBeforeKey"/> that are still in the repository.</summary>
+   private static List<Tree> WrittenBefore(Repository repo)
+   {
+      string ids = repo.Config.Get<string>(WrittenBeforeKey, ConfigurationLevel.Local)?.Value ?? "";
+      var trees = new List<Tree>();
+      foreach(string id in ids.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+      {
+         if(ObjectId.TryParse(id, out ObjectId parsed) && repo.Lookup<Commit>(parsed) is { } commit)
+         {
+            trees.Add(commit.Tree);
+         }
+      }
+      return trees;
+   }
+
+
+
+   /// <summary>
+   /// Records, before the branch of an unfinished checkout is moved, the commit it was
+   /// on. The latest sixteen are kept: a folder that was cut off more often than that
+   /// while origin kept moving has to be moved out of the way by hand.
+   /// </summary>
+   private static void RememberAsWrittenBefore(Repository repo, Commit commit)
+   {
+      const int Kept = 16;
+      List<string> ids =
+      [
+         .. (repo.Config.Get<string>(WrittenBeforeKey, ConfigurationLevel.Local)?.Value ?? "")
+             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+      ];
+      if(!ids.Contains(commit.Sha, StringComparer.Ordinal))
+      {
+         ids.Add(commit.Sha);
+         repo.Config.Set(WrittenBeforeKey, string.Join(',', ids.TakeLast(Kept)), ConfigurationLevel.Local);
+      }
+   }
+
+
+
+   /// <summary>
+   /// Finishes a clone whose checkout never completed and that has no stored
+   /// recovery: force-checks-out the commit the branch is on, re-validating its paths
+   /// on Windows. If the paths are invalid, rethrows the typed failure — the repo must
+   /// not silently report success with an empty or partial tree.
+   /// </summary>
+   /// <remarks>
+   /// <para>
+   /// Where origin's branch has only got ahead, the branch is not moved first: every
+   /// attempt to finish writes the same commit, so what an earlier attempt left on
+   /// disk can be told from what somebody put there since
+   /// (<see cref="RefuseToWriteOverWhatIsNotOurs"/>, #174). What origin has got
+   /// meanwhile is brought by the ordinary pull that follows, over a tree that then
+   /// has an index.
+   /// </para>
+   /// <para>
+   /// The branch has to move first in two cases, as it always did here: a tree
+   /// Windows cannot write (the commit the branch is on, or origin's; the failure
+   /// then names the paths of the newest tree, which is the one the recovery that
+   /// follows will write), and a history origin has rewritten (there is nothing to
+   /// fast-forward from). The commit the branch leaves is recorded then
+   /// (<see cref="WrittenBeforeKey"/>), because its files may be on disk and are
+   /// judged against it as well.
+   /// </para>
+   /// <para>
+   /// A file somebody added to the index with git, and that the commit does not have,
+   /// would be removed from the folder by the forced checkout: the completion is
+   /// refused instead (<see cref="RefuseToRemoveWhatIsStaged"/>). A file of a commit
+   /// the branch left that the new commit does not have is not looked for: it stays
+   /// in the folder, as a file git does not track.
+   /// </para>
+   /// </remarks>
    private static void CompletePendingCheckout(Repository repo, CancellationToken ct)
    {
-      AdvanceHeadToTrackedTip(repo);
-
-      Commit? tip = repo.Head.Tip;
-      if(tip is not null)
+      Commit head = repo.Head.Tip;
+      if(MustMoveBeforeItIsWritten(repo, head))
       {
+         RememberAsWrittenBefore(repo, head);
+         AdvanceHeadToTrackedTip(repo);
          if(OperatingSystem.IsWindows())
          {
-            IReadOnlyList<InvalidPathInfo> invalidPaths = WindowsPathValidator.Validate(tip.Tree);
+            IReadOnlyList<InvalidPathInfo> invalidPaths = WindowsPathValidator.Validate(repo.Head.Tip.Tree);
             if(invalidPaths.Count > 0)
             {
                throw new InvalidRepositoryPathsException(invalidPaths);
             }
          }
-
-         ct.ThrowIfCancellationRequested();
-         try
-         {
-            Commands.Checkout(repo, repo.Head, new CheckoutOptions
-            {
-               CheckoutModifiers = CheckoutModifiers.Force, // nothing was ever checked out
-               CheckoutNotifyFlags = CheckoutNotifyFlags.Updated,
-               OnCheckoutNotify = (_, _) => !ct.IsCancellationRequested,
-            });
-         }
-         catch(UserCancelledException) when(ct.IsCancellationRequested)
-         {
-            throw new OperationCanceledException(ct);
-         }
       }
 
-      repo.Config.Set(CheckoutPendingKey, false, ConfigurationLevel.Local);
+      RefuseToRemoveWhatIsStaged(repo);
+      RefuseToWriteOverWhatIsNotOurs(repo, repo.Head.Tip.Tree, aCutOffWriteIsOurs: true, WrittenBefore(repo));
+
+      ct.ThrowIfCancellationRequested();
+      try
+      {
+         Commands.Checkout(repo, repo.Head, new CheckoutOptions
+         {
+            CheckoutModifiers = CheckoutModifiers.Force, // what is in the way is the unfinished checkout's own (checked above)
+            CheckoutNotifyFlags = CheckoutNotifyFlags.Updated,
+            OnCheckoutNotify = (_, _) => !ct.IsCancellationRequested,
+         });
+      }
+      catch(UserCancelledException) when(ct.IsCancellationRequested)
+      {
+         throw new OperationCanceledException(ct);
+      }
+
+      MarkFinished(repo);
+   }
+
+
+
+   /// <summary>
+   /// Before a forced checkout into a folder that has an index: refuses, with nothing
+   /// changed, when the index names a file the commit does not have. A forced checkout
+   /// removes such a file from the folder, and it is there because somebody added it
+   /// with git (#174).
+   /// </summary>
+   private static void RefuseToRemoveWhatIsStaged(Repository repo)
+   {
+      Tree tree = repo.Head.Tip.Tree;
+      IndexEntry? staged = repo.Index.FirstOrDefault(entry => tree[entry.Path] is null);
+      if(staged is not null)
+      {
+         throw new InvalidOperationException(
+             $"'{staged.Path}' has been added to the index of this folder with git, and the commit whose checkout gclo has to finish "
+             + "here does not have it: finishing would remove the file. Take it out of the index ('git reset'), or move the folder "
+             + "away, then sync again.");
+      }
+   }
+
+
+
+   /// <summary>
+   /// True when an unfinished checkout cannot be completed at the commit its branch
+   /// is on: Windows cannot write that commit's tree or the one origin has now, or
+   /// origin's branch is not a continuation of it (origin rewrote its history, and
+   /// by <see cref="TargetOf"/> nobody committed here). Histories that diverged
+   /// because of commits made here are not such a case: the commit here is completed,
+   /// and the ordinary pull says what is wrong.
+   /// </summary>
+   private static bool MustMoveBeforeItIsWritten(Repository repo, Commit head)
+   {
+      Commit target;
+      try
+      {
+         target = TargetOf(repo);
+      }
+      catch(InvalidOperationException)
+      {
+         target = head;
+      }
+
+      if(OperatingSystem.IsWindows()
+          && (WindowsPathValidator.Validate(head.Tree).Count > 0 || WindowsPathValidator.Validate(target.Tree).Count > 0))
+      {
+         return true;
+      }
+
+      return !string.Equals(target.Sha, head.Sha, StringComparison.Ordinal)
+          && !string.Equals(repo.ObjectDatabase.FindMergeBase(head, target)?.Sha, head.Sha, StringComparison.Ordinal);
    }
 
 

@@ -278,8 +278,25 @@ public sealed class WslClonerTests
       Assert.Equal(2, CountOf(script, "-c credential.helper= -c \"credential.https://$host.helper=$helper\""));
       Assert.Equal(0, CountOf(script, "\"credential.helper=$helper\""));
       Assert.Contains("host=\"$4\"", script);
-      // "--" ends option parsing, so a URL can never be read as an option.
-      Assert.Contains("clone --quiet -- \"$url\" \"$dest\"", script);
+      // "--" ends option parsing, so a URL can never be read as an option. The
+      // clone is made beside the destination and moved into place when it is
+      // complete: a clone that is cut off leaves no folder that looks like one.
+      Assert.Contains("clone --quiet -- \"$url\" \"$tmp\"", script);
+      Assert.Contains("tmp=\"$HOME/gclo/.gclo-tmp/$org.$repo.$$\"", script);
+      Assert.Contains("trap 'rm -rf \"$tmp\"' EXIT", script);
+      Assert.True(
+          script.IndexOf("clone --quiet", StringComparison.Ordinal) < script.IndexOf("mv -T \"$tmp\" \"$dest\"", StringComparison.Ordinal),
+          "the folder is moved into place after the clone");
+      Assert.True(
+          script.IndexOf("mv -T \"$tmp\" \"$dest\"", StringComparison.Ordinal) < script.IndexOf("trap - EXIT", StringComparison.Ordinal),
+          "the cleanup stays armed until the folder is in place");
+      Assert.Contains("/gclo/" + WslCloner.TemporaryFolderName + "/", script);
+      // What a killed run left is removed only from gclo's own temporary folder, and
+      // only when it is old: a young one may be another gclo's clone in progress.
+      Assert.Contains("find \"$HOME/gclo/.gclo-tmp\" -mindepth 1 -maxdepth 1 -mmin +1440 -exec rm -rf {} +", script);
+      Assert.DoesNotContain("rm -rf \"$dest\"", script);
+      // Something that is in the way and is not a repository is not cloned into.
+      Assert.Contains("exists but is not a repository", script);
       // An existing destination is only fast-forwarded when it is a clone of this URL.
       // The stored URL is compared, not "remote get-url": that one applies the user's
       // url.*.insteadOf rewrites and would refuse a destination gclo itself cloned.
@@ -319,6 +336,21 @@ public sealed class WslClonerTests
 
       Assert.StartsWith("Clone in WSL refused: '", ex.Message);
       Assert.Contains("cannot be used as a folder name", ex.Message);
+      Assert.Empty(_runner.Calls);
+   }
+
+
+
+   [Theory]
+   [InlineData(".gclo-tmp")]
+   [InlineData(".GCLO-TMP")]
+   public async Task Clone_IntoGclosOwnTemporaryFolder_IsRefused_WithoutStartingWsl(string organization)
+   {
+      // Unfinished clones are made in ~/gclo/.gclo-tmp, and old ones there are removed.
+      WslCloneException ex = await Assert.ThrowsAsync<WslCloneException>(
+          () => Create().CloneAsync("https://github.com/acme/repo.git", organization, "repo", Token, CancellationToken.None));
+
+      Assert.Contains("gclo's own temporary folder", ex.Message);
       Assert.Empty(_runner.Calls);
    }
 

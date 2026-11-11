@@ -544,10 +544,21 @@ public sealed class LibGit2GitClientTests : IDisposable
 
 
 
+   /// <summary>
+   /// Sets or clears the marker. Set, the folder is also left without an index, as a
+   /// checkout that was cut off leaves it: git writes the index when a checkout has
+   /// reached its end, and a marked folder that has one is taken for finished.
+   /// </summary>
    private static void SetCheckoutPending(string workdir, bool value)
    {
-      using var repo = new Repository(workdir);
-      repo.Config.Set("gclo.checkoutpending", value, ConfigurationLevel.Local);
+      using(var repo = new Repository(workdir))
+      {
+         repo.Config.Set("gclo.checkoutpending", value, ConfigurationLevel.Local);
+      }
+      if(value)
+      {
+         File.Delete(Path.Combine(workdir, ".git", "index"));
+      }
    }
 
 

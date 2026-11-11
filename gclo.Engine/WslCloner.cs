@@ -19,12 +19,26 @@ public sealed class WslCloner : IWslCloner
    /// <summary>Environment variable the inline credential helper reads the token from.</summary>
    public const string TokenVariable = "GCLO_GIT_TOKEN";
 
+   /// <summary>The folder under <c>~/gclo</c> in which clones are made before they are moved into place.</summary>
+   internal const string TemporaryFolderName = ".gclo-tmp";
+
    /// <summary>
    /// The clone script. $1 organization, $2 repository, $3 clone URL, $4 the URL's
    /// host (with a non-default port). Prints the distribution name and the destination
    /// as its last two lines on success. A folder that already is a clone of the same
    /// URL is fast-forwarded instead of failing, so the verb is safe to use twice; a
-   /// folder that is a clone of anything else is refused. The credential helper is
+   /// folder that is a clone of anything else is refused, and so is anything else at
+   /// the destination but an empty folder. A new clone is made in a folder of gclo's
+   /// own (<c>~/gclo/.gclo-tmp</c>) and moved into place when it is complete, so one
+   /// that is cut off never leaves a folder that the next attempt would take for a
+   /// clone and try to update. The temporary folder is removed when the script ends
+   /// without having moved it, also when it is ended by a signal; what a killed
+   /// script left there is removed by a later run once it is a day old (not sooner:
+   /// another gclo may be cloning right now). A destination that appears while the
+   /// clone runs is not moved into: the clone would end up inside it (checked before
+   /// the move, and the move itself is <c>mv -T</c>, which renames onto the name and
+   /// never into a folder of that name).
+   /// The credential helper is
    /// scoped to $4, so git (and anything it starts, such as an LFS filter pointed at
    /// another server by the repository's own configuration) gets the token for that
    /// host only (#139).
@@ -41,8 +55,25 @@ public sealed class WslCloner : IWslCloner
        + "  fi\n"
        + "  git -C \"$dest\" -c credential.helper= -c \"credential.https://$host.helper=$helper\" pull --ff-only --quiet\n"
        + "else\n"
-       + "  mkdir -p \"$HOME/gclo/$org\"\n"
-       + "  git -c credential.helper= -c \"credential.https://$host.helper=$helper\" clone --quiet -- \"$url\" \"$dest\"\n"
+       + "  if [ -e \"$dest\" ] && ! rmdir \"$dest\" 2>/dev/null; then\n"
+       + "    echo \"$dest exists but is not a repository; move or delete it, then try again\" >&2\n"
+       + "    exit 1\n"
+       + "  fi\n"
+       + "  mkdir -p \"$HOME/gclo/$org\" \"$HOME/gclo/.gclo-tmp\"\n"
+       + "  find \"$HOME/gclo/.gclo-tmp\" -mindepth 1 -maxdepth 1 -mmin +1440 -exec rm -rf {} + 2>/dev/null || true\n"
+       + "  tmp=\"$HOME/gclo/.gclo-tmp/$org.$repo.$$\"\n"
+       + "  rm -rf \"$tmp\"\n"
+       + "  trap 'rm -rf \"$tmp\"' EXIT\n"
+       + "  trap 'exit 129' HUP\n"
+       + "  trap 'exit 130' INT\n"
+       + "  trap 'exit 143' TERM\n"
+       + "  git -c credential.helper= -c \"credential.https://$host.helper=$helper\" clone --quiet -- \"$url\" \"$tmp\"\n"
+       + "  if [ -e \"$dest\" ]; then\n"
+       + "    echo \"$dest appeared while the repository was being cloned (another gclo?); nothing was put there\" >&2\n"
+       + "    exit 1\n"
+       + "  fi\n"
+       + "  mv -T \"$tmp\" \"$dest\"\n"
+       + "  trap - EXIT HUP INT TERM\n"
        + "fi\n"
        + "printf '%s\\n%s\\n' \"$WSL_DISTRO_NAME\" \"$dest\"\n";
 
@@ -122,6 +153,14 @@ public sealed class WslCloner : IWslCloner
          {
             throw new WslCloneException($"Clone in WSL refused: '{name}' cannot be used as a folder name ({reason}).");
          }
+      }
+      if(string.Equals(organization, TemporaryFolderName, StringComparison.OrdinalIgnoreCase))
+      {
+         ////////////////////////////////////////////////////////////////////////
+         // ~/gclo/.gclo-tmp is where unfinished clones are made, and old ones //
+         // there are removed.                                                 //
+         ////////////////////////////////////////////////////////////////////////
+         throw new WslCloneException($"Clone in WSL refused: '{organization}' is the name of gclo's own temporary folder there.");
       }
 
       string host = RemoteUrl.HttpsAuthority(url)

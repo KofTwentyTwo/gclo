@@ -49,6 +49,10 @@ Options may be written as `--name value` or `--name=value`.
 
 Clones every repository of `--org` into `<target>\<repo>`. Repositories that are
 already valid git repositories locally are fetched and fast-forwarded instead.
+When a repository gets its first checkout into a folder that already holds something
+(it was empty when it was cloned, or its first checkout was interrupted), gclo on
+Windows replaces a file there only if it is what its own unfinished checkout wrote;
+otherwise that repository fails and the message names what is in the way.
 Repositories fail independently — one failure never stops the rest. Up to
 `--parallel` git operations run at once (default 8, maximum 64 — the same
 ceiling the desktop app applies, because more would trip GitHub's secondary
