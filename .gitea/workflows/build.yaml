@@ -1,0 +1,32 @@
+# Gitea CI for gclo on the Windows host runner. Mirrors .github/workflows/ci.yml
+# (build-test + format); the FlaUI ui-tests job needs an interactive desktop and stays on GitHub.
+# Push only: host runners must never run fork pull requests.
+name: build
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+jobs:
+  windows:
+    uses: self:KofTwentyTwo/ci-workflows/.gitea/workflows/windows.yaml@v1
+    secrets: inherit
+    with:
+      commands: |
+        dotnet restore gclo.slnx --locked-mode
+        dotnet build gclo.slnx -p:Platform=x64 -warnaserror -p:RestoreLockedMode=true
+        dotnet test gclo.Engine.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage" --results-directory TestResults
+        dotnet test gclo.Cli.Tests --settings coverage.runsettings --collect:"XPlat Code Coverage" --results-directory TestResults
+        $files = Get-ChildItem -Path TestResults -Recurse -Filter coverage.cobertura.xml
+        if (-not $files) { throw 'No coverage.cobertura.xml found under TestResults.' }
+        foreach ($name in 'gclo.Engine', 'gclo.ViewModels', 'gclo') {
+          $rates = foreach ($f in $files) {
+            [xml]$doc = Get-Content -LiteralPath $f.FullName
+            $pkg = @($doc.coverage.packages.package) | Where-Object { $_.name -eq $name }
+            if ($pkg) { [double]::Parse($pkg.'line-rate', [System.Globalization.CultureInfo]::InvariantCulture) }
+          }
+          if (-not $rates) { throw "Package '$name' not found in any coverage report." }
+          $best = ($rates | Measure-Object -Maximum).Maximum
+          Write-Output "$name line coverage: $([math]::Round($best * 100, 2))% (required 100%)"
+          if ($best -lt 1.0) { throw "Coverage gate FAILED: $name below 100%." }
+        }
+        dotnet format gclo.slnx --verify-no-changes --severity warn --no-restore
