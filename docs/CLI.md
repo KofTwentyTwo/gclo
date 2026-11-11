@@ -314,7 +314,11 @@ Accounts on a Gitea server are kept in a file of their own beside it,
 `accounts-forges.json`. A version of gclo from before 1.2 knows only GitHub: it
 reads every account in `accounts.json` as a GitHub account and writes the file
 back with what it knows. It neither reads nor writes the other file, so it does
-not list such accounts, and using it beside 1.2 leaves them as they are.
+not list such accounts, and using it beside 1.2 leaves them as they are. One
+thing it can do: add a GitHub account with the name of an account it does not
+see. gclo then does not choose between the two: `--account <name>`,
+`accounts edit` and `accounts remove` fail (exit 1) and say that two accounts
+have the name, until one of them is renamed in the desktop app.
 
 The token of such an account is kept under an entry name made from the account's
 id, its forge and its server address as the file states them, not under `<id>`.

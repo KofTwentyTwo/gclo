@@ -81,16 +81,25 @@ were the two lister implementations and the failure type they throw.
   GitHub account in every version: its token would be asked for again and sent to
   GitHub. Two versions on one data folder are ordinary (the app updates itself,
   the command line is a separate download), so such accounts are kept where the
-  older version neither reads nor writes. The cost is two files where there was
-  one: a change writes only the file of the account it changes; a name is unique
-  across both, but an older version does not see the second file and can add a
-  GitHub account with the name of a Gitea account, which the command line then
-  finds first.
+  older version neither reads nor writes. A GitHub account is the one that names
+  no forge, and only that one; a record in the second file that names none is not
+  read as a GitHub account. The cost is two files where there was one. A change
+  itself writes only the file of the account it changes; a file that has to be put
+  back, or an account that is in the wrong file, is written before the change, so
+  that when it cannot be written the change fails with nothing changed and the
+  vault untouched. A name is unique across both files, but an older version does
+  not see the second and can add a GitHub account with the name of a Gitea
+  account: the command line then refuses the name instead of choosing one of the
+  two, until one is renamed in the app.
 - **What this version does not know is kept.** The kind of forge is stored as
   text; a name this version does not know (a later version's forge) makes that
   one account unusable here, not the file unreadable, and is written back as it
-  was. Fields this version does not know are written back as they were read. So
-  this version does not do to a later one what an older one would do to it.
+  was. Fields this version does not know are written back as they were read,
+  whoever built the record that is saved. So this version does not do to a later
+  one what an older one would do to it. The limits a later version has to keep
+  to: a field this version knows keeps its JSON type (text where text is, as for
+  `Forge`; another type makes the file unreadable here), and a new field is not
+  named like one of this version's computed properties.
 - **A token stays with the place it was saved for.** The forge and the server of
   an account are set when it is added and cannot be changed by an edit, in the
   app or on the command line: to move an account, it is removed and added again,

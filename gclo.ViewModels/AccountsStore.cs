@@ -66,8 +66,16 @@ namespace gclo.ViewModels;
 /// forge are therefore kept in a file of their own, which such a version neither
 /// reads nor writes. Both files are changed under the one lock. An account on
 /// another forge that is found in accounts.json (gclo does not put one there) is
-/// moved to its own file by the next change, and one that is in both files is read
-/// from its own.
+/// moved to its own file before the next change is applied, and one that is in
+/// both files is read from its own. A record in the file for other forges that
+/// names no forge is not a GitHub account: it stays there, and cannot be used.
+/// </para>
+/// <para>
+/// A change itself writes one file, the one of the account it changes. Whatever
+/// else has to be written (a file that went missing or was damaged, an account
+/// that is in the wrong file) is written first, before the vault is touched: when
+/// that fails the change fails with nothing changed, and the order and the
+/// compensating steps above hold for one file as they always did.
 /// </para>
 /// <para>
 /// A file that cannot be read is not a corrupt file. Only content that is not valid
@@ -152,13 +160,30 @@ public sealed class AccountsStore
 
 
 
-   /// <summary>The account whose name matches case-insensitively, or null.</summary>
+   /// <summary>The account whose name matches case-insensitively, or null. See <see cref="IsNameShared"/>.</summary>
    public Account? FindByName(string name)
    {
       lock(_gate)
       {
          return _accounts.FirstOrDefault(
              a => string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase));
+      }
+   }
+
+
+
+   /// <summary>
+   /// True when more than one account has the name. <see cref="Save"/> does not let
+   /// that happen, but a version of gclo from before forges does not see the accounts
+   /// on another forge and can give a GitHub account the name of one of them. A
+   /// caller that is given a name to act on asks here first, so it does not act on
+   /// the wrong one of the two.
+   /// </summary>
+   public bool IsNameShared(string name)
+   {
+      lock(_gate)
+      {
+         return _accounts.Count(a => string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase)) > 1;
       }
    }
 
@@ -471,10 +496,12 @@ public sealed class AccountsStore
 
 
    /// <summary>
-   /// Brings what this store holds up to what the file holds now, before a change is
+   /// Brings what this store holds up to what the files hold now, before a change is
    /// applied. Called with the file lock held. A file that is gone or damaged is not
    /// taken for "no accounts": the change is then applied to what this store last
-   /// read, and writing it puts the accounts back.
+   /// read, and the accounts are put back here, before the change. So is an account
+   /// that is in the wrong file. When that cannot be written the change fails
+   /// before it touched the vault, and the change itself then has one file to write.
    /// </summary>
    private void RefreshForAChange()
    {
@@ -489,6 +516,7 @@ public sealed class AccountsStore
          }
       }
       _accounts = Union();
+      Persist(_accounts);
    }
 
 
@@ -497,12 +525,15 @@ public sealed class AccountsStore
    /// The accounts of both files as one list. An account that is in both (by its
    /// id) is the one of the file for other forges: that is the file gclo writes such
    /// an account to, and the copy in accounts.json is what an older version may
-   /// have rewritten.
+   /// have rewritten. A record of the file for other forges that names no forge
+   /// (gclo writes none) is not read as a GitHub account, which would give it
+   /// GitHub's listers and the default token: it names a forge nobody knows.
    /// </summary>
    private List<Account> Union()
    {
-      HashSet<Guid> apart = [.. _forgesFile.Accounts.Select(a => a.Id)];
-      return [.. _gitHubFile.Accounts.Where(a => !apart.Contains(a.Id)), .. _forgesFile.Accounts];
+      List<Account> apart = [.. _forgesFile.Accounts.Select(a => a.ForgeName is null ? a with { ForgeName = "" } : a)];
+      HashSet<Guid> theirIds = [.. apart.Select(a => a.Id)];
+      return [.. _gitHubFile.Accounts.Where(a => !theirIds.Contains(a.Id)), .. apart];
    }
 
 
@@ -518,9 +549,9 @@ public sealed class AccountsStore
 
    /// <summary>
    /// Writes each account to the file it belongs in. Only a file whose accounts
-   /// changed is written, so one change is one file put in place. (The exception is
-   /// an account on another forge that was found in accounts.json: it is written to
-   /// its own file first, and then leaves the other.)
+   /// changed is written. The file for other forges goes first: an account that was
+   /// found in accounts.json is in its own file before it leaves the other, so a
+   /// failure in between leaves it in both, never in neither.
    /// </summary>
    private void Persist(List<Account> accounts)
    {
@@ -549,6 +580,11 @@ public sealed class AccountsStore
              : account;
       }
 
+      ///////////////////////////////////////////////////////////////////////////////
+      // What a later version of gclo put on the account stays, whatever record the //
+      // caller built: one that was made anew (the wizard's) knows nothing of it.    //
+      ///////////////////////////////////////////////////////////////////////////////
+      account = account with { FieldsOfALaterVersion = onDisk.FieldsOfALaterVersion };
       return onDisk.LastSyncUtc > (account.LastSyncUtc ?? DateTimeOffset.MinValue)
           ? account with { LastSyncUtc = onDisk.LastSyncUtc, LastSyncSummary = onDisk.LastSyncSummary }
           : account;

@@ -495,4 +495,30 @@ public sealed class ForgeCliTests : IDisposable
       Assert.Null(_repos.LastToken);
       Assert.Contains("  unknown (not usable)  ", console.Out, StringComparison.Ordinal);
    }
+
+
+
+   [Fact]
+   public async Task TwoAccountsOfOneName_AreNotChosenBetween()
+   {
+      // An older gclo does not see the accounts on another forge: it can add a GitHub account with the name of one.
+      Account forge = AddGiteaAccount("platform");
+      File.WriteAllText(
+          Path.Combine(_dir, "accounts.json"),
+          $$"""[{ "Id": "{{Guid.NewGuid()}}", "Name": "Platform", "Organization": "octo", "TargetRoot": "C:\\repos" }]""");
+      _store = null; // read the files again
+      using var console = new ConsoleCapture();
+      const string Said = "Two accounts are named 'Platform', so the name does not say which one is meant. "
+          + "Give one of them another name in the gclo desktop app (Edit account), then try again.";
+
+      CliErrorException sync = await Assert.ThrowsAsync<CliErrorException>(() => Sync("--account", "platform", "--dry-run"));
+      CliErrorException edit = Assert.Throws<CliErrorException>(() => Accounts("edit", "--name", "platform", "--parallel", "2"));
+      CliErrorException remove = Assert.Throws<CliErrorException>(() => Accounts("remove", "--name", "platform"));
+
+      Assert.All([sync, edit, remove], error => Assert.Equal(Said, error.Message));
+      Assert.Empty(_asked);
+      Assert.Null(_repos.LastToken);
+      Assert.Equal(2, Store.GetAll().Count);
+      Assert.Equal("gitea-token", _vault.TryRetrieve(forge.TokenEntryId));
+   }
 }

@@ -405,6 +405,7 @@ internal static class AccountsCommand
       {
          (AccountsStore store, ITokenVault vault) = open(log);
          Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
+         RefuseASharedName(store, existing.Name);
          if(tokenOptions.UseDefault && existing.Forge != ForgeKind.GitHub)
          {
             throw new CliErrorException(
@@ -482,6 +483,7 @@ internal static class AccountsCommand
       {
          (AccountsStore store, _) = open(log);
          Account existing = store.FindByName(name.Trim()) ?? throw UnknownAccount(name.Trim(), store);
+         RefuseASharedName(store, existing.Name);
          store.Delete(existing.Id); // the store logs the deletion
          Terminal.Out($"Account '{existing.Name}' removed.");
          return ExitCodes.Success;
@@ -617,6 +619,24 @@ internal static class AccountsCommand
          // A name that is taken, or an account that another gclo process removed
          // while this command was waiting: the store says which, and nothing was saved.
          throw new CliErrorException(ex.Message, ex);
+      }
+   }
+
+
+
+   /// <summary>
+   /// Two accounts of one name: the command does not choose one of them. It can
+   /// only come about through a version of gclo from before forges, which does not
+   /// see the accounts on another forge and so does not know the name is taken.
+   /// </summary>
+   /// <exception cref="CliErrorException">More than one account is named <paramref name="name"/>.</exception>
+   internal static void RefuseASharedName(AccountsStore store, string name)
+   {
+      if(store.IsNameShared(name))
+      {
+         throw new CliErrorException(
+             $"Two accounts are named '{name}', so the name does not say which one is meant. "
+             + "Give one of them another name in the gclo desktop app (Edit account), then try again.");
       }
    }
 

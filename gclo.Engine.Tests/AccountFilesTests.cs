@@ -361,10 +361,9 @@ public sealed class AccountFilesTests : IDisposable
 
 
    [Theory]
-   [InlineData(null, ForgeKind.GitHub)]
-   [InlineData("GitHub", ForgeKind.GitHub)]
-   [InlineData("github", ForgeKind.GitHub)]
+   [InlineData(null, ForgeKind.GitHub)] // GitHub is the account that names no forge
    [InlineData("Gitea", ForgeKind.Gitea)]
+   [InlineData("gitea", ForgeKind.Gitea)]
    [InlineData("GITEA", ForgeKind.Gitea)]
    public void TheNameOfAForge_IsReadWhateverItsCase(string? stored, ForgeKind kind)
    {
@@ -380,12 +379,43 @@ public sealed class AccountFilesTests : IDisposable
    [InlineData("")]
    [InlineData("1")] // not a number either: a kind is named
    [InlineData("Forgejo")]
+   [InlineData("GitHub")] // a GitHub account names no forge: one that says it is on GitHub was not written by gclo
    public void ANameThatIsNoForgeThisVersionKnows_IsNoKindAtAll(string stored)
    {
       Account account = GitHubAccount() with { ForgeName = stored };
 
       Assert.False(account.IsOnAKnownForge);
       Assert.False(Enum.IsDefined(account.Forge));
+      Assert.NotEqual(account.Id, account.TokenEntryId);
+      Assert.IsType<UnusableAccountLister>(AccountListers.RepositoryListerFor(account));
+   }
+
+
+
+   [Fact]
+   public void ARecordInTheFileForOtherForges_ThatNamesNoForge_IsNotAGitHubAccount_AndStaysThere()
+   {
+      // Written by hand: gclo writes no such record. Read as a GitHub account it would get GitHub's listers and the default token.
+      Account odd = GitHubAccount("Odd");
+      Account work = GitHubAccount();
+      WriteFile(ForgesFile, Record(odd, $"\"forge\": \"Gitea\", \"Server\": \"{Server}\"")); // the key in another case: not the field
+      _vault.Store(AppSettings.DefaultTokenVaultId, "ghp_default");
+      _vault.Store(odd.Id, "a token under its id");
+      AccountsStore store = NewStore();
+
+      Account read = Assert.Single(store.GetAll());
+
+      Assert.False(read.IsOnAKnownForge);
+      Assert.IsType<UnusableAccountLister>(AccountListers.OrganizationListerFor(read));
+      var resolver = new AccountTokenResolver(_vault);
+      Assert.Null(resolver.TryResolve(read));
+      Assert.Null(resolver.TryResolve(read with { TokenSource = TokenSource.Default }));
+
+      store.Save(work, "ghp_token"); // a change to another account
+
+      Assert.DoesNotContain("Odd", File.ReadAllText(GitHubFile), StringComparison.Ordinal);
+      Assert.Contains("\"Name\": \"Odd\"", File.ReadAllText(ForgesFile), StringComparison.Ordinal);
+      Assert.False(NewStore().FindByName("Odd")!.IsOnAKnownForge);
    }
 
 
@@ -416,6 +446,30 @@ public sealed class AccountFilesTests : IDisposable
       Assert.Equal("blue", (string?)written["Colour"]);
       Assert.Equal(6, (int?)written["Schedule"]!["EveryHours"]);
       Assert.Equal("thu", (string?)written["Schedule"]!["Days"]![1]);
+   }
+
+
+
+   [Fact]
+   public async Task WhatALaterVersionSaysAboutAnAccount_SurvivesAnEditInTheWizard_WhichBuildsTheRecordAnew()
+   {
+      Account work = GitHubAccount();
+      WriteFile(GitHubFile, Record(work, "\"Colour\": \"blue\""));
+      _vault.Store(work.Id, "ghp_token");
+      AccountsStore store = NewStore();
+      Account existing = store.FindByName("Work")!;
+      var wizard = new AccountWizardViewModel(store, new FakeOrganizationLister(), new AppSettings(), existing, () => "ghp_token");
+
+      wizard.Description = "edited in the wizard";
+      while(wizard.Step < 4)
+      {
+         Assert.True(await wizard.TryAdvanceAsync(), $"stopped at step {wizard.Step}");
+      }
+      await wizard.SaveAsync();
+
+      JsonNode written = JsonNode.Parse(File.ReadAllText(GitHubFile))![0]!;
+      Assert.Equal("edited in the wizard", (string?)written["Description"]);
+      Assert.Equal("blue", (string?)written["Colour"]);
    }
 
 
@@ -549,6 +603,101 @@ public sealed class AccountFilesTests : IDisposable
       Assert.Equal("gitea_token", _vault.TryRetrieve(forge.TokenEntryId));
       Assert.Null(_vault.TryRetrieve(forge.Id));
       Assert.Single(store.GetAll());
+   }
+
+
+
+   // ---------------------------------------------------------------- what has to be written first
+
+   [Fact]
+   public void AChangeThatFirstHasToPutAFileBack_AndCannot_ChangesNothing_NotTheVaultEither()
+   {
+      Account work = GitHubAccount();
+      Account forge = GiteaAccount();
+      Account another = GiteaAccount("Another", "https://other.example.test/");
+      AccountsStore store = NewStore();
+      store.Save(work, "ghp_token");
+      store.Save(forge, "gitea_token");
+      string forgesBefore = File.ReadAllText(ForgesFile);
+      File.Delete(GitHubFile);
+      Directory.CreateDirectory(GitHubFile + ".tmp"); // accounts.json cannot be written back
+
+      // Neither change concerns accounts.json. Both would have written their own file and then failed on the other.
+      Assert.Throws<UnauthorizedAccessException>(() => store.Delete(forge.Id));
+      Assert.Throws<UnauthorizedAccessException>(() => store.Save(another, "another_token"));
+
+      Assert.Equal(forgesBefore, File.ReadAllText(ForgesFile));
+      Assert.Equal("gitea_token", _vault.TryRetrieve(forge.TokenEntryId));
+      Assert.Null(_vault.TryRetrieve(another.TokenEntryId));
+      Assert.Equal(["Forge", "Work"], store.GetAll().Select(a => a.Name), StringComparer.Ordinal);
+
+      // Once the file can be written, the same change goes through and the accounts are back.
+      Directory.Delete(GitHubFile + ".tmp");
+      store.Delete(forge.Id);
+
+      Assert.Null(_vault.TryRetrieve(forge.TokenEntryId));
+      Assert.Equal("Work", Assert.Single(NewStore().GetAll()).Name);
+   }
+
+
+
+   [Fact]
+   public void AnAccountInTheWrongFile_ThatCannotBeMoved_StaysWhereItIs()
+   {
+      // The file for other forges is written first: an account is in its own file before it leaves the other.
+      Account work = GitHubAccount();
+      Account forge = GiteaAccount();
+      WriteFile(GitHubFile, Record(work), Record(forge, $"\"Forge\": \"Gitea\", \"Server\": \"{Server}\""));
+      string before = File.ReadAllText(GitHubFile);
+      AccountsStore store = NewStore();
+      Directory.CreateDirectory(ForgesFile + ".tmp"); // its own file cannot be written
+
+      Assert.Throws<UnauthorizedAccessException>(() => store.RecordSyncResult(work.Id, DateTimeOffset.UtcNow, "5 synced"));
+
+      Assert.Equal(before, File.ReadAllText(GitHubFile));
+      Assert.Equal(["Forge", "Work"], NewStore().GetAll().Select(a => a.Name), StringComparer.Ordinal);
+   }
+
+
+
+   [Fact]
+   public void TwoAccountsOfOneName_AreSaidToShareIt()
+   {
+      // An older version does not see the accounts on another forge, and can give a GitHub account the name of one.
+      Account forge = GiteaAccount("Platform");
+      NewStore().Save(forge, "gitea_token");
+      WriteFile(GitHubFile, Record(GitHubAccount("platform")), Record(GitHubAccount("Work")));
+
+      AccountsStore store = NewStore();
+
+      Assert.True(store.IsNameShared("PLATFORM"));
+      Assert.False(store.IsNameShared("Work"));
+      Assert.False(store.IsNameShared("nobody"));
+   }
+
+
+
+   // ---------------------------------------------------------------- a workspace's token is the one of the place it was opened for
+
+   [Fact]
+   public void AWorkspace_TakesNoTokenThatWasSavedForAnotherPlaceThanTheOneItWasOpenedFor()
+   {
+      // The file named another server when the workspace was opened; it names the account's own again by now.
+      Account forge = GiteaAccount();
+      AccountsStore store = NewStore();
+      store.Save(forge, "gitea_token");
+      Account asItReadAtOpen = forge with { Server = "https://elsewhere.example.test/" };
+      var listers = new FakeRepositoryLister();
+
+      using var workspace = new WorkspaceViewModel(
+          listers, new FakeGitClient(), new FakeOrganizationLister(), orgLookupDebounce: TimeSpan.FromMilliseconds(1),
+          account: asItReadAtOpen, tokenVault: _vault, accountsStore: store);
+      Assert.Equal("", workspace.Token); // nothing was saved for that place
+
+      workspace.RefreshAccountToken(); // the store now has the record that names the place the token was saved for
+
+      Assert.Equal("", workspace.Token);
+      Assert.Equal("No token is saved for this account. Choose Edit account… and enter one.", workspace.MissingTokenAdvice);
    }
 
 

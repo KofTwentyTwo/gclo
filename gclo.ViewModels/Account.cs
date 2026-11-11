@@ -50,16 +50,17 @@ public sealed record Account
    public string? ForgeName { get; init; }
 
    /// <summary>
-   /// The kind of forge the account is on; GitHub when <see cref="ForgeName"/> says
-   /// nothing. For a name this version does not know it is none of the kinds
+   /// The kind of forge the account is on. GitHub is the account that names no
+   /// forge, and only that one: it is how every version has written a GitHub
+   /// account. For a name this version does not know it is none of the kinds
    /// (<see cref="IsOnAKnownForge"/> is false): never GitHub, so nothing takes such
    /// an account for a GitHub account.
    /// </summary>
    [JsonIgnore]
    public ForgeKind Forge
    {
-      get => ForgeName is null || Names(ForgeKind.GitHub) ? ForgeKind.GitHub
-          : Names(ForgeKind.Gitea) ? ForgeKind.Gitea
+      get => ForgeName is null ? ForgeKind.GitHub
+          : string.Equals(ForgeName, nameof(ForgeKind.Gitea), StringComparison.OrdinalIgnoreCase) ? ForgeKind.Gitea
           : s_noKnownForge;
       init => ForgeName = value == ForgeKind.GitHub ? null : value.ToString();
    }
@@ -90,7 +91,8 @@ public sealed record Account
    /// What the file says about the account that this version of gclo does not know
    /// (a field a later version added). Kept, and written back as it was read, so
    /// that changing an account here does not take away what a later version put
-   /// there. Null when there is nothing of the kind.
+   /// there. Null when there is nothing of the kind. <see cref="AccountsStore.Save"/>
+   /// keeps what the file has, whatever the record it is given says here.
    /// </summary>
    [JsonExtensionData]
    public IDictionary<string, JsonElement>? FieldsOfALaterVersion { get; set; }
@@ -146,10 +148,6 @@ public sealed record Account
 
    /// <summary>What <see cref="Forge"/> is for a forge name this version does not know: a value that is none of the kinds.</summary>
    private static readonly ForgeKind s_noKnownForge = (ForgeKind)(-1);
-
-
-
-   private bool Names(ForgeKind kind) => string.Equals(ForgeName, kind.ToString(), StringComparison.OrdinalIgnoreCase);
 
 
 

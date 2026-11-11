@@ -545,6 +545,7 @@ internal static class SyncCommand
       {
          (AccountsStore store, ITokenVault vault) = openAccounts(log);
          Account account = store.FindByName(accountName) ?? throw UnknownAccount(accountName, store);
+         AccountsCommand.RefuseASharedName(store, account.Name);
          return (account, store, vault);
       }
       catch(Exception ex) when(CliErrorException.IsStorageFailure(ex))
