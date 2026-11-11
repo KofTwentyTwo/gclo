@@ -20,6 +20,19 @@ namespace gclo;
 /// </summary>
 public static class Program
 {
+   /// <summary>ASFW_ANY: any process may bring its window to the front.</summary>
+   private const int AnyProcess = -1;
+
+
+
+   /// <summary>
+   /// This process's claim on the data folder (#216): held from here until the
+   /// main window closes. Null only before <see cref="Main"/> has made it.
+   /// </summary>
+   internal static WindowClaim? Claim { get; private set; }
+
+
+
    [STAThread]
    private static void Main()
    {
@@ -34,6 +47,31 @@ public static class Program
          GcloPaths.Edition = "dev";
       }
 
+      /////////////////////////////////////////////////////////////////////////////
+      // One window per data folder (#216). Another window on this folder would  //
+      // keep its own copy of the settings and accounts and undo what this one   //
+      // saves. The one that is open is asked to come to the front (this process //
+      // was started by the user, so it may pass that right on), and this one    //
+      // ends before any window or file of its own exists.                       //
+      /////////////////////////////////////////////////////////////////////////////
+      try
+      {
+         Claim = WindowClaim.For(GcloPaths.DataRoot);
+      }
+      catch(Exception)
+      {
+         // No log exists yet, and nothing here is worth not opening for: without a claim the window opens as it always did.
+         Claim = null;
+      }
+
+      if(Claim is { IsTheOnlyOne: false })
+      {
+         _ = AllowSetForegroundWindow(AnyProcess);
+         Claim.AskTheOtherToShowItself();
+         Claim.Dispose();
+         return;
+      }
+
       // The remainder mirrors the XAML-generated Main (obj\...\App.g.i.cs) verbatim.
       global::WinRT.ComWrappersSupport.InitializeComWrappers();
       global::Microsoft.UI.Xaml.Application.Start((p) =>
@@ -43,4 +81,9 @@ public static class Program
          _ = new App();
       });
    }
+
+
+
+   [System.Runtime.InteropServices.DllImport("user32.dll")]
+   private static extern int AllowSetForegroundWindow(int processId);
 }

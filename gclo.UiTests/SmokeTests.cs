@@ -429,4 +429,45 @@ public sealed partial class SmokeTests : UiTestBase
 
    [GeneratedRegex(@"^Version \d+\.\d+\.\d+", RegexOptions.None, 1000)]
    private static partial Regex VersionPattern();
+
+
+
+   // (12) One window per data folder (#216). gclo started again on the data folder
+   //      of the open window opens no second window: the process ends by itself,
+   //      and the window that is open comes out of the taskbar. The second process
+   //      is the one this test starts, and the only one it ever ends.
+   [Fact]
+   public void StartingGcloAgain_OnTheSameDataFolder_EndsAtOnce_AndBringsTheOpenWindowBack()
+   {
+      FlaUI.Core.Patterns.IWindowPattern window = Session.MainWindow.Patterns.Window.Pattern;
+      window.SetWindowVisualState(FlaUI.Core.Definitions.WindowVisualState.Minimized);
+      Session.WaitFor(
+          () => window.WindowVisualState.Value == FlaUI.Core.Definitions.WindowVisualState.Minimized ? Session.MainWindow : null,
+          "the window to be minimized");
+
+      var startInfo = new System.Diagnostics.ProcessStartInfo(Session.ExePath)
+      {
+         WorkingDirectory = Path.GetDirectoryName(Session.ExePath) ?? "",
+      };
+      startInfo.Environment["GCLO_DATA_DIR"] = Session.DataDirectory;
+      startInfo.Environment["GCLO_UITEST_FIXTURE"] = "1";
+      using System.Diagnostics.Process second = System.Diagnostics.Process.Start(startInfo)!;
+      try
+      {
+         Assert.True(second.WaitForExit(TimeSpan.FromSeconds(30)), "the second gclo did not end by itself");
+         Assert.Equal(0, second.ExitCode);
+
+         Session.WaitFor(
+             () => window.WindowVisualState.Value != FlaUI.Core.Definitions.WindowVisualState.Minimized ? Session.MainWindow : null,
+             "the open window to come back from the taskbar");
+         Assert.False(Session.App.HasExited);
+      }
+      finally
+      {
+         if(!second.HasExited)
+         {
+            second.Kill();
+         }
+      }
+   }
 }
